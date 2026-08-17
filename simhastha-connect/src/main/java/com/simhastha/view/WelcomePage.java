@@ -1,391 +1,411 @@
 package com.simhastha.view;
 
 import java.net.URL;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 
 import javafx.animation.FadeTransition;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
+import javafx.beans.value.ChangeListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
-import javafx.scene.media.Media;
-import javafx.scene.media.MediaPlayer;
-import javafx.scene.shape.Arc;
-import javafx.scene.shape.ArcType;
-import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
-import javafx.scene.shape.Polygon;
 import javafx.scene.shape.Rectangle;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
 public class WelcomePage {
 
-    private MediaPlayer mediaPlayer;
-    private boolean musicPlaying;
+    private static boolean darkModeSelected;
+
+    private ImageView backgroundImage;
+    private Image sunlightImage;
+    private Image nightImage;
+    private Label dateLabel;
+    private Label timeLabel;
+    private Button lightModeButton;
+    private Button darkModeButton;
+    private StackPane root;
 
     public Scene createScene(Stage stage) {
-        StackPane root = new StackPane();
-        root.getStyleClass().add("main-background");
+        root = new StackPane();
+        root.getStyleClass().addAll("welcome-root", darkModeSelected ? "welcome-root-dark" : "welcome-root-light");
 
-        ImageView backgroundImage = createOptionalImage("/images/kumbh-background.jpg", 1200, 750);
-        backgroundImage.getStyleClass().add("background-image");
+        sunlightImage = loadImage("/images/welcome-light.png");
+        nightImage = loadImage("/images/welcome-dark.png");
+        backgroundImage = createCoverImageView(darkModeSelected ? nightImage : sunlightImage);
+        backgroundImage.getStyleClass().add("welcome-background-image");
 
-        BorderPane content = new BorderPane();
-        content.setTop(createHeroArea());
-        content.setCenter(createMainArea(stage));
-        content.setBottom(createBottomArea(stage));
+        BorderPane page = new BorderPane();
+        page.getStyleClass().add("welcome-page");
+        page.setTop(createHeader());
+        page.setCenter(createHeroContent(stage));
+        page.setBottom(createFooter());
 
-        root.getChildren().addAll(backgroundImage, createBackgroundDecoration(), content);
+        root.getChildren().addAll(backgroundImage, createHeroOverlay(), page);
 
         Scene scene = new Scene(root, 1200, 750);
-        backgroundImage.fitWidthProperty().bind(scene.widthProperty());
-        backgroundImage.fitHeightProperty().bind(scene.heightProperty());
+        bindCoverImage(scene);
         addTheme(scene);
-        playTitleAnimation(content);
-
+        startClock();
+        updateThemeButtons();
+        playTitleAnimation(page);
         return scene;
     }
 
-    private VBox createHeroArea() {
+    private BorderPane createHeader() {
+        BorderPane header = new BorderPane();
+        header.getStyleClass().add("welcome-header");
+
+        HBox brand = new HBox(14, createLogoMark(), createBrandText());
+        brand.getStyleClass().add("welcome-brand");
+        brand.setAlignment(Pos.CENTER_LEFT);
+
+        HBox controls = createTopUtilityBar();
+        controls.setAlignment(Pos.TOP_RIGHT);
+
+        header.setLeft(brand);
+        header.setRight(controls);
+        header.setPadding(new Insets(24, 32, 0, 40));
+        return header;
+    }
+
+    private StackPane createLogoMark() {
+        ImageView mark = new ImageView(loadImage("/images/sclogo.png"));
+        mark.setPreserveRatio(true);
+        mark.setSmooth(true);
+        mark.setFitWidth(88);
+        mark.setFitHeight(88);
+        mark.getStyleClass().add("welcome-logo-image");
+
+        StackPane logo = new StackPane(mark);
+        logo.getStyleClass().add("welcome-logo-shell");
+        logo.setMinSize(92, 92);
+        logo.setMaxSize(92, 92);
+        return logo;
+    }
+
+    private VBox createBrandText() {
+        Label name = new Label("SIMHASTHA");
+        name.getStyleClass().add("welcome-brand-name");
+
+        Label connect = new Label("CONNECT");
+        connect.getStyleClass().add("welcome-brand-connect");
+
+        Label event = new Label("Nashik Simhastha 2027");
+        event.getStyleClass().add("welcome-brand-event");
+
+        VBox text = new VBox(0, name, connect, event);
+        text.setAlignment(Pos.CENTER_LEFT);
+        return text;
+    }
+
+    private HBox createThemeToggle() {
+        lightModeButton = new Button("\u2600");
+        darkModeButton = new Button("\u263E");
+        lightModeButton.getStyleClass().add("theme-toggle-button");
+        darkModeButton.getStyleClass().add("theme-toggle-button");
+        lightModeButton.setAccessibleText("Light theme");
+        darkModeButton.setAccessibleText("Dark theme");
+
+        lightModeButton.setOnAction(event -> switchTheme(false));
+        darkModeButton.setOnAction(event -> switchTheme(true));
+
+        HBox toggle = new HBox(4, lightModeButton, darkModeButton);
+        toggle.getStyleClass().add("theme-toggle");
+        return toggle;
+    }
+
+    private HBox createTopUtilityBar() {
+        dateLabel = new Label();
+        timeLabel = new Label();
+        Label location = new Label("Nashik,\nMaharashtra");
+        dateLabel.getStyleClass().add("utility-text");
+        timeLabel.getStyleClass().add("utility-text");
+        location.getStyleClass().add("utility-text");
+
+        HBox bar = new HBox(18,
+                createUtilityItem("\uD83D\uDCC5", dateLabel),
+                createUtilitySeparator(),
+                createUtilityItem("\u25F7", timeLabel),
+                createUtilitySeparator(),
+                createUtilityItem("\u25CE", location),
+                createUtilitySeparator(),
+                createThemeToggle(),
+                createTopIconButton("\uD83D\uDD14", "3", "Notifications"),
+                createTopIconButton("\u25CB", null, "Profile"));
+        bar.getStyleClass().add("utility-bar");
+        bar.setAlignment(Pos.CENTER_RIGHT);
+        return bar;
+    }
+
+    private HBox createUtilityItem(String iconText, Label value) {
+        Label icon = new Label(iconText);
+        icon.getStyleClass().add("utility-icon");
+
+        HBox item = new HBox(9, icon, value);
+        item.getStyleClass().add("utility-item");
+        item.setAlignment(Pos.CENTER_LEFT);
+        return item;
+    }
+
+    private Region createUtilitySeparator() {
+        Region separator = new Region();
+        separator.getStyleClass().add("utility-separator");
+        separator.setMinSize(1, 42);
+        separator.setPrefSize(1, 42);
+        separator.setMaxSize(1, 42);
+        return separator;
+    }
+
+    private Button createTopIconButton(String iconText, String badgeText, String accessibleText) {
+        Label icon = new Label(iconText);
+        icon.getStyleClass().add("top-action-icon");
+
+        StackPane graphic = new StackPane(icon);
+        if (badgeText != null) {
+            Label badge = new Label(badgeText);
+            badge.getStyleClass().add("notification-badge");
+            StackPane.setAlignment(badge, Pos.TOP_RIGHT);
+            StackPane.setMargin(badge, new Insets(-7, -7, 0, 0));
+            graphic.getChildren().add(badge);
+        }
+
+        Button button = new Button();
+        button.setGraphic(graphic);
+        button.setAccessibleText(accessibleText);
+        button.getStyleClass().add("top-action-button");
+        return button;
+    }
+
+    private HBox createHeroContent(Stage stage) {
+        Label welcome = new Label("Welcome to");
+        welcome.getStyleClass().add("welcome-kicker");
+
         Label title = new Label("SIMHASTHA CONNECT");
-        title.getStyleClass().add("hero-title");
+        title.getStyleClass().add("welcome-title");
+        title.setMinWidth(720);
 
-        Label tagline = new Label("ONE PLATFORM FOR A BETTER SIMHASTHA EXPERIENCE");
-        tagline.getStyleClass().add("hero-tagline");
+        Label verse = new Label("\u0965 \u0938\u0930\u094D\u0935\u0947 \u092D\u0935\u0928\u094D\u0924\u0941 \u0938\u0941\u0916\u093F\u0928\u0903 \u0938\u0930\u094D\u0935\u0947 \u0938\u0928\u094D\u0924\u0941 \u0928\u093F\u0930\u093E\u092E\u092F\u093E\u0903 \u0965");
+        verse.getStyleClass().add("welcome-sanskrit-text");
 
-        Label eventName = new Label("Nashik Simhastha 2027");
-        eventName.getStyleClass().add("event-pill");
+        Label description = new Label("Your digital companion for a safe, smooth and\ndivine Simhastha experience in Nashik.");
+        description.getStyleClass().add("welcome-description");
 
-        VBox heroBox = new VBox(5, createLogoBox(), title, tagline, eventName, createOrnamentLine());
-        heroBox.setAlignment(Pos.CENTER);
-        heroBox.setPadding(new Insets(10, 28, 4, 28));
-        return heroBox;
-    }
-
-    private StackPane createLogoBox() {
-        StackPane logoBox = new StackPane();
-        logoBox.getStyleClass().add("premium-logo-box");
-        logoBox.setPrefSize(72, 72);
-        logoBox.setMaxSize(72, 72);
-
-        ImageView logoImage = createOptionalImage("/images/simhastha-logo.png", 56, 56);
-
-        if (logoImage.getImage() == null) {
-            Label placeholder = new Label("SIMHASTHA\nCONNECT");
-            placeholder.getStyleClass().add("logo-placeholder-text");
-            logoBox.getChildren().add(placeholder);
-        } else {
-            logoImage.setPreserveRatio(true);
-            logoImage.setFitWidth(56);
-            logoImage.setFitHeight(56);
-            logoBox.getChildren().add(logoImage);
-        }
-
-        return logoBox;
-    }
-
-    private HBox createMainArea(Stage stage) {
-        VBox leftPanel = createIntroPanel();
-        StackPane rightPanel = createTraditionalVisual();
-
-        HBox mainArea = new HBox(26, leftPanel, rightPanel);
-        mainArea.setAlignment(Pos.CENTER);
-        mainArea.setPadding(new Insets(6, 54, 6, 54));
-        HBox.setHgrow(leftPanel, Priority.ALWAYS);
-        HBox.setHgrow(rightPanel, Priority.ALWAYS);
-        return mainArea;
-    }
-
-    private VBox createIntroPanel() {
-        Label introTitle = new Label("Your Digital Companion for Nashik Simhastha 2027");
-        introTitle.getStyleClass().add("section-title");
-        introTitle.setWrapText(true);
-
-        Label introText = new Label(
-                "Important Simhastha information, pilgrim assistance and local services brought together in one simple desktop application.");
-        introText.getStyleClass().add("description-text");
-        introText.setWrapText(true);
-
-        Label moduleHeading = new Label("Core Services");
-        moduleHeading.getStyleClass().add("small-heading");
-
-        HBox moduleGrid = new HBox(12, createModuleColumn(true), createModuleColumn(false));
-        moduleGrid.setAlignment(Pos.CENTER);
-
-        VBox panel = new VBox(12, introTitle, introText, moduleHeading, moduleGrid);
-        panel.getStyleClass().add("glass-panel");
-        panel.setMaxWidth(570);
-        panel.setAlignment(Pos.CENTER_LEFT);
-        return panel;
-    }
-
-    private VBox createModuleColumn(boolean firstColumn) {
-        VBox column = new VBox(10);
-
-        if (firstColumn) {
-            column.getChildren().addAll(
-                    createModuleCard("Transport", "PRIMARY SERVICE", true),
-                    createModuleCard("Ghats & Snan", "Ramkund guidance", false),
-                    createModuleCard("Events", "Schedules", false),
-                    createModuleCard("Stay", "Accommodation", false));
-        } else {
-            column.getChildren().addAll(
-                    createModuleCard("Puja Services", "Ritual support", false),
-                    createModuleCard("Local Services", "Nearby help", false),
-                    createModuleCard("Emergency Help", "Quick assistance", false),
-                    createModuleCard("Lost & Found", "Visitor support", false));
-        }
-
-        HBox.setHgrow(column, Priority.ALWAYS);
-        return column;
-    }
-
-    private VBox createModuleCard(String title, String detail, boolean primary) {
-        Label titleLabel = new Label(title);
-        titleLabel.getStyleClass().add(primary ? "module-title-primary" : "module-title");
-
-        Label detailLabel = new Label(detail);
-        detailLabel.getStyleClass().add(primary ? "module-badge-primary" : "module-detail");
-
-        VBox card = new VBox(3, titleLabel, detailLabel);
-        card.getStyleClass().add(primary ? "module-card-primary" : "module-card");
-        card.setMinWidth(190);
-        return card;
-    }
-
-    private StackPane createTraditionalVisual() {
-        Arc templeArch = new Arc(0, 4, 180, 130, 0, 180);
-        templeArch.setType(ArcType.OPEN);
-        templeArch.getStyleClass().add("temple-arch");
-
-        Arc innerArch = new Arc(0, 10, 132, 96, 0, 180);
-        innerArch.setType(ArcType.OPEN);
-        innerArch.getStyleClass().add("temple-arch-soft");
-
-        Line pillarLeft = new Line(-180, -5, -180, 122);
-        pillarLeft.getStyleClass().add("arch-pillar");
-
-        Line pillarRight = new Line(180, -5, 180, 122);
-        pillarRight.getStyleClass().add("arch-pillar");
-
-        VBox ghatSteps = new VBox(6);
-        ghatSteps.setAlignment(Pos.BOTTOM_CENTER);
-        ghatSteps.getChildren().addAll(createStep(140), createStep(190), createStep(240), createStep(295), createStep(350));
-        StackPane.setAlignment(ghatSteps, Pos.BOTTOM_CENTER);
-        StackPane.setMargin(ghatSteps, new Insets(0, 0, 26, 0));
-
-        HBox flags = new HBox(92, createFlag(), createFlag());
-        flags.setAlignment(Pos.TOP_CENTER);
-        StackPane.setAlignment(flags, Pos.TOP_CENTER);
-        StackPane.setMargin(flags, new Insets(28, 0, 0, 0));
-
-        HBox diyas = new HBox(92, createDiya(), createDiya());
-        diyas.setAlignment(Pos.BOTTOM_CENTER);
-        StackPane.setAlignment(diyas, Pos.BOTTOM_CENTER);
-        StackPane.setMargin(diyas, new Insets(0, 0, 90, 0));
-
-        ImageView temple = createOptionalImage("/images/temple-silhouette.png", 340, 145);
-        StackPane.setAlignment(temple, Pos.TOP_CENTER);
-        StackPane.setMargin(temple, new Insets(44, 0, 0, 0));
-
-        ImageView ghat = createOptionalImage("/images/ghat-silhouette.png", 360, 118);
-        StackPane.setAlignment(ghat, Pos.BOTTOM_CENTER);
-        StackPane.setMargin(ghat, new Insets(0, 0, 42, 0));
-
-        ImageView pilgrim = createOptionalImage("/images/pilgrim-silhouette.png", 120, 155);
-        StackPane.setAlignment(pilgrim, Pos.BOTTOM_LEFT);
-        StackPane.setMargin(pilgrim, new Insets(0, 0, 70, 54));
-
-        Label sanskrit = new Label("\u0950 \u0924\u094D\u0930\u094D\u092F\u092E\u094D\u092C\u0915\u0902 \u092F\u091C\u093E\u092E\u0939\u0947 \u0938\u0941\u0917\u0928\u094D\u0927\u093F\u0902 \u092A\u0941\u0937\u094D\u091F\u093F\u0935\u0930\u094D\u0927\u0928\u092E\u094D\u0964");
-        sanskrit.getStyleClass().add("sanskrit-line");
-        sanskrit.setWrapText(true);
-
-        Label caption = new Label("Trimbakeshwar \u2022 Nashik");
-        caption.getStyleClass().add("visual-caption");
-
-        VBox centerText = new VBox(8, sanskrit, caption);
-        centerText.setAlignment(Pos.CENTER);
-        centerText.setMaxWidth(360);
-        StackPane.setAlignment(centerText, Pos.CENTER);
-        StackPane.setMargin(centerText, new Insets(28, 30, 0, 30));
-
-        StackPane visual = new StackPane(templeArch, innerArch, pillarLeft, pillarRight, temple, flags, ghatSteps, ghat,
-                pilgrim, diyas, centerText);
-        visual.getStyleClass().add("visual-panel");
-        visual.setMaxWidth(520);
-        visual.setMinHeight(315);
-        visual.setPrefHeight(325);
-        return visual;
-    }
-
-    private Rectangle createStep(double width) {
-        Rectangle rectangle = new Rectangle(width, 10);
-        rectangle.getStyleClass().add("ghat-step");
-        return rectangle;
-    }
-
-    private StackPane createFlag() {
-        Line pole = new Line(0, 0, 0, 72);
-        pole.getStyleClass().add("flag-pole");
-
-        Polygon flag = new Polygon(0, 0, 62, 12, 0, 28);
-        flag.getStyleClass().add("saffron-flag");
-        StackPane.setAlignment(flag, Pos.TOP_LEFT);
-        StackPane.setMargin(flag, new Insets(0, 0, 0, 2));
-
-        StackPane flagBox = new StackPane(pole, flag);
-        flagBox.setPrefSize(70, 78);
-        return flagBox;
-    }
-
-    private StackPane createDiya() {
-        ImageView diyaImage = createOptionalImage("/images/diya.png", 54, 46);
-
-        if (diyaImage.getImage() != null) {
-            StackPane imageBox = new StackPane(diyaImage);
-            imageBox.setPrefSize(54, 46);
-            return imageBox;
-        }
-
-        Circle glow = new Circle(21);
-        glow.getStyleClass().add("diya-glow");
-
-        Arc flame = new Arc(0, -4, 9, 17, 70, 240);
-        flame.setType(ArcType.ROUND);
-        flame.getStyleClass().add("diya-flame");
-
-        Arc bowl = new Arc(0, 13, 24, 13, 180, 180);
-        bowl.setType(ArcType.ROUND);
-        bowl.getStyleClass().add("diya-bowl");
-
-        StackPane diya = new StackPane(glow, flame, bowl);
-        diya.setPrefSize(54, 46);
-        return diya;
-    }
-
-    private HBox createBottomArea(Stage stage) {
-        Button exploreButton = new Button("EXPLORE SIMHASTHA CONNECT");
-        exploreButton.getStyleClass().add("primary-button");
+        Button exploreButton = new Button("EXPLORE SIMHASTHA   \u2192");
+        exploreButton.getStyleClass().add("primary-cta");
+        exploreButton.setGraphic(createButtonLogo());
+        exploreButton.setContentDisplay(ContentDisplay.LEFT);
+        exploreButton.setGraphicTextGap(10);
         exploreButton.setOnAction(event -> openLoginSelection(stage));
 
-        Button musicButton = createMusicButton();
+        Button loginButton = new Button("LOGIN / SIGN UP");
+        loginButton.getStyleClass().add("secondary-cta");
+        loginButton.setGraphic(createButtonLogo());
+        loginButton.setContentDisplay(ContentDisplay.LEFT);
+        loginButton.setGraphicTextGap(10);
+        loginButton.setOnAction(event -> openLoginSelection(stage));
 
-        HBox buttonRow = new HBox(18, exploreButton, musicButton);
-        buttonRow.setAlignment(Pos.CENTER);
+        HBox actions = new HBox(18, exploreButton, loginButton);
+        actions.setAlignment(Pos.CENTER_LEFT);
 
-        Label footer = new Label("Nashik Simhastha 2027 - Digital Pilgrim Assistance Platform");
-        footer.getStyleClass().add("footer-text");
+        VBox copy = new VBox(14, welcome, title, createDecorativeDivider(), verse, description, actions);
+        copy.getStyleClass().add("welcome-copy");
+        copy.setAlignment(Pos.CENTER_LEFT);
 
-        VBox bottom = new VBox(7, buttonRow, footer);
-        bottom.setAlignment(Pos.CENTER);
-        bottom.setPadding(new Insets(2, 28, 12, 28));
-
-        HBox wrapper = new HBox(bottom);
-        wrapper.setAlignment(Pos.CENTER);
-        return wrapper;
+        HBox hero = new HBox(copy, createFlexibleSpace());
+        hero.setAlignment(Pos.CENTER_LEFT);
+        hero.setPadding(new Insets(0, 40, 8, 54));
+        return hero;
     }
 
-    private StackPane createBackgroundDecoration() {
-        StackPane decoration = new StackPane();
-        decoration.setMouseTransparent(true);
-
-        Line leftLine = new Line(-390, 0, -170, 0);
-        leftLine.getStyleClass().add("decor-line");
-
-        Line rightLine = new Line(170, 0, 390, 0);
-        rightLine.getStyleClass().add("decor-line");
-
-        Circle center = new Circle(5);
-        center.getStyleClass().add("decor-dot");
-
-        HBox waveBox = new HBox(12, leftLine, center, rightLine);
-        waveBox.setAlignment(Pos.BOTTOM_CENTER);
-        StackPane.setAlignment(waveBox, Pos.BOTTOM_CENTER);
-        StackPane.setMargin(waveBox, new Insets(0, 0, 88, 0));
-
-        decoration.getChildren().add(waveBox);
-        return decoration;
+    private ImageView createButtonLogo() {
+        ImageView logo = new ImageView(loadImage("/images/sclogo.png"));
+        logo.setPreserveRatio(true);
+        logo.setSmooth(true);
+        logo.setFitWidth(19);
+        logo.setFitHeight(19);
+        logo.getStyleClass().add("cta-logo");
+        return logo;
     }
 
-    private HBox createOrnamentLine() {
-        Line left = new Line(0, 0, 120, 0);
-        left.getStyleClass().add("decor-line");
+    private HBox createDecorativeDivider() {
+        Line left = new Line(0, 0, 180, 0);
+        left.getStyleClass().add("welcome-divider-line");
 
-        Circle dot = new Circle(4);
-        dot.getStyleClass().add("decor-dot");
+        Label lotus = new Label("\u2735");
+        lotus.getStyleClass().add("welcome-divider-lotus");
 
-        Line right = new Line(0, 0, 120, 0);
-        right.getStyleClass().add("decor-line");
+        Line right = new Line(0, 0, 180, 0);
+        right.getStyleClass().add("welcome-divider-line");
 
-        HBox box = new HBox(12, left, dot, right);
-        box.setAlignment(Pos.CENTER);
-        return box;
+        HBox divider = new HBox(16, left, lotus, right);
+        divider.setAlignment(Pos.CENTER_LEFT);
+        return divider;
     }
 
-    private Button createMusicButton() {
-        Button musicButton = new Button("Music OFF");
-        musicButton.getStyleClass().add("music-button");
+    private StackPane createHeroOverlay() {
+        Rectangle wash = new Rectangle();
+        wash.getStyleClass().add("welcome-left-wash");
+        wash.widthProperty().bind(root.widthProperty());
+        wash.heightProperty().bind(root.heightProperty());
 
-        URL musicUrl = getClass().getResource("/audio/welcome-music.mp3");
+        StackPane overlay = new StackPane(wash);
+        overlay.setMouseTransparent(true);
+        return overlay;
+    }
 
-        if (musicUrl == null) {
-            musicButton.setText("Music Not Added");
-            musicButton.setDisable(true);
-            return musicButton;
+    private HBox createFooter() {
+        HBox footer = new HBox(28,
+                createFooterFeature("\u26E8", "Trusted & Secure", "Your data is safe with us"),
+                createFooterFeature("\u25CC", "Real-time Updates", "Stay informed with live alerts"),
+                createFooterFeature("\u260E", "24/7 Support", "We are here to help you anytime"),
+                createFlexibleSpace(),
+                createFooterBrand());
+        footer.getStyleClass().add("welcome-footer");
+        footer.setAlignment(Pos.CENTER_LEFT);
+        footer.setPadding(new Insets(11, 34, 11, 42));
+        return footer;
+    }
+
+    private HBox createFooterFeature(String iconText, String titleText, String detailText) {
+        Label icon = new Label(iconText);
+        icon.getStyleClass().add("footer-feature-icon");
+
+        Label title = new Label(titleText);
+        title.getStyleClass().add("footer-feature-title");
+
+        Label detail = new Label(detailText);
+        detail.getStyleClass().add("footer-feature-detail");
+
+        VBox text = new VBox(4, title, detail);
+        HBox feature = new HBox(12, icon, text);
+        feature.getStyleClass().add("footer-feature");
+        feature.setAlignment(Pos.CENTER_LEFT);
+        return feature;
+    }
+
+    private VBox createFooterBrand() {
+        Label skyline = new Label("\u25B1 \u25B3 \u25B2 \u25B3 \u25B1");
+        skyline.getStyleClass().add("footer-skyline");
+
+        Label copyright = new Label("\u00A9 2027 Simhastha Connect. All rights reserved.");
+        copyright.getStyleClass().add("footer-copyright");
+
+        VBox brand = new VBox(4, skyline, copyright);
+        brand.setAlignment(Pos.CENTER_RIGHT);
+        return brand;
+    }
+
+    private void switchTheme(boolean darkMode) {
+        darkModeSelected = darkMode;
+        backgroundImage.setImage(darkModeSelected ? nightImage : sunlightImage);
+        root.getStyleClass().removeAll("welcome-root-light", "welcome-root-dark");
+        root.getStyleClass().add(darkModeSelected ? "welcome-root-dark" : "welcome-root-light");
+        updateThemeButtons();
+        updateImageViewport();
+    }
+
+    private void updateThemeButtons() {
+        if (lightModeButton == null || darkModeButton == null) {
+            return;
         }
 
-        try {
-            Media media = new Media(musicUrl.toExternalForm());
-            mediaPlayer = new MediaPlayer(media);
-            mediaPlayer.setCycleCount(MediaPlayer.INDEFINITE);
-            mediaPlayer.setVolume(0.32);
+        lightModeButton.getStyleClass().remove("theme-toggle-button-active");
+        darkModeButton.getStyleClass().remove("theme-toggle-button-active");
 
-            musicButton.setOnAction(event -> {
-                if (musicPlaying) {
-                    mediaPlayer.pause();
-                    musicPlaying = false;
-                    musicButton.setText("Music OFF");
-                } else {
-                    mediaPlayer.play();
-                    musicPlaying = true;
-                    musicButton.setText("Music ON");
-                }
-            });
-        } catch (Exception exception) {
-            musicButton.setText("Music Not Available");
-            musicButton.setDisable(true);
+        if (darkModeSelected) {
+            darkModeButton.getStyleClass().add("theme-toggle-button-active");
+        } else {
+            lightModeButton.getStyleClass().add("theme-toggle-button-active");
         }
-
-        return musicButton;
     }
 
-    private ImageView createOptionalImage(String path, double width, double height) {
-        URL imageUrl = getClass().getResource(path);
-        ImageView imageView = new ImageView();
+    private void startClock() {
+        updateDateTime();
+        Timeline timeline = new Timeline(new KeyFrame(Duration.seconds(1), event -> updateDateTime()));
+        timeline.setCycleCount(Timeline.INDEFINITE);
+        timeline.play();
+    }
+
+    private void updateDateTime() {
+        DateTimeFormatter dateFormatter = DateTimeFormatter.ofPattern("dd MMMM yyyy\nEEEE");
+        DateTimeFormatter timeFormatter = DateTimeFormatter.ofPattern("hh:mm a");
+
+        dateLabel.setText(LocalDate.now().format(dateFormatter));
+        timeLabel.setText(LocalTime.now().format(timeFormatter));
+    }
+
+    private ImageView createCoverImageView(Image image) {
+        ImageView imageView = new ImageView(image);
         imageView.setPreserveRatio(true);
-        imageView.setFitWidth(width);
-        imageView.setFitHeight(height);
-
-        if (imageUrl != null) {
-            imageView.setImage(new Image(imageUrl.toExternalForm()));
-        }
-
+        imageView.setSmooth(true);
         return imageView;
     }
 
-    private void openLoginSelection(Stage stage) {
-        if (mediaPlayer != null) {
-            mediaPlayer.stop();
+    private void bindCoverImage(Scene scene) {
+        backgroundImage.fitWidthProperty().bind(scene.widthProperty());
+        backgroundImage.fitHeightProperty().bind(scene.heightProperty());
+
+        ChangeListener<Number> viewportListener = (observable, oldValue, newValue) -> updateImageViewport();
+        scene.widthProperty().addListener(viewportListener);
+        scene.heightProperty().addListener(viewportListener);
+        backgroundImage.imageProperty().addListener((observable, oldValue, newValue) -> updateImageViewport());
+        updateImageViewport();
+    }
+
+    private void updateImageViewport() {
+        Image image = backgroundImage.getImage();
+        double viewWidth = backgroundImage.getFitWidth();
+        double viewHeight = backgroundImage.getFitHeight();
+
+        if (image == null || viewWidth <= 0 || viewHeight <= 0) {
+            return;
         }
 
+        double imageWidth = image.getWidth();
+        double imageHeight = image.getHeight();
+        double scale = Math.max(viewWidth / imageWidth, viewHeight / imageHeight);
+        double cropWidth = viewWidth / scale;
+        double cropHeight = viewHeight / scale;
+        double xBias = darkModeSelected ? 0.48 : 0.50;
+        double yBias = darkModeSelected ? 0.40 : 0.40;
+        double x = Math.max(0, (imageWidth - cropWidth) * xBias);
+        double y = Math.max(0, (imageHeight - cropHeight) * yBias);
+
+        backgroundImage.setViewport(new javafx.geometry.Rectangle2D(x, y, cropWidth, cropHeight));
+    }
+
+    private Image loadImage(String path) {
+        URL imageUrl = getClass().getResource(path);
+        if (imageUrl == null) {
+            return null;
+        }
+        return new Image(imageUrl.toExternalForm());
+    }
+
+    private Region createFlexibleSpace() {
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        VBox.setVgrow(spacer, Priority.ALWAYS);
+        return spacer;
+    }
+
+    private void openLoginSelection(Stage stage) {
         LoginSelectionPage loginSelectionPage = new LoginSelectionPage();
         stage.setScene(loginSelectionPage.createScene(stage));
     }

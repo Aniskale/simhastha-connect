@@ -7,6 +7,8 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -80,12 +82,12 @@ public class LoginSelectionPage {
 
         StackPane visual = createDecorativeSide();
 
-        HBox cards = new HBox(24, userCard, businessCard);
-        cards.setAlignment(Pos.CENTER);
+        HBox showcase = new HBox(24, userCard, visual, businessCard);
+        showcase.setAlignment(Pos.CENTER);
 
         HBox trustStrip = createTrustStrip();
 
-        VBox cardArea = new VBox(24, visual, cards, trustStrip);
+        VBox cardArea = new VBox(24, showcase, trustStrip);
         cardArea.setAlignment(Pos.CENTER);
         cardArea.setPadding(new Insets(15, 44, 55, 44));
 
@@ -143,6 +145,9 @@ public class LoginSelectionPage {
     }
 
     private StackPane createDecorativeSide() {
+        ImageView image = createOptionalImage("/images/ramkund_sunrise.jpg", 360, 330);
+        image.getStyleClass().add("portal-scenic-image");
+
         Circle outer = new Circle(78);
         outer.getStyleClass().add("mandala-outer-small");
 
@@ -152,10 +157,25 @@ public class LoginSelectionPage {
         Label text = new Label("Ramkund - Godavari - Nashik");
         text.getStyleClass().add("visual-caption");
 
-        StackPane stack = new StackPane(outer, inner, text);
+        StackPane stack = new StackPane(image, outer, inner, text);
         stack.getStyleClass().add("portal-center-visual");
-        stack.setMinHeight(150);
+        stack.setMinSize(340, 330);
+        stack.setMaxSize(380, 330);
         return stack;
+    }
+
+    private ImageView createOptionalImage(String path, double width, double height) {
+        URL imageUrl = getClass().getResource(path);
+        ImageView imageView = new ImageView();
+        imageView.setPreserveRatio(false);
+        imageView.setFitWidth(width);
+        imageView.setFitHeight(height);
+
+        if (imageUrl != null) {
+            imageView.setImage(new Image(imageUrl.toExternalForm()));
+        }
+
+        return imageView;
     }
 
     private HBox createOrnamentLine() {

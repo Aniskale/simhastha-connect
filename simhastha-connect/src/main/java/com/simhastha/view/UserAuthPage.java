@@ -226,7 +226,7 @@ public class UserAuthPage {
     }
 
     private StackPane createAuthVisualPanel() {
-        ImageView background = createOptionalImage("/images/kumbh-background.jpg", 420, 520);
+        ImageView background = createOptionalImage("/images/ramkund_sunrise.jpg", 420, 520);
         background.getStyleClass().add("auth-visual-image");
 
         Label mantra = new Label("|| \u0950 \u0928\u092E\u0903 \u0936\u093F\u0935\u093E\u092F ||");

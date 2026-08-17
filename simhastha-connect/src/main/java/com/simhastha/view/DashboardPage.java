@@ -109,7 +109,7 @@ public class DashboardPage {
     }
 
     private StackPane createHeroBanner() {
-        ImageView bannerImage = createOptionalImage("/images/kumbh-background.jpg", 760, 170);
+        ImageView bannerImage = createOptionalImage("/images/godavari_kumbh.jpg", 760, 170);
         bannerImage.getStyleClass().add("dashboard-banner-image");
 
         Label lineOne = new Label("|| Har Har Mahadev ||");
