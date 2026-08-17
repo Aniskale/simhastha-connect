@@ -6,6 +6,7 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
@@ -14,56 +15,31 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
-import javafx.scene.shape.Circle;
-import javafx.scene.shape.Line;
+import javafx.scene.shape.Rectangle;
 import javafx.stage.Stage;
 
 public class LoginSelectionPage {
 
     public Scene createScene(Stage stage) {
-        BorderPane root = new BorderPane();
-        root.getStyleClass().add("main-background");
-
-        root.setTop(createHeader(stage));
-        root.setCenter(createPortalOptions(stage));
-
-        Scene scene = new Scene(root, 1200, 750);
-        addTheme(scene);
-        return scene;
-    }
-
-    private BorderPane createHeader(Stage stage) {
-        Button backButton = new Button("< Back");
-        backButton.getStyleClass().add("back-button");
-        backButton.setOnAction(event -> {
+        BorderPane page = new BorderPane();
+        page.getStyleClass().add("themed-content-page");
+        page.setTop(AppUi.createHeader(stage, "Choose Your Portal", "Continue your Simhastha journey", () -> {
             WelcomePage welcomePage = new WelcomePage();
             stage.setScene(welcomePage.createScene(stage));
-        });
+        }));
+        page.setCenter(createPortalOptions(stage));
 
-        Label brand = new Label("SIMHASTHA CONNECT");
-        brand.getStyleClass().add("page-brand");
-
-        Label heading = new Label("Choose Your Portal");
-        heading.getStyleClass().add("page-heading");
-
-        Label subtitle = new Label("Continue your Simhastha journey");
-        subtitle.getStyleClass().add("page-subtitle");
-
-        VBox titleBox = new VBox(6, brand, heading, subtitle, createOrnamentLine());
-        titleBox.setAlignment(Pos.CENTER);
-
-        BorderPane header = new BorderPane();
-        header.setLeft(backButton);
-        header.setCenter(titleBox);
-        header.setPadding(new Insets(24, 38, 8, 38));
-        return header;
+        ThemedBackgroundPane root = new ThemedBackgroundPane(page);
+        return AppUi.createScene(root, this);
     }
 
-    private HBox createPortalOptions(Stage stage) {
+    private VBox createPortalOptions(Stage stage) {
         VBox userCard = createPortalCard(
+                "\uE77B",
                 "PILGRIM / USER",
                 "Access transport, ghats, snan information, events, accommodation, puja services, emergency assistance and Lost & Found.",
-                "USER PORTAL");
+                "ENTER USER PORTAL",
+                "portal-card-user");
         Button userButton = (Button) userCard.getChildren().get(userCard.getChildren().size() - 1);
         userButton.setOnAction(event -> {
             UserAuthPage userAuthPage = new UserAuthPage();
@@ -71,58 +47,35 @@ public class LoginSelectionPage {
         });
 
         VBox businessCard = createPortalCard(
+                "\uE821",
                 "BUSINESS & PARTNER",
                 "For local businesses, service providers and transport operators participating in the Simhastha ecosystem.",
-                "BUSINESS & PARTNER PORTAL");
+                "BUSINESS & PARTNER PORTAL",
+                "portal-card-partner");
         Button businessButton = (Button) businessCard.getChildren().get(businessCard.getChildren().size() - 1);
         businessButton.setOnAction(event -> {
             BusinessPartnerPage businessPartnerPage = new BusinessPartnerPage();
             stage.setScene(businessPartnerPage.createScene(stage));
         });
 
-        StackPane visual = createDecorativeSide();
+        StackPane visual = createScenicFeature();
 
         HBox showcase = new HBox(24, userCard, visual, businessCard);
+        showcase.getStyleClass().add("portal-showcase");
         showcase.setAlignment(Pos.CENTER);
-
-        HBox trustStrip = createTrustStrip();
-
-        VBox cardArea = new VBox(24, showcase, trustStrip);
-        cardArea.setAlignment(Pos.CENTER);
-        cardArea.setPadding(new Insets(15, 44, 55, 44));
-
         HBox.setHgrow(userCard, Priority.ALWAYS);
         HBox.setHgrow(businessCard, Priority.ALWAYS);
 
-        HBox wrapper = new HBox(cardArea);
-        wrapper.setAlignment(Pos.CENTER);
-        return wrapper;
+        VBox cardArea = new VBox(20, showcase, createTrustStrip());
+        cardArea.setAlignment(Pos.CENTER);
+        cardArea.setPadding(new Insets(8, 44, 42, 44));
+        return cardArea;
     }
 
-    private HBox createTrustStrip() {
-        HBox strip = new HBox(26,
-                createTrustItem("Trusted & Secure", "Data safe with simple protected login"),
-                createTrustItem("Real-time Ready", "Designed for future Firebase updates"),
-                createTrustItem("24/7 Support", "Emergency and help modules ready"));
-        strip.getStyleClass().add("portal-trust-strip");
-        strip.setAlignment(Pos.CENTER);
-        return strip;
-    }
+    private VBox createPortalCard(String iconText, String titleText, String descriptionText, String buttonText,
+            String variantClass) {
+        Label icon = AppUi.symbolIcon(iconText, "portal-card-icon");
 
-    private VBox createTrustItem(String titleText, String detailText) {
-        Label title = new Label(titleText);
-        title.getStyleClass().add("portal-trust-title");
-
-        Label detail = new Label(detailText);
-        detail.getStyleClass().add("portal-trust-detail");
-        detail.setWrapText(true);
-
-        VBox item = new VBox(4, title, detail);
-        item.setAlignment(Pos.CENTER);
-        return item;
-    }
-
-    private VBox createPortalCard(String titleText, String descriptionText, String buttonText) {
         Label title = new Label(titleText);
         title.getStyleClass().add("portal-title");
         title.setWrapText(true);
@@ -133,71 +86,77 @@ public class LoginSelectionPage {
 
         Button button = new Button(buttonText);
         button.getStyleClass().add("primary-button");
+        button.setGraphic(AppUi.symbolIcon("\uE72A", "button-icon"));
+        button.setContentDisplay(ContentDisplay.RIGHT);
+        button.setGraphicTextGap(10);
         button.setMaxWidth(Double.MAX_VALUE);
 
-        VBox card = new VBox(18, title, description, button);
-        card.getStyleClass().add("portal-card");
+        VBox card = new VBox(16, icon, title, description, AppUi.spacer(), button);
+        card.getStyleClass().addAll("portal-card", variantClass);
         card.setAlignment(Pos.CENTER_LEFT);
-        card.setMinWidth(370);
-        card.setMaxWidth(460);
-        card.setMinHeight(245);
+        card.setMinWidth(350);
+        card.setMaxWidth(430);
+        card.setMinHeight(292);
         return card;
     }
 
-    private StackPane createDecorativeSide() {
-        ImageView image = createOptionalImage("/images/ramkund_sunrise.jpg", 360, 330);
+    private StackPane createScenicFeature() {
+        ImageView image = createImage("/images/ramkund_sunrise.jpg", 300, 310);
         image.getStyleClass().add("portal-scenic-image");
 
-        Circle outer = new Circle(78);
-        outer.getStyleClass().add("mandala-outer-small");
+        Rectangle clip = new Rectangle(300, 310);
+        clip.setArcWidth(160);
+        clip.setArcHeight(160);
+        image.setClip(clip);
 
-        Circle inner = new Circle(38);
-        inner.getStyleClass().add("mandala-inner-small");
+        Label caption = new Label("Ramkund \u2022 Godavari \u2022 Nashik");
+        caption.getStyleClass().add("portal-visual-caption");
+        StackPane.setAlignment(caption, Pos.BOTTOM_CENTER);
+        StackPane.setMargin(caption, new Insets(0, 18, 18, 18));
 
-        Label text = new Label("Ramkund - Godavari - Nashik");
-        text.getStyleClass().add("visual-caption");
-
-        StackPane stack = new StackPane(image, outer, inner, text);
-        stack.getStyleClass().add("portal-center-visual");
-        stack.setMinSize(340, 330);
-        stack.setMaxSize(380, 330);
-        return stack;
+        StackPane visual = new StackPane(image, caption);
+        visual.getStyleClass().add("portal-center-visual");
+        visual.setMinSize(318, 330);
+        visual.setMaxSize(340, 330);
+        return visual;
     }
 
-    private ImageView createOptionalImage(String path, double width, double height) {
+    private HBox createTrustStrip() {
+        HBox strip = new HBox(26,
+                createTrustItem("\uE72E", "Trusted & Secure", "Protected login and safe data handling"),
+                createTrustItem("\uE789", "Official Updates", "Ready for verified live information"),
+                createTrustItem("\uE717", "24/7 Support", "Emergency and help modules easy to reach"));
+        strip.getStyleClass().add("portal-trust-strip");
+        strip.setAlignment(Pos.CENTER);
+        return strip;
+    }
+
+    private HBox createTrustItem(String iconText, String titleText, String detailText) {
+        Label icon = AppUi.symbolIcon(iconText, "portal-trust-icon");
+
+        Label title = new Label(titleText);
+        title.getStyleClass().add("portal-trust-title");
+
+        Label detail = new Label(detailText);
+        detail.getStyleClass().add("portal-trust-detail");
+        detail.setWrapText(true);
+
+        VBox text = new VBox(3, title, detail);
+        HBox item = new HBox(10, icon, text);
+        item.getStyleClass().add("portal-trust-item");
+        item.setAlignment(Pos.CENTER_LEFT);
+        return item;
+    }
+
+    private ImageView createImage(String path, double width, double height) {
         URL imageUrl = getClass().getResource(path);
         ImageView imageView = new ImageView();
         imageView.setPreserveRatio(false);
         imageView.setFitWidth(width);
         imageView.setFitHeight(height);
-
         if (imageUrl != null) {
             imageView.setImage(new Image(imageUrl.toExternalForm()));
         }
-
         return imageView;
-    }
-
-    private HBox createOrnamentLine() {
-        Line left = new Line(0, 0, 90, 0);
-        left.getStyleClass().add("decor-line");
-
-        Circle dot = new Circle(4);
-        dot.getStyleClass().add("decor-dot");
-
-        Line right = new Line(0, 0, 90, 0);
-        right.getStyleClass().add("decor-line");
-
-        HBox line = new HBox(12, left, dot, right);
-        line.setAlignment(Pos.CENTER);
-        return line;
-    }
-
-    private void addTheme(Scene scene) {
-        URL cssUrl = getClass().getResource("/css/simhastha-theme.css");
-
-        if (cssUrl != null) {
-            scene.getStylesheets().add(cssUrl.toExternalForm());
-        }
     }
 }

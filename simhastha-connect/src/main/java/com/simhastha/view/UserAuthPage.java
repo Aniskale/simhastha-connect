@@ -1,8 +1,8 @@
 package com.simhastha.view;
 
+import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
-import java.net.URL;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -17,99 +17,71 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
-import javafx.scene.shape.Circle;
-import javafx.scene.shape.Line;
 import javafx.stage.Stage;
 
 public class UserAuthPage {
 
     private static final Map<String, String> registeredUsers = new HashMap<>();
 
-    private VBox formArea;
+    private VBox formSlot;
     private Stage currentStage;
 
     public Scene createScene(Stage stage) {
         currentStage = stage;
 
         BorderPane page = new BorderPane();
-        page.getStyleClass().add("main-background");
-        page.setTop(createHeader(stage));
-
-        formArea = new VBox();
-        formArea.setAlignment(Pos.CENTER);
-        showLoginForm();
-
-        ScrollPane scrollPane = new ScrollPane(formArea);
-        scrollPane.getStyleClass().add("page-scroll");
-        scrollPane.setFitToWidth(true);
-        page.setCenter(scrollPane);
-
-        Scene scene = new Scene(page, 1200, 750);
-        addTheme(scene);
-        return scene;
-    }
-
-    private BorderPane createHeader(Stage stage) {
-        Button backButton = new Button("< Back");
-        backButton.getStyleClass().add("back-button");
-        backButton.setOnAction(event -> {
+        page.getStyleClass().add("themed-content-page");
+        page.setTop(AppUi.createHeader(stage, "User Authentication", "Login or create your pilgrim account", () -> {
             LoginSelectionPage loginSelectionPage = new LoginSelectionPage();
             stage.setScene(loginSelectionPage.createScene(stage));
-        });
+        }));
 
-        Label brand = new Label("SIMHASTHA CONNECT");
-        brand.getStyleClass().add("page-brand");
+        formSlot = new VBox();
+        formSlot.setAlignment(Pos.CENTER);
+        showLoginForm();
+        StackPane center = new StackPane(createSplitShell());
+        center.setPadding(new Insets(14, 24, 42, 24));
+        page.setCenter(center);
 
-        Label title = new Label("User Authentication");
-        title.getStyleClass().add("page-heading");
-
-        Label subtitle = new Label("Login or create your pilgrim account");
-        subtitle.getStyleClass().add("page-subtitle");
-
-        VBox titleBox = new VBox(5, brand, title, subtitle, createOrnamentLine());
-        titleBox.setAlignment(Pos.CENTER);
-
-        BorderPane header = new BorderPane();
-        header.setLeft(backButton);
-        header.setCenter(titleBox);
-        header.setPadding(new Insets(24, 38, 8, 38));
-        return header;
+        ThemedBackgroundPane root = new ThemedBackgroundPane(page);
+        return AppUi.createScene(root, this);
     }
 
-    private HBox createOrnamentLine() {
-        Line left = new Line(0, 0, 82, 0);
-        left.getStyleClass().add("decor-line");
+    private HBox createSplitShell() {
+        StackPane visual = createAuthVisualPanel(
+                "\u0965 \u0950 \u0928\u092E\u0903 \u0936\u093F\u0935\u093E\u092F \u0965",
+                "Welcome Back!",
+                "Login to continue your Simhastha journey",
+                "/images/ramkund_sunrise.jpg",
+                new String[][] {
+                        { "\uE77B", "Personalized Experience", "Get services tailored for your visit" },
+                        { "\uE789", "Real-time Alerts & Updates", "Important updates at your fingertips" },
+                        { "\uE8A7", "Quick Access to Services", "All essential modules in one place" },
+                        { "\uE72E", "Secure & Reliable", "Your data is safe and protected" }
+                });
 
-        Circle dot = new Circle(4);
-        dot.getStyleClass().add("decor-dot");
+        HBox shell = new HBox(0, visual, formSlot);
+        shell.getStyleClass().addAll("auth-split-shell", "user-auth-shell");
+        shell.setAlignment(Pos.CENTER);
+        HBox.setHgrow(formSlot, Priority.ALWAYS);
+        shell.setMaxWidth(900);
+        shell.setMaxHeight(500);
 
-        Line right = new Line(0, 0, 82, 0);
-        right.getStyleClass().add("decor-line");
-
-        HBox line = new HBox(12, left, dot, right);
-        line.setAlignment(Pos.CENTER);
-        return line;
+        return shell;
     }
 
     private void showLoginForm() {
-        Button loginTab = new Button("LOGIN");
-        Button createTab = new Button("CREATE ACCOUNT");
-        loginTab.getStyleClass().add("segment-button-active");
-        createTab.getStyleClass().add("segment-button");
-        createTab.setOnAction(event -> showCreateAccountForm());
+        Button loginTab = tabButton("LOGIN", true, this::showLoginForm);
+        Button createTab = tabButton("CREATE ACCOUNT", false, this::showCreateAccountForm);
+        HBox tabs = tabs(loginTab, createTab);
 
-        HBox tabs = new HBox(loginTab, createTab);
-        tabs.getStyleClass().add("segment-box");
-        tabs.setAlignment(Pos.CENTER);
+        TextField emailMobile = AppUi.textField("Email / Mobile");
+        PasswordField password = AppUi.passwordField("Password");
 
-        TextField emailMobile = createTextField("Email / Mobile");
-        PasswordField password = createPasswordField("Password");
-
-        Button loginButton = new Button("LOGIN");
-        loginButton.getStyleClass().add("primary-button");
-        loginButton.setMaxWidth(Double.MAX_VALUE);
+        Button loginButton = primaryButton("LOGIN");
         loginButton.setOnAction(event -> {
             String userId = emailMobile.getText().trim().toLowerCase();
             String userPassword = password.getText().trim();
@@ -126,39 +98,26 @@ public class UserAuthPage {
             }
         });
 
-        Button forgotButton = new Button("Forgot Password?");
-        forgotButton.getStyleClass().add("text-button");
-        forgotButton.setOnAction(event -> showInfo("Forgot Password", "Password recovery will be added later."));
+        Button forgotButton = linkButton("Forgot Password?", () -> showInfo("Forgot Password",
+                "Password recovery will be added later."));
+        Button createAccount = linkButton("Don't have an account? Create Account", this::showCreateAccountForm);
 
-        Button createAccount = new Button("Don't have an account? Create Account");
-        createAccount.getStyleClass().add("text-button");
-        createAccount.setOnAction(event -> showCreateAccountForm());
-
-        VBox form = createFormCard("Pilgrim / User Login", tabs, emailMobile, password, loginButton, forgotButton,
-                createAccount);
-        replaceForm(form);
+        replaceForm(createFormCard("Pilgrim / User Login", tabs, emailMobile, password, loginButton, forgotButton,
+                createAccount));
     }
 
     private void showCreateAccountForm() {
-        Button loginTab = new Button("LOGIN");
-        Button createTab = new Button("CREATE ACCOUNT");
-        loginTab.getStyleClass().add("segment-button");
-        createTab.getStyleClass().add("segment-button-active");
-        loginTab.setOnAction(event -> showLoginForm());
+        Button loginTab = tabButton("LOGIN", false, this::showLoginForm);
+        Button createTab = tabButton("CREATE ACCOUNT", true, this::showCreateAccountForm);
+        HBox tabs = tabs(loginTab, createTab);
 
-        HBox tabs = new HBox(loginTab, createTab);
-        tabs.getStyleClass().add("segment-box");
-        tabs.setAlignment(Pos.CENTER);
+        TextField fullName = AppUi.textField("Full Name");
+        TextField mobile = AppUi.textField("Mobile Number");
+        TextField email = AppUi.textField("Email");
+        PasswordField password = AppUi.passwordField("Password");
+        PasswordField confirmPassword = AppUi.passwordField("Confirm Password");
 
-        TextField fullName = createTextField("Full Name");
-        TextField email = createTextField("Email");
-        TextField mobile = createTextField("Mobile Number");
-        PasswordField password = createPasswordField("Password");
-        PasswordField confirmPassword = createPasswordField("Confirm Password");
-
-        Button createButton = new Button("CREATE ACCOUNT");
-        createButton.getStyleClass().add("primary-button");
-        createButton.setMaxWidth(Double.MAX_VALUE);
+        Button createButton = primaryButton("CREATE ACCOUNT");
         createButton.setOnAction(event -> {
             if (isEmpty(fullName) || isEmpty(email) || isEmpty(mobile) || isEmpty(password) || isEmpty(confirmPassword)) {
                 showInfo("Validation", "Please fill all fields before creating an account.");
@@ -175,89 +134,63 @@ public class UserAuthPage {
             }
         });
 
-        Button loginLink = new Button("Already registered? Login");
-        loginLink.getStyleClass().add("text-button");
-        loginLink.setOnAction(event -> showLoginForm());
-
-        VBox form = createFormCard("Create Pilgrim Account", tabs, fullName, email, mobile, password, confirmPassword,
-                createButton, loginLink);
-        replaceForm(form);
+        Button loginLink = linkButton("Already registered? Login", this::showLoginForm);
+        ScrollPane formScroll = new ScrollPane(createFormCard("Create Pilgrim Account", tabs, fullName, mobile, email,
+                password, confirmPassword, createButton, loginLink));
+        formScroll.getStyleClass().add("form-card-scroll");
+        formScroll.setFitToWidth(true);
+        formScroll.setMaxHeight(455);
+        replaceNode(formScroll);
     }
 
     private VBox createFormCard(String titleText, HBox tabs, javafx.scene.Node... fields) {
         Label title = new Label(titleText);
         title.getStyleClass().add("form-title");
 
-        VBox card = new VBox(14);
+        VBox card = new VBox(13);
         card.getStyleClass().add("auth-card");
         card.setAlignment(Pos.CENTER_LEFT);
-        card.setMaxWidth(460);
+        card.setMaxWidth(400);
         card.getChildren().addAll(title, tabs);
         card.getChildren().addAll(fields);
         return card;
     }
 
-    private TextField createTextField(String prompt) {
-        TextField textField = new TextField();
-        textField.setPromptText(prompt);
-        textField.getStyleClass().add("input-field");
-        return textField;
-    }
-
-    private PasswordField createPasswordField(String prompt) {
-        PasswordField passwordField = new PasswordField();
-        passwordField.setPromptText(prompt);
-        passwordField.getStyleClass().add("input-field");
-        return passwordField;
-    }
-
-    private boolean isEmpty(TextField field) {
-        return field.getText() == null || field.getText().trim().isEmpty();
-    }
-
-    private void replaceForm(VBox form) {
-        HBox splitLayout = new HBox(0, createAuthVisualPanel(), form);
-        splitLayout.getStyleClass().add("auth-split-shell");
-        splitLayout.setAlignment(Pos.CENTER);
-
-        StackPane center = new StackPane(splitLayout);
-        center.setPadding(new Insets(22, 20, 42, 20));
-        formArea.getChildren().setAll(center);
-    }
-
-    private StackPane createAuthVisualPanel() {
-        ImageView background = createOptionalImage("/images/ramkund_sunrise.jpg", 420, 520);
+    private StackPane createAuthVisualPanel(String mantraText, String titleText, String subtitleText, String imagePath,
+            String[][] featuresData) {
+        ImageView background = createImage(imagePath, 360, 500);
         background.getStyleClass().add("auth-visual-image");
 
-        Label mantra = new Label("|| \u0950 \u0928\u092E\u0903 \u0936\u093F\u0935\u093E\u092F ||");
+        Label mantra = new Label(mantraText);
         mantra.getStyleClass().add("auth-mantra");
 
-        Label welcome = new Label("Welcome Back!");
-        welcome.getStyleClass().add("auth-visual-title");
+        Label title = new Label(titleText);
+        title.getStyleClass().add("auth-visual-title");
 
-        Label subtitle = new Label("Login to continue your Simhastha journey");
+        Label subtitle = new Label(subtitleText);
         subtitle.getStyleClass().add("auth-visual-subtitle");
         subtitle.setWrapText(true);
 
-        VBox features = new VBox(16,
-                createFeatureLine("Personalized Experience", "Get services tailored for your visit"),
-                createFeatureLine("Real-time Alerts & Updates", "Important updates at your fingertips"),
-                createFeatureLine("Quick Access to Services", "All essential modules in one place"),
-                createFeatureLine("Secure & Reliable", "Your data is safe and protected"));
-        features.setPadding(new Insets(24, 0, 0, 0));
+        VBox features = new VBox(13);
+        for (String[] feature : featuresData) {
+            features.getChildren().add(createFeatureLine(feature[0], feature[1], feature[2]));
+        }
+        features.setPadding(new Insets(18, 0, 0, 0));
 
-        VBox content = new VBox(10, mantra, welcome, subtitle, features);
+        VBox content = new VBox(9, mantra, title, subtitle, features);
         content.setAlignment(Pos.CENTER_LEFT);
-        content.setPadding(new Insets(38));
-        content.setMaxWidth(390);
+        content.setPadding(new Insets(30));
+        content.setMaxWidth(335);
 
         StackPane panel = new StackPane(background, content);
         panel.getStyleClass().add("auth-visual-panel");
-        panel.setPrefSize(420, 520);
+        panel.setPrefSize(360, 500);
         return panel;
     }
 
-    private VBox createFeatureLine(String titleText, String detailText) {
+    private HBox createFeatureLine(String iconText, String titleText, String detailText) {
+        Label icon = AppUi.symbolIcon(iconText, "auth-feature-icon");
+
         Label title = new Label(titleText);
         title.getStyleClass().add("auth-feature-title");
 
@@ -265,21 +198,63 @@ public class UserAuthPage {
         detail.getStyleClass().add("auth-feature-detail");
         detail.setWrapText(true);
 
-        return new VBox(3, title, detail);
+        HBox row = new HBox(10, icon, new VBox(2, title, detail));
+        row.getStyleClass().add("feature-row");
+        row.setAlignment(Pos.TOP_LEFT);
+        return row;
     }
 
-    private ImageView createOptionalImage(String path, double width, double height) {
+    private Button tabButton(String text, boolean active, Runnable action) {
+        Button button = new Button(text);
+        button.getStyleClass().add(active ? "segment-button-active" : "segment-button");
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private HBox tabs(Button... buttons) {
+        HBox tabs = new HBox(buttons);
+        tabs.getStyleClass().add("segment-box");
+        tabs.setAlignment(Pos.CENTER_LEFT);
+        return tabs;
+    }
+
+    private Button primaryButton(String text) {
+        Button button = new Button(text);
+        button.getStyleClass().add("primary-button");
+        button.setMaxWidth(Double.MAX_VALUE);
+        return button;
+    }
+
+    private Button linkButton(String text, Runnable action) {
+        Button button = new Button(text);
+        button.getStyleClass().add("text-button");
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private void replaceForm(VBox form) {
+        replaceNode(form);
+    }
+
+    private void replaceNode(javafx.scene.Node node) {
+        formSlot.getChildren().setAll(node);
+        formSlot.setPadding(new Insets(28, 34, 28, 34));
+    }
+
+    private ImageView createImage(String path, double width, double height) {
         URL imageUrl = getClass().getResource(path);
         ImageView imageView = new ImageView();
         imageView.setPreserveRatio(false);
         imageView.setFitWidth(width);
         imageView.setFitHeight(height);
-
         if (imageUrl != null) {
             imageView.setImage(new Image(imageUrl.toExternalForm()));
         }
-
         return imageView;
+    }
+
+    private boolean isEmpty(TextField field) {
+        return field.getText() == null || field.getText().trim().isEmpty();
     }
 
     private void showInfo(String title, String message) {
@@ -288,13 +263,5 @@ public class UserAuthPage {
         alert.setHeaderText(null);
         alert.setContentText(message);
         alert.showAndWait();
-    }
-
-    private void addTheme(Scene scene) {
-        URL cssUrl = getClass().getResource("/css/simhastha-theme.css");
-
-        if (cssUrl != null) {
-            scene.getStylesheets().add(cssUrl.toExternalForm());
-        }
     }
 }

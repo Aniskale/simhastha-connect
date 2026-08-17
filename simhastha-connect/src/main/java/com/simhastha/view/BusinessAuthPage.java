@@ -1,6 +1,10 @@
 package com.simhastha.view;
 
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -10,142 +14,183 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
-import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
+import javafx.geometry.Rectangle2D;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
-import javafx.scene.shape.Circle;
-import javafx.scene.shape.Line;
 import javafx.stage.Stage;
 
 public class BusinessAuthPage {
 
-    private VBox formArea;
+    private static final Map<String, BusinessAccount> registeredBusinesses = new HashMap<>();
+
+    private VBox formSlot;
 
     public Scene createScene(Stage stage) {
         BorderPane page = new BorderPane();
-        page.getStyleClass().add("main-background");
-        page.setTop(createHeader(stage));
+        page.getStyleClass().add("themed-content-page");
+        page.setTop(AppUi.createHeader(stage, "Business Login / Registration",
+                "For local services in the Simhastha ecosystem", () -> {
+                    BusinessPartnerPage businessPartnerPage = new BusinessPartnerPage();
+                    stage.setScene(businessPartnerPage.createScene(stage));
+                }));
 
-        formArea = new VBox();
-        formArea.setAlignment(Pos.CENTER);
+        formSlot = new VBox();
+        formSlot.setAlignment(Pos.CENTER);
         showLoginForm();
+        StackPane center = new StackPane(createSplitShell());
+        center.setPadding(new Insets(18, 24, 36, 24));
+        page.setCenter(center);
 
-        ScrollPane scrollPane = new ScrollPane(formArea);
-        scrollPane.getStyleClass().add("page-scroll");
-        scrollPane.setFitToWidth(true);
-        page.setCenter(scrollPane);
-
-        Scene scene = new Scene(page, 1200, 750);
-        addTheme(scene);
-        return scene;
+        ThemedBackgroundPane root = new ThemedBackgroundPane(page);
+        return AppUi.createScene(root, this);
     }
 
-    private BorderPane createHeader(Stage stage) {
-        Button backButton = new Button("< Back");
-        backButton.getStyleClass().add("back-button");
-        backButton.setOnAction(event -> {
-            BusinessPartnerPage businessPartnerPage = new BusinessPartnerPage();
-            stage.setScene(businessPartnerPage.createScene(stage));
-        });
-
-        Label brand = new Label("SIMHASTHA CONNECT");
-        brand.getStyleClass().add("page-brand");
-
-        Label title = new Label("Business Login / Registration");
-        title.getStyleClass().add("page-heading");
-
-        Label subtitle = new Label("For local services in the Simhastha ecosystem");
-        subtitle.getStyleClass().add("page-subtitle");
-
-        VBox titleBox = new VBox(5, brand, title, subtitle, createOrnamentLine());
-        titleBox.setAlignment(Pos.CENTER);
-
-        BorderPane header = new BorderPane();
-        header.setLeft(backButton);
-        header.setCenter(titleBox);
-        header.setPadding(new Insets(24, 38, 8, 38));
-        return header;
+    private HBox createSplitShell() {
+        StackPane visual = createVisualPanel();
+        HBox shell = new HBox(0, visual, formSlot);
+        shell.getStyleClass().addAll("auth-split-shell", "business-auth-shell");
+        shell.setAlignment(Pos.CENTER);
+        shell.setMaxWidth(950);
+        shell.setMaxHeight(560);
+        HBox.setHgrow(formSlot, Priority.ALWAYS);
+        return shell;
     }
 
-    private HBox createOrnamentLine() {
-        Line left = new Line(0, 0, 82, 0);
-        left.getStyleClass().add("decor-line");
+    private StackPane createVisualPanel() {
+        ImageView background = createImage("/images/welcome-light.png", 380, 520);
+        background.getStyleClass().add("auth-visual-image");
 
-        Circle dot = new Circle(4);
-        dot.getStyleClass().add("decor-dot");
+        Label icon = AppUi.symbolIcon("\uE719", "auth-large-icon");
+        Label title = new Label("Local Business Portal");
+        title.getStyleClass().add("auth-visual-title");
 
-        Line right = new Line(0, 0, 82, 0);
-        right.getStyleClass().add("decor-line");
+        Label subtitle = new Label("Connect your services with Simhastha pilgrims");
+        subtitle.getStyleClass().add("auth-visual-subtitle");
+        subtitle.setWrapText(true);
 
-        HBox line = new HBox(12, left, dot, right);
-        line.setAlignment(Pos.CENTER);
-        return line;
+        VBox features = new VBox(13,
+                feature("\uE8D4", "Food & Prasadam", "Show trusted local services"),
+                feature("\uE809", "Stay & Accommodation", "Help pilgrims find support"),
+                feature("\uEC29", "Puja Services", "Make religious services discoverable"));
+        features.setPadding(new Insets(18, 0, 0, 0));
+
+        VBox content = new VBox(12, icon, title, subtitle, features);
+        content.setPadding(new Insets(34));
+        content.setAlignment(Pos.CENTER_LEFT);
+        content.setMaxWidth(350);
+
+        StackPane panel = new StackPane(background, content);
+        panel.getStyleClass().add("auth-visual-panel");
+        panel.setPrefSize(380, 520);
+        return panel;
     }
 
     private void showLoginForm() {
-        Button loginTab = new Button("LOGIN");
-        Button registerTab = new Button("CREATE BUSINESS ACCOUNT");
-        loginTab.getStyleClass().add("segment-button-active");
-        registerTab.getStyleClass().add("segment-button");
-        registerTab.setOnAction(event -> showRegisterForm());
+        Button loginTab = tabButton("LOGIN", true, this::showLoginForm);
+        Button registerTab = tabButton("CREATE BUSINESS ACCOUNT", false, this::showRegisterForm);
+        HBox tabs = tabs(loginTab, registerTab);
 
-        HBox tabs = new HBox(loginTab, registerTab);
-        tabs.getStyleClass().add("segment-box");
+        TextField emailMobile = AppUi.textField("Business Email / Mobile");
+        PasswordField password = AppUi.passwordField("Password");
 
-        TextField emailMobile = createTextField("Business Email / Mobile");
-        PasswordField password = createPasswordField("Password");
+        Button loginButton = primaryButton("LOGIN");
+        loginButton.setOnAction(event -> {
+            String userId = emailMobile.getText().trim().toLowerCase();
+            String userPassword = password.getText().trim();
 
-        Button loginButton = new Button("LOGIN");
-        loginButton.getStyleClass().add("primary-button");
-        loginButton.setMaxWidth(Double.MAX_VALUE);
-        loginButton.setOnAction(event -> showInfo("Business Login",
-                "Business authentication will be connected to Firebase later."));
-
-        VBox form = createFormCard("Local Business Login", tabs, emailMobile, password, loginButton);
-        replaceForm(form);
-    }
-
-    private void showRegisterForm() {
-        Button loginTab = new Button("LOGIN");
-        Button registerTab = new Button("CREATE BUSINESS ACCOUNT");
-        loginTab.getStyleClass().add("segment-button");
-        registerTab.getStyleClass().add("segment-button-active");
-        loginTab.setOnAction(event -> showLoginForm());
-
-        HBox tabs = new HBox(loginTab, registerTab);
-        tabs.getStyleClass().add("segment-box");
-
-        TextField ownerName = createTextField("Owner Name");
-        TextField businessName = createTextField("Business Name");
-        ComboBox<String> businessType = new ComboBox<>();
-        businessType.getItems().addAll("Food", "Accommodation", "Puja Service", "Shop", "Local Service", "Other");
-        businessType.setPromptText("Business Type");
-        businessType.getStyleClass().add("input-combo");
-        businessType.setMaxWidth(Double.MAX_VALUE);
-
-        TextField mobile = createTextField("Mobile Number");
-        TextField email = createTextField("Email");
-        PasswordField password = createPasswordField("Password");
-        PasswordField confirmPassword = createPasswordField("Confirm Password");
-
-        Button registerButton = new Button("REGISTER BUSINESS");
-        registerButton.getStyleClass().add("primary-button");
-        registerButton.setMaxWidth(Double.MAX_VALUE);
-        registerButton.setOnAction(event -> {
-            if (isEmpty(ownerName) || isEmpty(businessName) || businessType.getValue() == null || isEmpty(mobile)
-                    || isEmpty(email) || isEmpty(password) || isEmpty(confirmPassword)) {
-                showInfo("Validation", "Please fill all fields before registering the business.");
+            if (userId.isEmpty() || userPassword.isEmpty()) {
+                showInfo("Validation", "Please enter Business Email / Mobile and Password.");
+            } else if (!registeredBusinesses.containsKey(userId)) {
+                showInfo("Login Failed", "Business account not found. Please create an account first.");
+            } else if (!registeredBusinesses.get(userId).password.equals(userPassword)) {
+                showInfo("Login Failed", "Incorrect password. Please try again.");
             } else {
-                showInfo("Business Registration", "Business authentication will be connected to Firebase later.");
+                BusinessOwnerDashboardPage dashboardPage = new BusinessOwnerDashboardPage(registeredBusinesses.get(userId));
+                ((Stage) loginButton.getScene().getWindow()).setScene(dashboardPage.createScene((Stage) loginButton.getScene().getWindow()));
             }
         });
 
-        VBox form = createFormCard("Create Business Account", tabs, ownerName, businessName, businessType, mobile,
-                email, password, confirmPassword, registerButton);
-        replaceForm(form);
+        replaceNode(createFormCard("Local Business Login", tabs, emailMobile, password, loginButton));
+    }
+
+    private void showRegisterForm() {
+        Button loginTab = tabButton("LOGIN", false, this::showLoginForm);
+        Button registerTab = tabButton("CREATE BUSINESS ACCOUNT", true, this::showRegisterForm);
+        HBox tabs = tabs(loginTab, registerTab);
+
+        TextField businessName = AppUi.textField("Business Name");
+        TextField ownerName = AppUi.textField("Owner / Contact Person");
+        ComboBox<String> businessType = new ComboBox<>();
+        businessType.getItems().addAll(
+                "Food & Prasadam",
+                "Tea / Snacks / Water",
+                "Accommodation / Hotel",
+                "Dharamshala",
+                "Tent / Camp Stay",
+                "Puja Service",
+                "Pandit / Ritual Service",
+                "Religious Items Shop",
+                "General Store",
+                "Medical / Pharmacy",
+                "Ambulance / First Aid Support",
+                "Parking Service",
+                "Cloakroom / Locker",
+                "Mobile Charging",
+                "Guide / Information Desk",
+                "Donation / NGO Service",
+                "Photography / Printing",
+                "Sanitation / Cleaning Service",
+                "Local Service",
+                "Other");
+        businessType.setPromptText("Business Category");
+        businessType.getStyleClass().add("input-combo");
+        businessType.setMaxWidth(Double.MAX_VALUE);
+        businessType.setVisibleRowCount(7);
+        TextField mobile = AppUi.textField("Mobile Number");
+        TextField email = AppUi.textField("Email");
+        TextField location = AppUi.textField("Location");
+        PasswordField password = AppUi.passwordField("Password");
+        PasswordField confirmPassword = AppUi.passwordField("Confirm Password");
+
+        Button registerButton = primaryButton("REGISTER BUSINESS");
+        registerButton.setOnAction(event -> {
+            if (isEmpty(ownerName) || isEmpty(businessName) || businessType.getValue() == null || isEmpty(mobile)
+                    || isEmpty(email) || isEmpty(location) || isEmpty(password) || isEmpty(confirmPassword)) {
+                showInfo("Validation", "Please fill all fields before registering the business.");
+            } else if (!password.getText().trim().equals(confirmPassword.getText().trim())) {
+                showInfo("Validation", "Password and Confirm Password must match.");
+            } else if (registeredBusinesses.containsKey(email.getText().trim().toLowerCase())
+                    || registeredBusinesses.containsKey(mobile.getText().trim().toLowerCase())) {
+                showInfo("Validation", "This email or mobile number is already registered.");
+            } else {
+                BusinessAccount account = new BusinessAccount(
+                        businessName.getText().trim(),
+                        ownerName.getText().trim(),
+                        businessType.getValue(),
+                        mobile.getText().trim(),
+                        email.getText().trim(),
+                        location.getText().trim(),
+                        password.getText().trim());
+                registeredBusinesses.put(account.email.toLowerCase(), account);
+                registeredBusinesses.put(account.mobile.toLowerCase(), account);
+                showInfo("Business Registered", "Registration successful. Please login to open your management dashboard.");
+                showLoginForm();
+            }
+        });
+
+        GridPane fields = twoColumnFields(
+                businessName, ownerName,
+                businessType, mobile,
+                email, location,
+                password, confirmPassword);
+        replaceNode(createFormCard("Create Business Account", tabs, fields, registerButton));
     }
 
     private VBox createFormCard(String titleText, HBox tabs, javafx.scene.Node... fields) {
@@ -155,34 +200,90 @@ public class BusinessAuthPage {
         VBox card = new VBox(13);
         card.getStyleClass().add("auth-card");
         card.setAlignment(Pos.CENTER_LEFT);
-        card.setMaxWidth(500);
+        card.setMaxWidth(440);
         card.getChildren().addAll(title, tabs);
         card.getChildren().addAll(fields);
         return card;
     }
 
-    private TextField createTextField(String prompt) {
-        TextField textField = new TextField();
-        textField.setPromptText(prompt);
-        textField.getStyleClass().add("input-field");
-        return textField;
+    private HBox feature(String iconText, String titleText, String detailText) {
+        Label icon = AppUi.symbolIcon(iconText, "auth-feature-icon");
+        Label title = new Label(titleText);
+        title.getStyleClass().add("auth-feature-title");
+        Label detail = new Label(detailText);
+        detail.getStyleClass().add("auth-feature-detail");
+        detail.setWrapText(true);
+        HBox row = new HBox(10, icon, new VBox(2, title, detail));
+        row.getStyleClass().add("feature-row");
+        return row;
     }
 
-    private PasswordField createPasswordField(String prompt) {
-        PasswordField passwordField = new PasswordField();
-        passwordField.setPromptText(prompt);
-        passwordField.getStyleClass().add("input-field");
-        return passwordField;
+    private Button tabButton(String text, boolean active, Runnable action) {
+        Button button = new Button(text);
+        button.getStyleClass().add(active ? "segment-button-active" : "segment-button");
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private HBox tabs(Button... buttons) {
+        HBox tabs = new HBox(buttons);
+        tabs.getStyleClass().add("segment-box");
+        return tabs;
+    }
+
+    private GridPane twoColumnFields(javafx.scene.Node... fields) {
+        GridPane grid = new GridPane();
+        grid.getStyleClass().add("auth-field-grid");
+        grid.setHgap(10);
+        grid.setVgap(10);
+        for (int index = 0; index < fields.length; index++) {
+            javafx.scene.Node field = fields[index];
+            if (field instanceof javafx.scene.control.Control control) {
+                control.setMaxWidth(Double.MAX_VALUE);
+            }
+            grid.add(field, index % 2, index / 2);
+            GridPane.setHgrow(field, Priority.ALWAYS);
+        }
+        return grid;
+    }
+
+    private Button primaryButton(String text) {
+        Button button = new Button(text);
+        button.getStyleClass().add("primary-button");
+        button.setMaxWidth(Double.MAX_VALUE);
+        return button;
+    }
+
+    private void replaceNode(javafx.scene.Node node) {
+        formSlot.getChildren().setAll(node);
+        formSlot.setPadding(new Insets(28, 34, 28, 34));
+    }
+
+    private ImageView createImage(String path, double width, double height) {
+        URL imageUrl = getClass().getResource(path);
+        ImageView imageView = new ImageView();
+        imageView.setPreserveRatio(false);
+        imageView.setFitWidth(width);
+        imageView.setFitHeight(height);
+        if (imageUrl != null) {
+            Image image = new Image(imageUrl.toExternalForm());
+            imageView.setImage(image);
+            applyCoverViewport(imageView, image, width, height);
+        }
+        return imageView;
+    }
+
+    private void applyCoverViewport(ImageView imageView, Image image, double width, double height) {
+        double scale = Math.max(width / image.getWidth(), height / image.getHeight());
+        double cropWidth = width / scale;
+        double cropHeight = height / scale;
+        double x = Math.max(0, (image.getWidth() - cropWidth) * 0.70);
+        double y = Math.max(0, (image.getHeight() - cropHeight) * 0.45);
+        imageView.setViewport(new Rectangle2D(x, y, cropWidth, cropHeight));
     }
 
     private boolean isEmpty(TextField field) {
         return field.getText() == null || field.getText().trim().isEmpty();
-    }
-
-    private void replaceForm(VBox form) {
-        StackPane center = new StackPane(form);
-        center.setPadding(new Insets(20, 20, 42, 20));
-        formArea.getChildren().setAll(center);
     }
 
     private void showInfo(String title, String message) {
@@ -193,11 +294,30 @@ public class BusinessAuthPage {
         alert.showAndWait();
     }
 
-    private void addTheme(Scene scene) {
-        URL cssUrl = getClass().getResource("/css/simhastha-theme.css");
+    public static class BusinessAccount {
+        public final String businessName;
+        public final String ownerName;
+        public final String category;
+        public final String mobile;
+        public final String email;
+        public final String location;
+        public final List<String> services = new ArrayList<>();
+        public final List<String> bookings = new ArrayList<>();
+        private final String password;
 
-        if (cssUrl != null) {
-            scene.getStylesheets().add(cssUrl.toExternalForm());
+        private BusinessAccount(String businessName, String ownerName, String category, String mobile, String email,
+                String location, String password) {
+            this.businessName = businessName;
+            this.ownerName = ownerName;
+            this.category = category;
+            this.mobile = mobile;
+            this.email = email;
+            this.location = location;
+            this.password = password;
+            services.add(category + " - Standard Listing");
+            services.add("Festival visitor support");
+            bookings.add("2 pending inquiries");
+            bookings.add("1 confirmed service request");
         }
     }
 }

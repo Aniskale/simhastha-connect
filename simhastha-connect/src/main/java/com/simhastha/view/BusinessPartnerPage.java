@@ -1,80 +1,40 @@
 package com.simhastha.view;
 
-import java.net.URL;
-
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
-import javafx.scene.shape.Circle;
-import javafx.scene.shape.Line;
 import javafx.stage.Stage;
 
 public class BusinessPartnerPage {
 
     public Scene createScene(Stage stage) {
-        BorderPane root = new BorderPane();
-        root.getStyleClass().add("main-background");
-        root.setTop(createHeader(stage));
-        root.setCenter(createSelectionCards(stage));
-
-        Scene scene = new Scene(root, 1200, 750);
-        addTheme(scene);
-        return scene;
-    }
-
-    private BorderPane createHeader(Stage stage) {
-        Button backButton = new Button("< Back");
-        backButton.getStyleClass().add("back-button");
-        backButton.setOnAction(event -> {
+        BorderPane page = new BorderPane();
+        page.getStyleClass().add("themed-content-page");
+        page.setTop(AppUi.createHeader(stage, "Business & Partner", "Select your service role", () -> {
             LoginSelectionPage loginSelectionPage = new LoginSelectionPage();
             stage.setScene(loginSelectionPage.createScene(stage));
-        });
+        }));
+        page.setCenter(createSelectionCards(stage));
 
-        Label brand = new Label("SIMHASTHA CONNECT");
-        brand.getStyleClass().add("page-brand");
-
-        Label title = new Label("Business & Partner");
-        title.getStyleClass().add("page-heading");
-
-        Label subtitle = new Label("Select your service role");
-        subtitle.getStyleClass().add("page-subtitle");
-
-        VBox titleBox = new VBox(5, brand, title, subtitle, createOrnamentLine());
-        titleBox.setAlignment(Pos.CENTER);
-
-        BorderPane header = new BorderPane();
-        header.setLeft(backButton);
-        header.setCenter(titleBox);
-        header.setPadding(new Insets(24, 38, 8, 38));
-        return header;
-    }
-
-    private HBox createOrnamentLine() {
-        Line left = new Line(0, 0, 82, 0);
-        left.getStyleClass().add("decor-line");
-
-        Circle dot = new Circle(4);
-        dot.getStyleClass().add("decor-dot");
-
-        Line right = new Line(0, 0, 82, 0);
-        right.getStyleClass().add("decor-line");
-
-        HBox line = new HBox(12, left, dot, right);
-        line.setAlignment(Pos.CENTER);
-        return line;
+        ThemedBackgroundPane root = new ThemedBackgroundPane(page);
+        return AppUi.createScene(root, this);
     }
 
     private HBox createSelectionCards(Stage stage) {
         VBox localBusiness = createCard(
+                "\uE719",
                 "LOCAL BUSINESS",
                 "For shops, accommodation providers, food services, puja services and other local businesses.",
-                "BUSINESS LOGIN / REGISTER");
+                "BUSINESS LOGIN / REGISTER",
+                "business-role-card",
+                new String[] { "Food, stay, puja and shops", "Pilgrim-facing service profile", "Ready for verified business onboarding" });
         Button businessButton = (Button) localBusiness.getChildren().get(localBusiness.getChildren().size() - 1);
         businessButton.setOnAction(event -> {
             BusinessAuthPage businessAuthPage = new BusinessAuthPage();
@@ -82,24 +42,31 @@ public class BusinessPartnerPage {
         });
 
         VBox transportOperator = createCard(
+                "\uE806",
                 "TRANSPORT OPERATOR",
                 "For bus operators managing buses, routes, timings and fare information.",
-                "OPERATOR LOGIN / REGISTER");
+                "OPERATOR LOGIN / REGISTER",
+                "transport-role-card",
+                new String[] { "Routes and timetable support", "Vehicle/service information", "Operator-ready registration flow" });
         Button operatorButton = (Button) transportOperator.getChildren().get(transportOperator.getChildren().size() - 1);
         operatorButton.setOnAction(event -> {
             OperatorAuthPage operatorAuthPage = new OperatorAuthPage();
             stage.setScene(operatorAuthPage.createScene(stage));
         });
 
-        HBox cards = new HBox(24, localBusiness, transportOperator);
+        HBox cards = new HBox(26, localBusiness, transportOperator);
+        cards.getStyleClass().add("business-role-grid");
         cards.setAlignment(Pos.CENTER);
-        cards.setPadding(new Insets(30, 44, 70, 44));
+        cards.setPadding(new Insets(18, 76, 80, 76));
         HBox.setHgrow(localBusiness, Priority.ALWAYS);
         HBox.setHgrow(transportOperator, Priority.ALWAYS);
         return cards;
     }
 
-    private VBox createCard(String titleText, String descriptionText, String buttonText) {
+    private VBox createCard(String iconText, String titleText, String descriptionText, String buttonText, String variant,
+            String[] featureTexts) {
+        Label icon = AppUi.symbolIcon(iconText, "portal-card-icon");
+
         Label title = new Label(titleText);
         title.getStyleClass().add("portal-title");
         title.setWrapText(true);
@@ -110,22 +77,36 @@ public class BusinessPartnerPage {
 
         Button button = new Button(buttonText);
         button.getStyleClass().add("primary-button");
+        button.setGraphic(AppUi.symbolIcon("\uE72A", "button-icon"));
+        button.setContentDisplay(ContentDisplay.RIGHT);
+        button.setGraphicTextGap(10);
         button.setMaxWidth(Double.MAX_VALUE);
 
-        VBox card = new VBox(18, title, description, button);
-        card.getStyleClass().add("portal-card");
+        VBox featureList = new VBox(8);
+        featureList.getStyleClass().add("role-feature-list");
+        for (String featureText : featureTexts) {
+            featureList.getChildren().add(createFeatureRow(featureText));
+        }
+
+        VBox card = new VBox(16, icon, title, description, featureList, button);
+        card.getStyleClass().addAll("portal-card", "role-card", variant);
         card.setAlignment(Pos.CENTER_LEFT);
-        card.setMinWidth(360);
-        card.setMaxWidth(450);
-        card.setMinHeight(250);
+        card.setMinWidth(395);
+        card.setMaxWidth(470);
+        card.setMinHeight(330);
         return card;
     }
 
-    private void addTheme(Scene scene) {
-        URL cssUrl = getClass().getResource("/css/simhastha-theme.css");
+    private HBox createFeatureRow(String text) {
+        Label icon = AppUi.symbolIcon("\uE73E", "role-feature-icon");
 
-        if (cssUrl != null) {
-            scene.getStylesheets().add(cssUrl.toExternalForm());
-        }
+        Label label = new Label(text);
+        label.getStyleClass().add("role-feature-text");
+        label.setWrapText(true);
+
+        HBox row = new HBox(9, icon, label);
+        row.getStyleClass().add("role-feature-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 }

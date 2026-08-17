@@ -86,7 +86,7 @@ public class DashboardPage {
         Label welcome = new Label("Welcome, User");
         welcome.getStyleClass().add("dashboard-user");
 
-        HBox topBar = new HBox(20, new VBox(2, title, subtitle), createSpacer(), welcome);
+        HBox topBar = new HBox(20, new VBox(2, title, subtitle), createSpacer(), welcome, AppUi.createThemeToggle());
         topBar.setAlignment(Pos.CENTER_LEFT);
         topBar.getStyleClass().add("dashboard-topbar");
 
@@ -254,20 +254,19 @@ public class DashboardPage {
 
     private VBox createRightPanel() {
         VBox highlights = createInfoBox("Today Highlights",
-                "Brahma Muhurta Snan - 04:00 AM",
-                "Sandhya Aarti - 05:00 PM",
-                "Cultural Program - 06:30 PM");
+                "Verified event updates will appear here.",
+                "Official snan and aarti notices will be shown here.",
+                "Use this space for approved announcements.");
 
         VBox emergency = createInfoBox("Emergency Contacts",
-                "Control Room: 0253-XXXXXXX",
+                "Official control room details will appear here.",
                 "Ambulance: 108",
                 "Police: 100",
                 "Fire Brigade: 101");
 
         VBox weather = createInfoBox("Weather Update",
-                "Temperature: 28 C",
-                "Condition: Partly Cloudy",
-                "Wind Speed: 12 km/h");
+                "Verified weather advisories will appear here.",
+                "Avoid showing unconfirmed weather claims.");
 
         VBox panel = new VBox(15, highlights, emergency, weather);
         panel.setPrefWidth(310);
@@ -341,10 +340,7 @@ public class DashboardPage {
     }
 
     private void addTheme(Scene scene) {
-        URL cssUrl = getClass().getResource("/css/simhastha-theme.css");
-
-        if (cssUrl != null) {
-            scene.getStylesheets().add(cssUrl.toExternalForm());
-        }
+        ThemeManager.addTheme(scene, this);
+        ThemeManager.addListener(() -> ThemeManager.applyTo(scene.getRoot()));
     }
 }

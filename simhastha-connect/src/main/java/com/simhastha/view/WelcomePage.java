@@ -30,8 +30,6 @@ import javafx.util.Duration;
 
 public class WelcomePage {
 
-    private static boolean darkModeSelected;
-
     private ImageView backgroundImage;
     private Image sunlightImage;
     private Image nightImage;
@@ -43,24 +41,29 @@ public class WelcomePage {
 
     public Scene createScene(Stage stage) {
         root = new StackPane();
-        root.getStyleClass().addAll("welcome-root", darkModeSelected ? "welcome-root-dark" : "welcome-root-light");
+        root.getStyleClass().add("welcome-root");
 
         sunlightImage = loadImage("/images/welcome-light.png");
         nightImage = loadImage("/images/welcome-dark.png");
-        backgroundImage = createCoverImageView(darkModeSelected ? nightImage : sunlightImage);
+        backgroundImage = createCoverImageView(ThemeManager.isDark() ? nightImage : sunlightImage);
         backgroundImage.getStyleClass().add("welcome-background-image");
 
         BorderPane page = new BorderPane();
         page.getStyleClass().add("welcome-page");
         page.setTop(createHeader());
-        page.setCenter(createHeroContent(stage));
-        page.setBottom(createFooter());
+        page.setCenter(createMainContent(stage));
 
         root.getChildren().addAll(backgroundImage, createHeroOverlay(), page);
 
         Scene scene = new Scene(root, 1200, 750);
         bindCoverImage(scene);
         addTheme(scene);
+        ThemeManager.addListener(() -> {
+            ThemeManager.applyTo(root);
+            backgroundImage.setImage(ThemeManager.isDark() ? nightImage : sunlightImage);
+            updateThemeButtons();
+            updateImageViewport();
+        });
         startClock();
         updateThemeButtons();
         playTitleAnimation(page);
@@ -80,7 +83,7 @@ public class WelcomePage {
 
         header.setLeft(brand);
         header.setRight(controls);
-        header.setPadding(new Insets(24, 32, 0, 40));
+        header.setPadding(new Insets(18, 30, 0, 36));
         return header;
     }
 
@@ -88,14 +91,14 @@ public class WelcomePage {
         ImageView mark = new ImageView(loadImage("/images/sclogo.png"));
         mark.setPreserveRatio(true);
         mark.setSmooth(true);
-        mark.setFitWidth(88);
-        mark.setFitHeight(88);
+        mark.setFitWidth(74);
+        mark.setFitHeight(74);
         mark.getStyleClass().add("welcome-logo-image");
 
         StackPane logo = new StackPane(mark);
         logo.getStyleClass().add("welcome-logo-shell");
-        logo.setMinSize(92, 92);
-        logo.setMaxSize(92, 92);
+        logo.setMinSize(78, 78);
+        logo.setMaxSize(78, 78);
         return logo;
     }
 
@@ -115,8 +118,10 @@ public class WelcomePage {
     }
 
     private HBox createThemeToggle() {
-        lightModeButton = new Button("\u2600");
-        darkModeButton = new Button("\u263E");
+        lightModeButton = new Button();
+        darkModeButton = new Button();
+        lightModeButton.setGraphic(createSymbolIcon("\uE706", "theme-toggle-icon"));
+        darkModeButton.setGraphic(createSymbolIcon("\uE708", "theme-toggle-icon"));
         lightModeButton.getStyleClass().add("theme-toggle-button");
         darkModeButton.getStyleClass().add("theme-toggle-button");
         lightModeButton.setAccessibleText("Light theme");
@@ -139,23 +144,22 @@ public class WelcomePage {
         location.getStyleClass().add("utility-text");
 
         HBox bar = new HBox(18,
-                createUtilityItem("\uD83D\uDCC5", dateLabel),
+                createUtilityItem("\uE787", dateLabel),
                 createUtilitySeparator(),
-                createUtilityItem("\u25F7", timeLabel),
+                createUtilityItem("\uE121", timeLabel),
                 createUtilitySeparator(),
-                createUtilityItem("\u25CE", location),
+                createUtilityItem("\uE81D", location),
                 createUtilitySeparator(),
                 createThemeToggle(),
-                createTopIconButton("\uD83D\uDD14", "3", "Notifications"),
-                createTopIconButton("\u25CB", null, "Profile"));
+                createTopIconButton("\uE7F4", "3", "Notifications"),
+                createTopIconButton("\uE77B", null, "Profile"));
         bar.getStyleClass().add("utility-bar");
         bar.setAlignment(Pos.CENTER_RIGHT);
         return bar;
     }
 
     private HBox createUtilityItem(String iconText, Label value) {
-        Label icon = new Label(iconText);
-        icon.getStyleClass().add("utility-icon");
+        Label icon = createSymbolIcon(iconText, "utility-icon");
 
         HBox item = new HBox(9, icon, value);
         item.getStyleClass().add("utility-item");
@@ -173,8 +177,7 @@ public class WelcomePage {
     }
 
     private Button createTopIconButton(String iconText, String badgeText, String accessibleText) {
-        Label icon = new Label(iconText);
-        icon.getStyleClass().add("top-action-icon");
+        Label icon = createSymbolIcon(iconText, "top-action-icon");
 
         StackPane graphic = new StackPane(icon);
         if (badgeText != null) {
@@ -192,30 +195,43 @@ public class WelcomePage {
         return button;
     }
 
+    private VBox createMainContent(Stage stage) {
+        HBox hero = createHeroContent(stage);
+        HBox sectionTitle = createSectionTitle("EXPLORE WHAT WE OFFER");
+        HBox modules = createModuleStrip(stage);
+        HBox updates = createUpdatesSection(stage);
+        HBox trust = createTrustStrip();
+
+        VBox content = new VBox(14, hero, sectionTitle, modules, updates, trust);
+        content.getStyleClass().add("welcome-main-content");
+        content.setAlignment(Pos.TOP_CENTER);
+        content.setPadding(new Insets(8, 26, 10, 26));
+        return content;
+    }
+
     private HBox createHeroContent(Stage stage) {
         Label welcome = new Label("Welcome to");
         welcome.getStyleClass().add("welcome-kicker");
 
-        Label title = new Label("SIMHASTHA CONNECT");
-        title.getStyleClass().add("welcome-title");
-        title.setMinWidth(720);
+        Label titleTop = new Label("SIMHASTHA");
+        titleTop.getStyleClass().add("welcome-title-main");
 
-        Label verse = new Label("\u0965 \u0938\u0930\u094D\u0935\u0947 \u092D\u0935\u0928\u094D\u0924\u0941 \u0938\u0941\u0916\u093F\u0928\u0903 \u0938\u0930\u094D\u0935\u0947 \u0938\u0928\u094D\u0924\u0941 \u0928\u093F\u0930\u093E\u092E\u092F\u093E\u0903 \u0965");
-        verse.getStyleClass().add("welcome-sanskrit-text");
+        Label titleAccent = new Label("CONNECT");
+        titleAccent.getStyleClass().add("welcome-title-accent");
 
-        Label description = new Label("Your digital companion for a safe, smooth and\ndivine Simhastha experience in Nashik.");
+        Label description = new Label("Your Digital Companion for a Safe,\nSmooth & Divine Simhastha Experience");
         description.getStyleClass().add("welcome-description");
 
-        Button exploreButton = new Button("EXPLORE SIMHASTHA   \u2192");
+        Button exploreButton = new Button("EXPLORE SIMHASTHA");
         exploreButton.getStyleClass().add("primary-cta");
-        exploreButton.setGraphic(createButtonLogo());
+        exploreButton.setGraphic(createSymbolIcon("\uE734", "cta-icon"));
         exploreButton.setContentDisplay(ContentDisplay.LEFT);
         exploreButton.setGraphicTextGap(10);
         exploreButton.setOnAction(event -> openLoginSelection(stage));
 
         Button loginButton = new Button("LOGIN / SIGN UP");
         loginButton.getStyleClass().add("secondary-cta");
-        loginButton.setGraphic(createButtonLogo());
+        loginButton.setGraphic(createSymbolIcon("\uE77B", "cta-icon"));
         loginButton.setContentDisplay(ContentDisplay.LEFT);
         loginButton.setGraphicTextGap(10);
         loginButton.setOnAction(event -> openLoginSelection(stage));
@@ -223,24 +239,182 @@ public class WelcomePage {
         HBox actions = new HBox(18, exploreButton, loginButton);
         actions.setAlignment(Pos.CENTER_LEFT);
 
-        VBox copy = new VBox(14, welcome, title, createDecorativeDivider(), verse, description, actions);
+        VBox copy = new VBox(7, welcome, titleTop, titleAccent, createDecorativeDivider(), description, actions);
         copy.getStyleClass().add("welcome-copy");
         copy.setAlignment(Pos.CENTER_LEFT);
 
         HBox hero = new HBox(copy, createFlexibleSpace());
         hero.setAlignment(Pos.CENTER_LEFT);
-        hero.setPadding(new Insets(0, 40, 8, 54));
+        hero.setPadding(new Insets(0, 24, 0, 24));
         return hero;
     }
 
-    private ImageView createButtonLogo() {
-        ImageView logo = new ImageView(loadImage("/images/sclogo.png"));
-        logo.setPreserveRatio(true);
-        logo.setSmooth(true);
-        logo.setFitWidth(19);
-        logo.setFitHeight(19);
-        logo.getStyleClass().add("cta-logo");
-        return logo;
+    private HBox createSectionTitle(String titleText) {
+        Line left = new Line(0, 0, 170, 0);
+        left.getStyleClass().add("welcome-section-line");
+
+        Label title = new Label(titleText);
+        title.getStyleClass().add("welcome-section-title");
+
+        Line right = new Line(0, 0, 170, 0);
+        right.getStyleClass().add("welcome-section-line");
+
+        HBox titleRow = new HBox(16, left, title, right);
+        titleRow.setAlignment(Pos.CENTER);
+        return titleRow;
+    }
+
+    private HBox createModuleStrip(Stage stage) {
+        HBox modules = new HBox(12,
+                createModuleCard(stage, "\uE806", "Transport", "Routes, Timings &\nTravel Information"),
+                createModuleCard(stage, "\uEC29", "Puja Services", "Book Puja, Pandit &\nReligious Services"),
+                createModuleCard(stage, "\uE9A6", "Ghats & Snan", "Ghat Information &\nSnan Guide"),
+                createModuleCard(stage, "\uE809", "Stay", "Hotels, Dharamshalas\n& Accommodation"),
+                createModuleCard(stage, "\uE787", "Events", "Aarti, Shahi Snan &\nUpcoming Events"),
+                createModuleCard(stage, "\uE95E", "Emergency", "Hospitals, Police &\nEmergency Help"),
+                createModuleCard(stage, "\uE721", "Lost & Found", "Report or Search\nLost Items"),
+                createModuleCard(stage, "\uE8D4", "Food", "Food, Prasadam &\nNearby Restaurants"));
+        modules.setAlignment(Pos.CENTER);
+        return modules;
+    }
+
+    private Button createModuleCard(Stage stage, String iconText, String titleText, String detailText) {
+        Label icon = createSymbolIcon(iconText, "welcome-module-icon");
+
+        Label title = new Label(titleText);
+        title.getStyleClass().add("welcome-module-title");
+        title.setWrapText(true);
+        title.setMaxWidth(112);
+
+        Label detail = new Label(detailText);
+        detail.getStyleClass().add("welcome-module-detail");
+        detail.setWrapText(true);
+        detail.setMaxWidth(112);
+
+        VBox content = new VBox(7, icon, title, detail);
+        content.setAlignment(Pos.CENTER);
+
+        Button card = new Button();
+        card.setGraphic(content);
+        card.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
+        card.getStyleClass().add("welcome-module-card");
+        card.setOnAction(event -> openLoginSelection(stage));
+        return card;
+    }
+
+    private HBox createUpdatesSection(Stage stage) {
+        VBox liveUpdates = new VBox(12);
+        liveUpdates.getStyleClass().add("live-updates-panel");
+
+        HBox liveHeading = new HBox(10, createPanelTitle("OFFICIAL UPDATES"), createPanelBadge("\uE789"));
+        liveHeading.setAlignment(Pos.CENTER_LEFT);
+
+        HBox updateItems = new HBox(16,
+                createUpdateItem("\uE81D", "Route Updates", "Official route notices\nwill appear here."),
+                createUpdateItem("\uE787", "Snan Schedule", "Verified event dates\nwill appear here."),
+                createUpdateItem("\uE806", "Transport", "Bus and shuttle notices\nwill appear here."),
+                createUpdateItem("\uE9CA", "Weather", "Weather advisories\nwill appear here."),
+                createUpdateItem("\uE7BA", "Safety", "Police and safety alerts\nwill appear here."));
+        updateItems.setAlignment(Pos.CENTER_LEFT);
+
+        liveUpdates.getChildren().addAll(liveHeading, updateItems);
+
+        VBox emergency = new VBox(12);
+        emergency.getStyleClass().add("emergency-panel");
+
+        HBox emergencyHeading = new HBox(10, createPanelBadge("\uEA18"), createPanelTitle("NEED EMERGENCY HELP?"));
+        emergencyHeading.setAlignment(Pos.CENTER_LEFT);
+
+        Label supportText = new Label("We are here for you 24/7");
+        supportText.getStyleClass().add("emergency-text");
+
+        HBox emergencyActions = new HBox(12,
+                createEmergencyAction(stage, "\uE95E", "Ambulance"),
+                createEmergencyAction(stage, "\uE72E", "Police"),
+                createEmergencyAction(stage, "\uE95E", "Hospitals"));
+        emergencyActions.setAlignment(Pos.CENTER);
+
+        emergency.getChildren().addAll(emergencyHeading, supportText, emergencyActions);
+
+        HBox row = new HBox(16, liveUpdates, emergency);
+        row.setAlignment(Pos.CENTER);
+        HBox.setHgrow(liveUpdates, Priority.ALWAYS);
+        return row;
+    }
+
+    private Label createPanelTitle(String titleText) {
+        Label title = new Label(titleText);
+        title.getStyleClass().add("welcome-panel-title");
+        return title;
+    }
+
+    private Label createPanelBadge(String badgeText) {
+        return createSymbolIcon(badgeText, "welcome-panel-badge");
+    }
+
+    private VBox createUpdateItem(String iconText, String titleText, String detailText) {
+        Label icon = createSymbolIcon(iconText, "update-icon");
+
+        Label title = new Label(titleText);
+        title.getStyleClass().add("update-title");
+
+        Label detail = new Label(detailText);
+        detail.getStyleClass().add("update-detail");
+
+        VBox item = new VBox(5, icon, title, detail);
+        item.getStyleClass().add("update-item");
+        item.setAlignment(Pos.CENTER);
+        return item;
+    }
+
+    private Button createEmergencyAction(Stage stage, String iconText, String titleText) {
+        Label icon = createSymbolIcon(iconText, "emergency-icon");
+
+        Label title = new Label(titleText);
+        title.getStyleClass().add("emergency-action-title");
+
+        VBox content = new VBox(5, icon, title);
+        content.setAlignment(Pos.CENTER);
+
+        Button action = new Button();
+        action.setGraphic(content);
+        action.setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
+        action.getStyleClass().add("emergency-action");
+        action.setOnAction(event -> openLoginSelection(stage));
+        return action;
+    }
+
+    private HBox createTrustStrip() {
+        HBox strip = new HBox(28,
+                createTrustCard("\uE72E", "Trusted & Secure", "Your data is safe with us."),
+                createTrustCard("\uE789", "Official Updates", "Verified alerts will appear here."),
+                createTrustCard("\uE717", "Help Desk", "Support options are easy to find."),
+                createTrustCard("\uE716", "Pilgrim Services", "Built for Simhastha visitors."));
+        strip.getStyleClass().add("welcome-trust-strip");
+        strip.setAlignment(Pos.CENTER);
+        return strip;
+    }
+
+    private HBox createTrustCard(String iconText, String titleText, String detailText) {
+        Label icon = createSymbolIcon(iconText, "trust-icon");
+
+        Label title = new Label(titleText);
+        title.getStyleClass().add("trust-title");
+
+        Label detail = new Label(detailText);
+        detail.getStyleClass().add("trust-detail");
+
+        VBox text = new VBox(3, title, detail);
+        HBox card = new HBox(12, icon, text);
+        card.getStyleClass().add("trust-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        return card;
+    }
+
+    private Label createSymbolIcon(String iconText, String styleClass) {
+        Label icon = new Label(iconText);
+        icon.getStyleClass().addAll("symbol-icon", styleClass);
+        return icon;
     }
 
     private HBox createDecorativeDivider() {
@@ -312,10 +486,9 @@ public class WelcomePage {
     }
 
     private void switchTheme(boolean darkMode) {
-        darkModeSelected = darkMode;
-        backgroundImage.setImage(darkModeSelected ? nightImage : sunlightImage);
-        root.getStyleClass().removeAll("welcome-root-light", "welcome-root-dark");
-        root.getStyleClass().add(darkModeSelected ? "welcome-root-dark" : "welcome-root-light");
+        ThemeManager.setTheme(darkMode ? ThemeManager.AppTheme.DARK : ThemeManager.AppTheme.LIGHT);
+        backgroundImage.setImage(ThemeManager.isDark() ? nightImage : sunlightImage);
+        ThemeManager.applyTo(root);
         updateThemeButtons();
         updateImageViewport();
     }
@@ -328,7 +501,7 @@ public class WelcomePage {
         lightModeButton.getStyleClass().remove("theme-toggle-button-active");
         darkModeButton.getStyleClass().remove("theme-toggle-button-active");
 
-        if (darkModeSelected) {
+        if (ThemeManager.isDark()) {
             darkModeButton.getStyleClass().add("theme-toggle-button-active");
         } else {
             lightModeButton.getStyleClass().add("theme-toggle-button-active");
@@ -382,8 +555,8 @@ public class WelcomePage {
         double scale = Math.max(viewWidth / imageWidth, viewHeight / imageHeight);
         double cropWidth = viewWidth / scale;
         double cropHeight = viewHeight / scale;
-        double xBias = darkModeSelected ? 0.48 : 0.50;
-        double yBias = darkModeSelected ? 0.40 : 0.40;
+        double xBias = ThemeManager.isDark() ? 0.48 : 0.50;
+        double yBias = ThemeManager.isDark() ? 0.40 : 0.40;
         double x = Math.max(0, (imageWidth - cropWidth) * xBias);
         double y = Math.max(0, (imageHeight - cropHeight) * yBias);
 
@@ -418,10 +591,6 @@ public class WelcomePage {
     }
 
     private void addTheme(Scene scene) {
-        URL cssUrl = getClass().getResource("/css/simhastha-theme.css");
-
-        if (cssUrl != null) {
-            scene.getStylesheets().add(cssUrl.toExternalForm());
-        }
+        ThemeManager.addTheme(scene, this);
     }
 }
