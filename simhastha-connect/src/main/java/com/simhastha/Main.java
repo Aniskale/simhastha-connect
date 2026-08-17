@@ -1,8 +1,9 @@
 package com.simhastha;
 
+import com.simhastha.view.WelcomePage;
+
 import javafx.application.Application;
 import javafx.scene.Scene;
-import javafx.scene.control.Label;
 import javafx.stage.Stage;
 
 public class Main extends Application {
@@ -10,12 +11,13 @@ public class Main extends Application {
     @Override
     public void start(Stage stage) {
 
-        Label label = new Label("SIMHASTHA CONNECT");
+        WelcomePage welcomePage = new WelcomePage();
+        Scene scene = welcomePage.createScene(stage);
 
-        Scene scene = new Scene(label, 800, 500);
-
-        stage.setTitle("Simhastha Connect");
+        stage.setTitle("SIMHASTHA CONNECT | Nashik Simhastha 2027");
         stage.setScene(scene);
+        stage.setMinWidth(950);
+        stage.setMinHeight(650);
         stage.show();
     }
 
