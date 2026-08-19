@@ -1408,6 +1408,157 @@
     -fx-border-color: rgba(226, 168, 62, 0.60);
 }
 
+/* Professional app intro */
+.intro-root {
+    -fx-font-family: "Segoe UI", "Nirmala UI", sans-serif;
+    -fx-background-color:
+        radial-gradient(center 48% 38%, radius 58%, rgba(255, 185, 77, 0.24), transparent),
+        linear-gradient(to bottom right, #fff9ed 0%, #f5dfb6 48%, #f9efe0 100%);
+}
+
+.theme-dark .intro-root {
+    -fx-background-color:
+        radial-gradient(center 50% 30%, radius 60%, rgba(229, 180, 76, 0.22), transparent),
+        radial-gradient(center 50% 92%, radius 60%, rgba(151, 44, 20, 0.26), transparent),
+        linear-gradient(to bottom right, #03050b 0%, #12100c 44%, #2a120b 100%);
+}
+
+.intro-background-image {
+    -fx-opacity: 0.38;
+}
+
+.theme-dark .intro-background-image {
+    -fx-opacity: 0.30;
+}
+
+.intro-background-overlay {
+    -fx-fill: linear-gradient(to bottom,
+        rgba(255, 250, 239, 0.74) 0%,
+        rgba(255, 244, 226, 0.82) 48%,
+        rgba(255, 250, 239, 0.92) 100%);
+}
+
+.theme-dark .intro-background-overlay {
+    -fx-fill: linear-gradient(to bottom,
+        rgba(3, 5, 12, 0.80) 0%,
+        rgba(7, 10, 20, 0.84) 46%,
+        rgba(18, 10, 6, 0.92) 100%);
+}
+
+.intro-topline {
+    -fx-background-color: rgba(255, 255, 255, 0.34);
+    -fx-background-radius: 999px;
+    -fx-border-color: rgba(132, 65, 14, 0.13);
+    -fx-border-radius: 999px;
+    -fx-padding: 8px 16px;
+}
+
+.intro-topline-text {
+    -fx-text-fill: #583112;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+
+.theme-dark .intro-topline {
+    -fx-background-color: rgba(7, 10, 20, 0.46);
+    -fx-border-color: rgba(241, 193, 93, 0.18);
+}
+
+.theme-dark .intro-topline-text {
+    -fx-text-fill: #f1c15d;
+}
+
+.intro-content {
+    -fx-background-color: rgba(255, 252, 246, 0.74);
+    -fx-background-radius: 24px;
+    -fx-border-color: rgba(132, 65, 14, 0.18);
+    -fx-border-radius: 24px;
+    -fx-border-width: 1px;
+    -fx-effect: dropshadow(gaussian, rgba(61, 27, 7, 0.22), 34, 0.20, 0, 13);
+}
+
+.theme-dark .intro-content {
+    -fx-background-color: rgba(5, 8, 17, 0.70);
+    -fx-border-color: rgba(241, 193, 93, 0.28);
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.58), 30, 0.20, 0, 12);
+}
+
+.intro-logo {
+    -fx-effect: dropshadow(gaussian, rgba(201, 108, 8, 0.34), 24, 0.26, 0, 5);
+}
+
+.intro-title-main {
+    -fx-text-fill: #111827;
+    -fx-font-family: "Georgia", "Cambria", serif;
+    -fx-font-size: 51px;
+    -fx-font-weight: bold;
+}
+
+.intro-title-accent {
+    -fx-text-fill: #e87505;
+    -fx-font-family: "Georgia", "Cambria", serif;
+    -fx-font-size: 41px;
+    -fx-font-weight: bold;
+}
+
+.intro-subtitle {
+    -fx-text-fill: #6b1712;
+    -fx-font-size: 17px;
+    -fx-font-weight: bold;
+}
+
+.intro-sanskrit {
+    -fx-text-fill: #8b3d0d;
+    -fx-font-family: "Nirmala UI", "Mangal", "Georgia", serif;
+    -fx-font-size: 18px;
+    -fx-font-weight: bold;
+}
+
+.intro-detail {
+    -fx-text-fill: #374151;
+    -fx-font-size: 14px;
+}
+
+.intro-divider-line {
+    -fx-stroke: linear-gradient(to right, transparent, #d89b2b, transparent);
+    -fx-stroke-width: 1.4px;
+}
+
+.intro-divider-mark {
+    -fx-text-fill: #8b3d0d;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.intro-chip {
+    -fx-background-color: rgba(255, 255, 255, 0.58);
+    -fx-background-radius: 999px;
+    -fx-border-color: rgba(216, 155, 43, 0.26);
+    -fx-border-radius: 999px;
+    -fx-padding: 6px 14px;
+    -fx-text-fill: #5f2d0e;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+
+.theme-dark .intro-title-main,
+.theme-dark .intro-detail {
+    -fx-text-fill: #fff4d2;
+}
+
+.theme-dark .intro-title-accent,
+.theme-dark .intro-subtitle,
+.theme-dark .intro-sanskrit,
+.theme-dark .intro-divider-mark {
+    -fx-text-fill: #f1c15d;
+}
+
+.theme-dark .intro-chip {
+    -fx-background-color: rgba(255, 244, 214, 0.10);
+    -fx-border-color: rgba(241, 193, 93, 0.24);
+    -fx-text-fill: #fff4d2;
+}
+
 /* Welcome page reference rebuild */
 .welcome-root {
     -fx-font-family: "Segoe UI", "Nirmala UI", sans-serif;
@@ -2811,4 +2962,590 @@
 
 .theme-dark .management-progress-fill {
     -fx-background-color: linear-gradient(to right, #e5b44c, #e87516);
+}
+
+/* Premium pilgrim dashboard system */
+.pilgrim-dashboard-root {
+    -fx-font-family: "Segoe UI", "Nirmala UI", sans-serif;
+    -fx-background-color:
+        radial-gradient(center 78% 2%, radius 58%, rgba(255, 204, 110, 0.30), transparent),
+        linear-gradient(to bottom, #fff4df 0%, #f5e7d2 100%);
+}
+
+.pilgrim-sidebar {
+    -fx-background-color:
+        radial-gradient(center 50% 100%, radius 75%, rgba(228, 137, 19, 0.20), transparent),
+        linear-gradient(to bottom, #5a1515, #320909 78%, #1f0706);
+    -fx-border-color: transparent rgba(255, 215, 135, 0.22) transparent transparent;
+    -fx-border-width: 0 1px 0 0;
+    -fx-effect: dropshadow(gaussian, rgba(55, 10, 7, 0.32), 18, 0.14, 3, 0);
+}
+
+.pilgrim-sidebar-brand {
+    -fx-padding: 4px 2px 10px 2px;
+}
+
+.pilgrim-sidebar-logo-image {
+    -fx-effect: dropshadow(gaussian, rgba(255, 174, 39, 0.34), 14, 0.18, 0, 3);
+}
+
+.pilgrim-sidebar-brand-strong {
+    -fx-text-fill: #fff4d6;
+    -fx-font-family: "Georgia", "Cambria", serif;
+    -fx-font-size: 17px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-sidebar-tagline {
+    -fx-text-fill: #e9c98d;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-nav-button,
+.pilgrim-nav-button-active,
+.pilgrim-sidebar-action {
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-min-height: 36px;
+    -fx-padding: 7px 10px;
+    -fx-background-radius: 10px;
+    -fx-border-radius: 10px;
+    -fx-alignment: center-left;
+    -fx-graphic-text-gap: 10px;
+    -fx-cursor: hand;
+}
+
+.pilgrim-nav-button {
+    -fx-background-color: transparent;
+    -fx-text-fill: #fff7e6;
+}
+
+.pilgrim-nav-button:hover {
+    -fx-background-color: rgba(255, 225, 166, 0.12);
+}
+
+.pilgrim-nav-button-active {
+    -fx-background-color: linear-gradient(to right, #f4b244, #e67a0b);
+    -fx-text-fill: #2a0b06;
+    -fx-effect: dropshadow(gaussian, rgba(228, 122, 11, 0.26), 12, 0.18, 0, 3);
+}
+
+.pilgrim-sidebar-action {
+    -fx-background-color: rgba(255, 245, 228, 0.08);
+    -fx-border-color: rgba(255, 199, 117, 0.28);
+    -fx-text-fill: #ffe3c0;
+}
+
+.pilgrim-nav-icon,
+.pilgrim-nav-icon-active,
+.pilgrim-nav-icon-danger,
+.pilgrim-card-icon,
+.pilgrim-row-icon {
+    -fx-font-family: "Segoe MDL2 Assets";
+    -fx-font-weight: bold;
+    -fx-alignment: center;
+}
+
+.pilgrim-nav-icon {
+    -fx-text-fill: #f5c86b;
+    -fx-font-size: 17px;
+}
+
+.pilgrim-nav-icon-active {
+    -fx-text-fill: #5b1414;
+    -fx-font-size: 17px;
+}
+
+.pilgrim-nav-icon-danger {
+    -fx-text-fill: #ffb4a2;
+    -fx-font-size: 17px;
+}
+
+.pilgrim-support-box {
+    -fx-background-color: rgba(255, 246, 218, 0.10);
+    -fx-border-color: rgba(255, 202, 117, 0.28);
+    -fx-background-radius: 12px;
+    -fx-border-radius: 12px;
+    -fx-padding: 10px;
+}
+
+.pilgrim-dashboard-scroll,
+.pilgrim-dashboard-scroll > .viewport {
+    -fx-background-color: transparent;
+}
+
+.pilgrim-dashboard-main {
+    -fx-background-color:
+        linear-gradient(to bottom, rgba(255, 250, 239, 0.74), rgba(246, 232, 209, 0.96));
+}
+
+.pilgrim-top-actions {
+    -fx-min-height: 38px;
+}
+
+.pilgrim-page-title {
+    -fx-text-fill: #5b1414;
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-round-icon-button {
+    -fx-font-family: "Segoe MDL2 Assets";
+    -fx-background-color: rgba(255, 255, 255, 0.82);
+    -fx-background-radius: 999px;
+    -fx-border-color: rgba(91, 20, 20, 0.12);
+    -fx-border-radius: 999px;
+    -fx-text-fill: #5b1414;
+    -fx-font-size: 16px;
+    -fx-min-width: 36px;
+    -fx-min-height: 36px;
+    -fx-pref-width: 36px;
+    -fx-pref-height: 36px;
+    -fx-padding: 0;
+    -fx-effect: dropshadow(gaussian, rgba(91, 20, 20, 0.10), 10, 0.14, 0, 3);
+}
+
+.pilgrim-hero {
+    -fx-background-color: #3a1608;
+    -fx-background-radius: 12px;
+    -fx-border-radius: 12px;
+    -fx-border-color: rgba(231, 200, 145, 0.45);
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.20), 18, 0.18, 0, 5);
+}
+
+.pilgrim-hero-image {
+    -fx-opacity: 0.88;
+}
+
+.pilgrim-hero-title {
+    -fx-text-fill: #fff8ec;
+    -fx-font-size: 30px;
+    -fx-font-weight: bold;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.70), 9, 0.20, 0, 2);
+}
+
+.pilgrim-hero-subtitle,
+.pilgrim-hero-detail {
+    -fx-text-fill: #fff1c6;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-hero-mantra {
+    -fx-text-fill: #ffd477;
+    -fx-font-family: "Nirmala UI", "Mangal", "Segoe UI", sans-serif;
+    -fx-font-size: 16px;
+}
+
+.pilgrim-search-field,
+.pilgrim-search-button {
+    -fx-min-height: 42px;
+}
+
+.pilgrim-search-field {
+    -fx-background-color: rgba(255, 255, 255, 0.96);
+    -fx-border-color: rgba(91, 20, 20, 0.10);
+    -fx-background-radius: 12px 0 0 12px;
+    -fx-border-radius: 12px 0 0 12px;
+}
+
+.pilgrim-search-button {
+    -fx-background-color: linear-gradient(to right, #e98813, #d96c0a);
+    -fx-text-fill: #ffffff;
+    -fx-font-weight: bold;
+    -fx-background-radius: 0 12px 12px 0;
+    -fx-border-radius: 0 12px 12px 0;
+    -fx-padding: 9px 22px;
+}
+
+.journey-planner {
+    -fx-background-color: rgba(255, 255, 255, 0.96);
+    -fx-background-radius: 14px;
+    -fx-border-color: rgba(188, 120, 34, 0.24);
+    -fx-border-radius: 14px;
+    -fx-border-width: 1px;
+    -fx-padding: 20px;
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.12), 18, 0.16, 0, 6);
+}
+
+.journey-trip-row {
+    -fx-padding: 0 0 2px 0;
+}
+
+.journey-input-box {
+    -fx-background-color: #fffaf2;
+    -fx-background-radius: 10px;
+    -fx-border-color: rgba(126, 63, 13, 0.18);
+    -fx-border-radius: 10px;
+    -fx-padding: 10px 12px;
+    -fx-min-width: 145px;
+}
+
+.journey-input-box:hover {
+    -fx-border-color: rgba(228, 122, 11, 0.64);
+}
+
+.journey-field,
+.journey-combo {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-text-fill: #2b170b;
+    -fx-prompt-text-fill: #8b6b55;
+    -fx-font-size: 13px;
+    -fx-font-weight: bold;
+    -fx-min-height: 28px;
+    -fx-padding: 0;
+}
+
+.journey-combo .list-cell {
+    -fx-text-fill: #2b170b;
+    -fx-background-color: transparent;
+}
+
+.journey-combo .arrow {
+    -fx-background-color: #f4b244;
+}
+
+.journey-field-icon,
+.journey-search-icon {
+    -fx-font-family: "Segoe MDL2 Assets";
+    -fx-text-fill: #f4b244;
+    -fx-font-size: 18px;
+}
+
+.journey-swap-button {
+    -fx-font-family: "Segoe MDL2 Assets";
+    -fx-background-color: linear-gradient(to bottom, #ffd36a, #f4a322);
+    -fx-background-radius: 999px;
+    -fx-text-fill: #2a1605;
+    -fx-font-size: 17px;
+    -fx-min-width: 44px;
+    -fx-min-height: 44px;
+    -fx-pref-width: 44px;
+    -fx-pref-height: 44px;
+    -fx-padding: 0;
+    -fx-cursor: hand;
+}
+
+.journey-search-button {
+    -fx-background-color: linear-gradient(to right, #8f3b06, #c46a10);
+    -fx-background-radius: 10px;
+    -fx-text-fill: #ffffff;
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+    -fx-min-height: 64px;
+    -fx-padding: 0 24px;
+    -fx-graphic-text-gap: 8px;
+    -fx-cursor: hand;
+}
+
+.transport-route-card,
+.transport-map-shell,
+.transport-map-overlay,
+.transport-map-pin-box {
+    -fx-background-radius: 12px;
+    -fx-border-radius: 12px;
+}
+
+.transport-route-card {
+    -fx-background-color: #fff8ec;
+    -fx-border-color: rgba(126, 63, 13, 0.18);
+    -fx-padding: 12px;
+}
+
+.transport-route-card .pilgrim-card-title,
+.transport-route-card .pilgrim-card-detail {
+    -fx-text-fill: #4b1f0b;
+}
+
+.transport-map-shell {
+    -fx-background-color:
+        linear-gradient(to bottom right, #fff8ec, #edf6ff);
+    -fx-border-color: rgba(126, 63, 13, 0.20);
+    -fx-min-width: 430px;
+    -fx-min-height: 330px;
+}
+
+.transport-map-overlay {
+    -fx-background-color: rgba(255, 255, 255, 0.12);
+    -fx-padding: 16px;
+}
+
+.transport-map-pin {
+    -fx-font-family: "Segoe MDL2 Assets";
+    -fx-text-fill: #b45309;
+    -fx-font-size: 28px;
+}
+
+.transport-map-pin-box {
+    -fx-background-color: rgba(255, 255, 255, 0.92);
+    -fx-border-color: rgba(126, 63, 13, 0.18);
+    -fx-padding: 12px;
+    -fx-min-width: 94px;
+}
+
+.transport-map-pin-box .pilgrim-card-title,
+.transport-map-pin-box .pilgrim-card-detail,
+.transport-map-overlay .pilgrim-section-title,
+.transport-map-overlay .pilgrim-card-detail {
+    -fx-text-fill: #4b1f0b;
+}
+
+.transport-map-content {
+    -fx-background-radius: 12px;
+    -fx-border-radius: 12px;
+}
+
+.transport-map-tiles {
+    -fx-opacity: 0.96;
+}
+
+.transport-map-image {
+    -fx-opacity: 0.98;
+}
+
+.transport-route-line {
+    -fx-stroke: #e87516;
+    -fx-stroke-width: 4px;
+    -fx-stroke-line-cap: round;
+    -fx-opacity: 0.92;
+}
+
+.transport-dot-start {
+    -fx-fill: #16a34a;
+    -fx-stroke: #ffffff;
+    -fx-stroke-width: 3px;
+}
+
+.transport-dot-end {
+    -fx-fill: #dc2626;
+    -fx-stroke: #ffffff;
+    -fx-stroke-width: 3px;
+}
+
+.map-open-button,
+.map-secondary-button {
+    -fx-background-radius: 8px;
+    -fx-border-radius: 8px;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-min-height: 32px;
+    -fx-cursor: hand;
+}
+
+.map-open-button {
+    -fx-background-color: linear-gradient(to right, #e98813, #d96c0a);
+    -fx-text-fill: #ffffff;
+    -fx-padding: 6px 12px;
+}
+
+.map-secondary-button {
+    -fx-background-color: rgba(255, 255, 255, 0.92);
+    -fx-border-color: rgba(126, 63, 13, 0.18);
+    -fx-text-fill: #8f3b06;
+    -fx-padding: 6px 10px;
+}
+
+.transport-map-note {
+    -fx-background-color: rgba(255, 255, 255, 0.94);
+    -fx-background-radius: 10px;
+    -fx-border-color: rgba(126, 63, 13, 0.16);
+    -fx-border-radius: 10px;
+    -fx-padding: 9px 11px;
+}
+
+.pilgrim-module-card,
+.pilgrim-rich-card,
+.pilgrim-panel,
+.pilgrim-stat-card,
+.pilgrim-data-row,
+.pilgrim-filter-row,
+.pilgrim-experience-panel {
+    -fx-background-color: #fff8ec;
+    -fx-background-radius: 12px;
+    -fx-border-color: #e7c891;
+    -fx-border-radius: 12px;
+    -fx-border-width: 1px;
+    -fx-effect: dropshadow(gaussian, rgba(94, 47, 11, 0.12), 14, 0.14, 0, 4);
+}
+
+.pilgrim-module-card {
+    -fx-padding: 12px 14px;
+}
+
+.pilgrim-rich-card,
+.pilgrim-panel,
+.pilgrim-data-row,
+.pilgrim-filter-row {
+    -fx-padding: 13px 14px;
+}
+
+.pilgrim-card-icon,
+.pilgrim-row-icon {
+    -fx-text-fill: #e98813;
+    -fx-font-size: 23px;
+}
+
+.pilgrim-card-title {
+    -fx-text-fill: #5b1414;
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-card-detail {
+    -fx-text-fill: #51301b;
+    -fx-font-size: 11px;
+    -fx-line-spacing: 2px;
+}
+
+.pilgrim-small-gold {
+    -fx-text-fill: #b86406;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-small-action {
+    -fx-background-color: rgba(233, 136, 19, 0.10);
+    -fx-background-radius: 8px;
+    -fx-border-color: rgba(233, 136, 19, 0.28);
+    -fx-border-radius: 8px;
+    -fx-text-fill: #a24606;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-padding: 6px 11px;
+    -fx-cursor: hand;
+}
+
+.pilgrim-alert-ticker {
+    -fx-background-color: rgba(255, 244, 225, 0.96);
+    -fx-background-radius: 999px;
+    -fx-border-color: rgba(233, 136, 19, 0.28);
+    -fx-border-radius: 999px;
+    -fx-padding: 4px 12px;
+}
+
+.pilgrim-ticker-text {
+    -fx-text-fill: #7b2412;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-section-title {
+    -fx-text-fill: #5b1414;
+    -fx-font-size: 17px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-experience-image {
+    -fx-opacity: 0.32;
+}
+
+.pilgrim-experience-title {
+    -fx-text-fill: #5b1414;
+    -fx-font-size: 22px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-stat-card {
+    -fx-padding: 12px 14px;
+}
+
+.pilgrim-stat-value,
+.pilgrim-emergency-number {
+    -fx-text-fill: #7f1111;
+    -fx-font-family: "Georgia", "Cambria", serif;
+    -fx-font-size: 24px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-badge {
+    -fx-background-color: rgba(233, 136, 19, 0.12);
+    -fx-background-radius: 999px;
+    -fx-border-color: rgba(233, 136, 19, 0.24);
+    -fx-border-radius: 999px;
+    -fx-text-fill: #8f3b06;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-padding: 4px 10px;
+}
+
+.pilgrim-schedule-table {
+    -fx-background-color: #fff8ec;
+    -fx-background-radius: 12px;
+    -fx-border-color: #e7c891;
+    -fx-border-radius: 12px;
+    -fx-effect: dropshadow(gaussian, rgba(94, 47, 11, 0.12), 14, 0.14, 0, 4);
+}
+
+.pilgrim-table-head,
+.pilgrim-table-cell {
+    -fx-padding: 8px 10px;
+    -fx-border-color: rgba(91, 20, 20, 0.09);
+    -fx-border-width: 0 1px 1px 0;
+    -fx-min-width: 104px;
+}
+
+.pilgrim-table-head {
+    -fx-background-color: rgba(91, 20, 20, 0.92);
+    -fx-text-fill: #fff4d6;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.pilgrim-table-cell {
+    -fx-text-fill: #372015;
+    -fx-font-size: 11px;
+}
+
+.pilgrim-about-slogan {
+    -fx-text-fill: #8b3d0d;
+    -fx-font-family: "Nirmala UI", "Mangal", "Georgia", serif;
+    -fx-font-size: 22px;
+    -fx-font-weight: bold;
+    -fx-alignment: center;
+}
+
+.theme-dark .pilgrim-dashboard-root,
+.theme-dark .pilgrim-dashboard-main {
+    -fx-background-color:
+        radial-gradient(center 76% 0%, radius 54%, rgba(229, 180, 76, 0.16), transparent),
+        linear-gradient(to bottom right, #06111e, #14100c);
+}
+
+.theme-dark .pilgrim-sidebar {
+    -fx-background-color: linear-gradient(to bottom, #1c0b0b, #07111d);
+}
+
+.theme-dark .pilgrim-module-card,
+.theme-dark .pilgrim-rich-card,
+.theme-dark .pilgrim-panel,
+.theme-dark .pilgrim-stat-card,
+.theme-dark .pilgrim-data-row,
+.theme-dark .pilgrim-filter-row,
+.theme-dark .pilgrim-experience-panel,
+.theme-dark .pilgrim-round-icon-button,
+.theme-dark .pilgrim-schedule-table {
+    -fx-background-color: rgba(9, 18, 30, 0.90);
+    -fx-border-color: rgba(229, 180, 76, 0.28);
+}
+
+.theme-dark .pilgrim-page-title,
+.theme-dark .pilgrim-card-title,
+.theme-dark .pilgrim-section-title,
+.theme-dark .pilgrim-experience-title,
+.theme-dark .pilgrim-stat-value,
+.theme-dark .pilgrim-emergency-number,
+.theme-dark .pilgrim-about-slogan {
+    -fx-text-fill: #fff4d6;
+}
+
+.theme-dark .pilgrim-card-detail {
+    -fx-text-fill: #dcc8a4;
+}
+
+.theme-dark .pilgrim-small-action,
+.theme-dark .pilgrim-badge,
+.theme-dark .pilgrim-small-gold {
+    -fx-text-fill: #f5c86b;
 }

@@ -83,15 +83,11 @@ public class UserAuthPage {
 
         Button loginButton = primaryButton("LOGIN");
         loginButton.setOnAction(event -> {
-            String userId = emailMobile.getText().trim().toLowerCase();
+            String userId = emailMobile.getText().trim();
             String userPassword = password.getText().trim();
-
-            if (userId.isEmpty() || userPassword.isEmpty()) {
-                showInfo("Validation", "Please enter Email / Mobile and Password.");
-            } else if (!registeredUsers.containsKey(userId)) {
-                showInfo("Login Failed", "Account not found. Please create an account first.");
-            } else if (!registeredUsers.get(userId).equals(userPassword)) {
-                showInfo("Login Failed", "Incorrect password. Please try again.");
+            if (AppDataStore.isAdmin(userId, userPassword)) {
+                AdminDashboardPage adminDashboardPage = new AdminDashboardPage();
+                currentStage.setScene(adminDashboardPage.createScene(currentStage));
             } else {
                 DashboardPage dashboardPage = new DashboardPage();
                 currentStage.setScene(dashboardPage.createScene(currentStage));

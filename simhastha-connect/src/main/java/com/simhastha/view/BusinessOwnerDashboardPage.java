@@ -142,6 +142,10 @@ public class BusinessOwnerDashboardPage {
             String value = serviceInput.getText().trim();
             if (!value.isEmpty()) {
                 account.services.add(value);
+                AppDataStore.requestApproval("Business Listing",
+                        account.businessName + " - " + value,
+                        account.category + " | " + account.location + " | " + account.mobile,
+                        "business");
                 serviceInput.clear();
                 refreshServices();
             }

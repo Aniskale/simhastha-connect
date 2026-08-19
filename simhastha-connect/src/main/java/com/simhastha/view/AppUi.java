@@ -22,7 +22,7 @@ public final class AppUi {
     }
 
     public static Scene createScene(ThemedBackgroundPane root, Object owner) {
-        Scene scene = new Scene(root, 1200, 750);
+        Scene scene = new Scene(root, 1200, 680);
         ThemeManager.addTheme(scene, owner);
         ThemeManager.addListener(() -> ThemeManager.applyTo(root));
         return scene;

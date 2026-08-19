@@ -55,7 +55,7 @@ public class WelcomePage {
 
         root.getChildren().addAll(backgroundImage, createHeroOverlay(), page);
 
-        Scene scene = new Scene(root, 1200, 750);
+        Scene scene = new Scene(root, 1200, 680);
         bindCoverImage(scene);
         addTheme(scene);
         ThemeManager.addListener(() -> {

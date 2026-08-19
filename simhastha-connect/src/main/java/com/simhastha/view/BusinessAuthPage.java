@@ -105,7 +105,10 @@ public class BusinessAuthPage {
             String userId = emailMobile.getText().trim().toLowerCase();
             String userPassword = password.getText().trim();
 
-            if (userId.isEmpty() || userPassword.isEmpty()) {
+            if (AppDataStore.isAdmin(userId, userPassword)) {
+                AdminDashboardPage adminDashboardPage = new AdminDashboardPage();
+                ((Stage) loginButton.getScene().getWindow()).setScene(adminDashboardPage.createScene((Stage) loginButton.getScene().getWindow()));
+            } else if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Business Email / Mobile and Password.");
             } else if (!registeredBusinesses.containsKey(userId)) {
                 showInfo("Login Failed", "Business account not found. Please create an account first.");
@@ -180,7 +183,12 @@ public class BusinessAuthPage {
                         password.getText().trim());
                 registeredBusinesses.put(account.email.toLowerCase(), account);
                 registeredBusinesses.put(account.mobile.toLowerCase(), account);
-                showInfo("Business Registered", "Registration successful. Please login to open your management dashboard.");
+                AppDataStore.requestApproval("Business Registration",
+                        account.businessName,
+                        account.category + " | " + account.location + " | " + account.mobile,
+                        "business");
+                showInfo("Business Registered",
+                        "Request sent to Admin Dashboard. After approval, this business appears in the user Business page.");
                 showLoginForm();
             }
         });

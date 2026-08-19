@@ -142,6 +142,10 @@ public class OperatorDashboardPage {
             String value = scheduleInput.getText().trim();
             if (!value.isEmpty()) {
                 account.schedules.add(value);
+                AppDataStore.requestApproval("Transport Schedule",
+                        account.organizationName + " - " + value,
+                        account.serviceType + " | Contact: " + account.mobile,
+                        "transport");
                 scheduleInput.clear();
                 refreshSchedules();
             }

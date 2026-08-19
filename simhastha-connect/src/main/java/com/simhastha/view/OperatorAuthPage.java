@@ -105,7 +105,11 @@ public class OperatorAuthPage {
             String userId = emailMobile.getText().trim().toLowerCase();
             String userPassword = password.getText().trim();
 
-            if (userId.isEmpty() || userPassword.isEmpty()) {
+            if (AppDataStore.isAdmin(userId, userPassword)) {
+                Stage currentStage = (Stage) loginButton.getScene().getWindow();
+                AdminDashboardPage adminDashboardPage = new AdminDashboardPage();
+                currentStage.setScene(adminDashboardPage.createScene(currentStage));
+            } else if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Operator Email / Mobile and Password.");
             } else if (!registeredOperators.containsKey(userId)) {
                 showInfo("Login Failed", "Operator account not found. Please register first.");
@@ -159,7 +163,12 @@ public class OperatorAuthPage {
                         password.getText().trim());
                 registeredOperators.put(account.email.toLowerCase(), account);
                 registeredOperators.put(account.mobile.toLowerCase(), account);
-                showInfo("Operator Registered", "Registration successful. Please login to open your transport dashboard.");
+                AppDataStore.requestApproval("Transport Operator Registration",
+                        account.organizationName,
+                        account.serviceType + " | " + account.contactPerson + " | " + account.mobile,
+                        "transport");
+                showInfo("Operator Registered",
+                        "Request sent to Admin Dashboard. After approval, this operator appears in the user Transport page.");
                 showLoginForm();
             }
         });
