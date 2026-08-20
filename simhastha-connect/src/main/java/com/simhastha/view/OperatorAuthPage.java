@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -97,7 +98,7 @@ public class OperatorAuthPage {
         Button registerTab = tabButton("REGISTER", false, this::showRegisterForm);
         HBox tabs = tabs(loginTab, registerTab);
 
-        TextField emailMobile = AppUi.textField("Operator Email / Mobile");
+        TextField emailMobile = AppUi.textField("Operator Email");
         PasswordField password = AppUi.passwordField("Password");
 
         Button loginButton = primaryButton("LOGIN");
@@ -105,12 +106,15 @@ public class OperatorAuthPage {
             String userId = emailMobile.getText().trim().toLowerCase();
             String userPassword = password.getText().trim();
 
-            if (AppDataStore.isAdmin(userId, userPassword)) {
+            if (userId.isEmpty() || userPassword.isEmpty()) {
+                showInfo("Validation", "Please enter Operator Email and Password.");
+            } else if (!AuthService.isFirebaseEnabled() && AppDataStore.isAdmin(userId, userPassword)) {
+                AppSession.set(new AppSession.User("dev-admin", userId, "admin", "", "Admin", "active"));
                 Stage currentStage = (Stage) loginButton.getScene().getWindow();
                 AdminDashboardPage adminDashboardPage = new AdminDashboardPage();
                 currentStage.setScene(adminDashboardPage.createScene(currentStage));
-            } else if (userId.isEmpty() || userPassword.isEmpty()) {
-                showInfo("Validation", "Please enter Operator Email / Mobile and Password.");
+            } else if (AuthService.isFirebaseEnabled()) {
+                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
             } else if (!registeredOperators.containsKey(userId)) {
                 showInfo("Login Failed", "Operator account not found. Please register first.");
             } else if (!registeredOperators.get(userId).password.equals(userPassword)) {
@@ -122,7 +126,8 @@ public class OperatorAuthPage {
             }
         });
 
-        replaceNode(createFormCard("Transport Operator Login", tabs, emailMobile, password, loginButton));
+        Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
+        replaceNode(createFormCard("Transport Operator Login", tabs, emailMobile, password, loginButton, forgotButton));
     }
 
     private void showRegisterForm() {
@@ -161,15 +166,28 @@ public class OperatorAuthPage {
                         email.getText().trim(),
                         serviceType.getValue(),
                         password.getText().trim());
-                registeredOperators.put(account.email.toLowerCase(), account);
-                registeredOperators.put(account.mobile.toLowerCase(), account);
-                AppDataStore.requestApproval("Transport Operator Registration",
-                        account.organizationName,
-                        account.serviceType + " | " + account.contactPerson + " | " + account.mobile,
-                        "transport");
-                showInfo("Operator Registered",
-                        "Request sent to Admin Dashboard. After approval, this operator appears in the user Transport page.");
-                showLoginForm();
+                if (AuthService.isFirebaseEnabled()) {
+                    registerButton.setDisable(true);
+                    registerButton.setText("SUBMITTING...");
+                    AuthService.registerOperator(account, password.getText().trim())
+                            .whenComplete((result, error) -> Platform.runLater(() -> {
+                                registerButton.setDisable(false);
+                                registerButton.setText("REGISTER OPERATOR");
+                                showInfo(error == null ? "Operator Registered" : "Registration Failed",
+                                        result == null ? "Registration failed." : result.message());
+                                showLoginForm();
+                            }));
+                } else {
+                    registeredOperators.put(account.email.toLowerCase(), account);
+                    registeredOperators.put(account.mobile.toLowerCase(), account);
+                    AppDataStore.requestApproval("Transport Operator Registration",
+                            account.organizationName,
+                            account.serviceType + " | " + account.contactPerson + " | " + account.mobile,
+                            "transport");
+                    showInfo("Operator Registered",
+                            "Request sent to Admin Dashboard. After approval, this operator appears in the user Transport page.");
+                    showLoginForm();
+                }
             }
         });
 
@@ -242,9 +260,54 @@ public class OperatorAuthPage {
         return button;
     }
 
+    private Button linkButton(String text, Runnable action) {
+        Button button = new Button(text);
+        button.getStyleClass().add("text-button");
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private void sendReset(TextField emailField) {
+        String email = emailField.getText().trim();
+        if (email.isEmpty()) {
+            showInfo("Forgot Password", "Please enter your email first.");
+            return;
+        }
+        AuthService.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
+    }
+
     private void replaceNode(javafx.scene.Node node) {
         formSlot.getChildren().setAll(node);
         formSlot.setPadding(new Insets(28, 34, 28, 34));
+    }
+
+    private void runAuth(Button button, java.util.concurrent.CompletableFuture<AuthService.AuthOutcome> action) {
+        button.setDisable(true);
+        button.setText("PLEASE WAIT...");
+        action.whenComplete((result, error) -> Platform.runLater(() -> {
+            button.setDisable(false);
+            button.setText("LOGIN");
+            if (error != null || result == null || !result.success()) {
+                showInfo("Login Failed", result == null ? "Unable to login." : result.message());
+                return;
+            }
+            Stage stage = (Stage) button.getScene().getWindow();
+            openDashboardFor(stage, result.user());
+        }));
+    }
+
+    private void openDashboardFor(Stage stage, AppSession.User user) {
+        switch (user.role()) {
+            case "admin" -> stage.setScene(new AdminDashboardPage().createScene(stage));
+            case "business" -> stage.setScene(new BusinessOwnerDashboardPage(
+                    new BusinessAuthPage.BusinessAccount(user.displayName(), user.displayName(), "Business", "",
+                            user.email(), "", "")).createScene(stage));
+            case "transport_operator" -> stage.setScene(new OperatorDashboardPage(
+                    new OperatorAccount(user.displayName(), user.displayName(), "", user.email(), "Transport", ""))
+                    .createScene(stage));
+            case "user" -> stage.setScene(new DashboardPage().createScene(stage));
+            default -> showInfo("Login Failed", "Account role is not valid.");
+        }
     }
 
     private ImageView createImage(String path, double width, double height) {
@@ -292,7 +355,7 @@ public class OperatorAuthPage {
         public final List<String> bookings = new ArrayList<>();
         private final String password;
 
-        private OperatorAccount(String organizationName, String contactPerson, String mobile, String email,
+        public OperatorAccount(String organizationName, String contactPerson, String mobile, String email,
                 String serviceType, String password) {
             this.organizationName = organizationName;
             this.contactPerson = contactPerson;

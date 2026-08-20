@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -97,7 +98,7 @@ public class BusinessAuthPage {
         Button registerTab = tabButton("CREATE BUSINESS ACCOUNT", false, this::showRegisterForm);
         HBox tabs = tabs(loginTab, registerTab);
 
-        TextField emailMobile = AppUi.textField("Business Email / Mobile");
+        TextField emailMobile = AppUi.textField("Business Email");
         PasswordField password = AppUi.passwordField("Password");
 
         Button loginButton = primaryButton("LOGIN");
@@ -105,11 +106,14 @@ public class BusinessAuthPage {
             String userId = emailMobile.getText().trim().toLowerCase();
             String userPassword = password.getText().trim();
 
-            if (AppDataStore.isAdmin(userId, userPassword)) {
-                AdminDashboardPage adminDashboardPage = new AdminDashboardPage();
-                ((Stage) loginButton.getScene().getWindow()).setScene(adminDashboardPage.createScene((Stage) loginButton.getScene().getWindow()));
-            } else if (userId.isEmpty() || userPassword.isEmpty()) {
-                showInfo("Validation", "Please enter Business Email / Mobile and Password.");
+            if (userId.isEmpty() || userPassword.isEmpty()) {
+                showInfo("Validation", "Please enter Business Email and Password.");
+            } else if (!AuthService.isFirebaseEnabled() && AppDataStore.isAdmin(userId, userPassword)) {
+                AppSession.set(new AppSession.User("dev-admin", userId, "admin", "", "Admin", "active"));
+                Stage stage = (Stage) loginButton.getScene().getWindow();
+                stage.setScene(new AdminDashboardPage().createScene(stage));
+            } else if (AuthService.isFirebaseEnabled()) {
+                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
             } else if (!registeredBusinesses.containsKey(userId)) {
                 showInfo("Login Failed", "Business account not found. Please create an account first.");
             } else if (!registeredBusinesses.get(userId).password.equals(userPassword)) {
@@ -120,7 +124,8 @@ public class BusinessAuthPage {
             }
         });
 
-        replaceNode(createFormCard("Local Business Login", tabs, emailMobile, password, loginButton));
+        Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
+        replaceNode(createFormCard("Local Business Login", tabs, emailMobile, password, loginButton, forgotButton));
     }
 
     private void showRegisterForm() {
@@ -181,15 +186,28 @@ public class BusinessAuthPage {
                         email.getText().trim(),
                         location.getText().trim(),
                         password.getText().trim());
-                registeredBusinesses.put(account.email.toLowerCase(), account);
-                registeredBusinesses.put(account.mobile.toLowerCase(), account);
-                AppDataStore.requestApproval("Business Registration",
-                        account.businessName,
-                        account.category + " | " + account.location + " | " + account.mobile,
-                        "business");
-                showInfo("Business Registered",
-                        "Request sent to Admin Dashboard. After approval, this business appears in the user Business page.");
-                showLoginForm();
+                if (AuthService.isFirebaseEnabled()) {
+                    registerButton.setDisable(true);
+                    registerButton.setText("SUBMITTING...");
+                    AuthService.registerBusiness(account, password.getText().trim())
+                            .whenComplete((result, error) -> Platform.runLater(() -> {
+                                registerButton.setDisable(false);
+                                registerButton.setText("REGISTER BUSINESS");
+                                showInfo(error == null ? "Business Registered" : "Registration Failed",
+                                        result == null ? "Registration failed." : result.message());
+                                showLoginForm();
+                            }));
+                } else {
+                    registeredBusinesses.put(account.email.toLowerCase(), account);
+                    registeredBusinesses.put(account.mobile.toLowerCase(), account);
+                    AppDataStore.requestApproval("Business Registration",
+                            account.businessName,
+                            account.category + " | " + account.location + " | " + account.mobile,
+                            "business");
+                    showInfo("Business Registered",
+                            "Request sent to Admin Dashboard. After approval, this business appears in the user Business page.");
+                    showLoginForm();
+                }
             }
         });
 
@@ -262,9 +280,54 @@ public class BusinessAuthPage {
         return button;
     }
 
+    private Button linkButton(String text, Runnable action) {
+        Button button = new Button(text);
+        button.getStyleClass().add("text-button");
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private void sendReset(TextField emailField) {
+        String email = emailField.getText().trim();
+        if (email.isEmpty()) {
+            showInfo("Forgot Password", "Please enter your email first.");
+            return;
+        }
+        AuthService.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
+    }
+
     private void replaceNode(javafx.scene.Node node) {
         formSlot.getChildren().setAll(node);
         formSlot.setPadding(new Insets(28, 34, 28, 34));
+    }
+
+    private void runAuth(Button button, java.util.concurrent.CompletableFuture<AuthService.AuthOutcome> action) {
+        button.setDisable(true);
+        button.setText("PLEASE WAIT...");
+        action.whenComplete((result, error) -> Platform.runLater(() -> {
+            button.setDisable(false);
+            button.setText("LOGIN");
+            if (error != null || result == null || !result.success()) {
+                showInfo("Login Failed", result == null ? "Unable to login." : result.message());
+                return;
+            }
+            Stage stage = (Stage) button.getScene().getWindow();
+            openDashboardFor(stage, result.user());
+        }));
+    }
+
+    private void openDashboardFor(Stage stage, AppSession.User user) {
+        switch (user.role()) {
+            case "admin" -> stage.setScene(new AdminDashboardPage().createScene(stage));
+            case "business" -> stage.setScene(new BusinessOwnerDashboardPage(
+                    new BusinessAccount(user.displayName(), user.displayName(), "Business", "", user.email(), "", ""))
+                    .createScene(stage));
+            case "transport_operator" -> stage.setScene(new OperatorDashboardPage(
+                    new OperatorAuthPage.OperatorAccount(user.displayName(), user.displayName(), "", user.email(),
+                            "Transport", "")).createScene(stage));
+            case "user" -> stage.setScene(new DashboardPage().createScene(stage));
+            default -> showInfo("Login Failed", "Account role is not valid.");
+        }
     }
 
     private ImageView createImage(String path, double width, double height) {
@@ -313,7 +376,7 @@ public class BusinessAuthPage {
         public final List<String> bookings = new ArrayList<>();
         private final String password;
 
-        private BusinessAccount(String businessName, String ownerName, String category, String mobile, String email,
+        public BusinessAccount(String businessName, String ownerName, String category, String mobile, String email,
                 String location, String password) {
             this.businessName = businessName;
             this.ownerName = ownerName;

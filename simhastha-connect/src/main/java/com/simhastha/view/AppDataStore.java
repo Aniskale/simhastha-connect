@@ -89,7 +89,7 @@ public final class AppDataStore {
         about.add(new ServiceItem("Connected Pilgrim Platform",
                 "One desktop app for pilgrims, admin, transport operators and business partners.", "About"));
         about.add(new ServiceItem("Admin-controlled Data",
-                "Every user-facing module can be updated from Admin Dashboard now and Firebase later.", "About"));
+                "Every user-facing module can be updated from Admin Dashboard.", "About"));
         about.add(new ServiceItem("Approval-first Marketplace",
                 "Business and transport entries become public only after admin approval.", "About"));
         loadFirebaseDataIfAvailable();
@@ -125,33 +125,57 @@ public final class AppDataStore {
     public static void addItem(String module, String title, String detail) {
         ServiceItem item = new ServiceItem(module, title, detail, displayName(module));
         items(module).add(item);
-        firestore.saveItem(module, item);
+        try {
+            firestore.saveItem(module, item, currentToken());
+        } catch (Exception ignored) {
+            firestore.saveItem(module, item);
+        }
     }
 
     public static void removeItem(String module, ServiceItem item) {
         items(module).remove(item);
-        firestore.deleteItem(item);
+        firestore.deleteItem(item, currentToken());
     }
 
     public static void requestApproval(String type, String title, String detail, String targetModule) {
         ApprovalRequest request = new ApprovalRequest(type, title, detail, targetModule);
         pendingApprovals.add(request);
-        firestore.saveApproval(request);
+        try {
+            firestore.saveApproval(request, currentToken());
+        } catch (Exception ignored) {
+            firestore.saveApproval(request);
+        }
     }
 
     public static void approve(ApprovalRequest request) {
         addItem(request.targetModule, request.title, request.detail);
+        if (request.ownerId != null && !request.ownerId.isBlank()) {
+            try {
+                firestore.updateUserStatus(request.ownerId, "approved", currentToken());
+                if ("business".equals(request.targetModule)) {
+                    firestore.updateDocumentStatus("businesses", request.ownerId, "approved", true, currentToken());
+                } else if ("transport".equals(request.targetModule)) {
+                    firestore.updateDocumentStatus("transportOperators", request.ownerId, "approved", true, currentToken());
+                }
+            } catch (Exception ignored) {
+                // Approval remains visible locally even if a remote rule blocks status update.
+            }
+        }
         pendingApprovals.remove(request);
-        firestore.deleteApproval(request);
+        firestore.deleteApproval(request, currentToken());
     }
 
     public static void reject(ApprovalRequest request) {
         pendingApprovals.remove(request);
-        firestore.deleteApproval(request);
+        firestore.deleteApproval(request, currentToken());
     }
 
     public static boolean isFirebaseEnabled() {
         return firestore.isEnabled();
+    }
+
+    public static void refreshFirebaseData(String idToken) {
+        loadFirebaseDataIfAvailable(idToken);
     }
 
     public static String displayName(String module) {
@@ -200,26 +224,38 @@ public final class AppDataStore {
         public final String title;
         public final String detail;
         public final String targetModule;
+        public final String ownerId;
 
         public ApprovalRequest(String type, String title, String detail, String targetModule) {
-            this(randomId("approval"), type, title, detail, targetModule);
+            this(randomId("approval"), type, title, detail, targetModule, "");
         }
 
-        public ApprovalRequest(String id, String type, String title, String detail, String targetModule) {
+        
+
+        public ApprovalRequest(String type, String title, String detail, String targetModule, String ownerId) {
+            this(randomId("approval"), type, title, detail, targetModule, ownerId);
+        }
+
+        public ApprovalRequest(String id, String type, String title, String detail, String targetModule, String ownerId) {
             this.id = id;
             this.type = type;
             this.title = title;
             this.detail = detail;
             this.targetModule = targetModule;
+            this.ownerId = ownerId == null ? "" : ownerId;
         }
     }
 
     private static void loadFirebaseDataIfAvailable() {
+        loadFirebaseDataIfAvailable("");
+    }
+
+    private static void loadFirebaseDataIfAvailable(String idToken) {
         if (!firestore.isEnabled()) {
             return;
         }
         try {
-            List<ServiceItem> remoteItems = firestore.loadItems();
+            List<ServiceItem> remoteItems = firestore.loadItems(idToken);
             if (!remoteItems.isEmpty()) {
                 clearModuleItems();
                 for (ServiceItem item : remoteItems) {
@@ -228,7 +264,7 @@ public final class AppDataStore {
             }
 
             pendingApprovals.clear();
-            pendingApprovals.addAll(firestore.loadApprovals());
+            pendingApprovals.addAll(firestore.loadApprovals(idToken));
         } catch (Exception ignored) {
             // Keep local seed data if Firebase is offline or rules are not ready yet.
         }
@@ -271,5 +307,10 @@ public final class AppDataStore {
             case "About" -> "about";
             default -> "announcement";
         };
+    }
+
+    private static String currentToken() {
+        AppSession.User user = AppSession.currentUser();
+        return user == null ? "" : user.idToken();
     }
 }

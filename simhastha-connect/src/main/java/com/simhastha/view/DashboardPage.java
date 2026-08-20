@@ -24,6 +24,7 @@ import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Pane;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
@@ -80,7 +81,10 @@ public class DashboardPage {
         support.getStyleClass().add("pilgrim-support-box");
 
         Button logout = sidebarAction("logout", "Logout");
-        logout.setOnAction(eventAction -> stage.setScene(new UserAuthPage().createScene(stage)));
+        logout.setOnAction(eventAction -> {
+            AppSession.clear();
+            stage.setScene(new UserAuthPage().createScene(stage));
+        });
 
         VBox sidebar = new VBox(12, brand, menu, createSpacer(), support, logout);
         sidebar.getStyleClass().add("pilgrim-sidebar");
@@ -474,9 +478,43 @@ public class DashboardPage {
         StackPane.setAlignment(note, Pos.BOTTOM_RIGHT);
         StackPane.setMargin(note, new Insets(0, 14, 14, 0));
 
-        StackPane map = new StackPane(mapImage, route, startDot, endDot, start, finish, tools, note);
+        StackPane map = new StackPane(transportMapFallback(fromPlace, toPlace), mapImage, route, startDot, endDot, start,
+                finish, tools, note);
         map.getStyleClass().add("transport-map-content");
         return map;
+    }
+
+    private Pane transportMapFallback(Place from, Place to) {
+        Pane pane = new Pane();
+        pane.getStyleClass().add("transport-map-fallback");
+        pane.setPrefSize(480, 330);
+
+        for (int i = 0; i < 8; i++) {
+            Line horizontal = new Line(0, 38 + i * 38, 480, 22 + i * 38);
+            horizontal.getStyleClass().add("transport-map-road");
+            pane.getChildren().add(horizontal);
+        }
+        for (int i = 0; i < 7; i++) {
+            Line vertical = new Line(38 + i * 70, 0, 16 + i * 70, 330);
+            vertical.getStyleClass().add("transport-map-road-soft");
+            pane.getChildren().add(vertical);
+        }
+
+        Line river = new Line(0, 220, 480, 150);
+        river.getStyleClass().add("transport-map-river");
+        pane.getChildren().add(river);
+
+        Label start = label(from.name, "transport-map-place-label");
+        start.setLayoutX(22);
+        start.setLayoutY(252);
+        Label end = label(to.name, "transport-map-place-label");
+        end.setLayoutX(300);
+        end.setLayoutY(62);
+        Label city = label("Nashik Kumbh Route", "transport-map-city-label");
+        city.setLayoutX(154);
+        city.setLayoutY(145);
+        pane.getChildren().addAll(start, end, city);
+        return pane;
     }
 
     private VBox mapPin(String title, String place) {
@@ -493,6 +531,7 @@ public class DashboardPage {
         imageView.setFitWidth(480);
         imageView.setFitHeight(330);
         imageView.setPreserveRatio(false);
+        map.errorProperty().addListener((observable, wasError, isError) -> imageView.setVisible(!isError));
         return imageView;
     }
 

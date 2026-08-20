@@ -3261,7 +3261,7 @@
 
 .transport-map-shell {
     -fx-background-color:
-        linear-gradient(to bottom right, #fff8ec, #edf6ff);
+        linear-gradient(to bottom right, #f4ead8, #e8f1f5);
     -fx-border-color: rgba(126, 63, 13, 0.20);
     -fx-min-width: 430px;
     -fx-min-height: 330px;
@@ -3297,12 +3297,55 @@
     -fx-border-radius: 12px;
 }
 
+.transport-map-fallback {
+    -fx-background-color:
+        radial-gradient(center 58% 42%, radius 70%, rgba(255, 214, 133, 0.38), transparent),
+        linear-gradient(to bottom right, #f0e2ca, #d9e7e7);
+    -fx-background-radius: 12px;
+}
+
+.transport-map-road,
+.transport-map-road-soft {
+    -fx-stroke-line-cap: round;
+}
+
+.transport-map-road {
+    -fx-stroke: rgba(120, 88, 55, 0.34);
+    -fx-stroke-width: 5px;
+}
+
+.transport-map-road-soft {
+    -fx-stroke: rgba(120, 88, 55, 0.18);
+    -fx-stroke-width: 3px;
+}
+
+.transport-map-river {
+    -fx-stroke: rgba(41, 128, 185, 0.45);
+    -fx-stroke-width: 9px;
+    -fx-stroke-line-cap: round;
+}
+
+.transport-map-place-label,
+.transport-map-city-label {
+    -fx-background-color: rgba(255, 255, 255, 0.86);
+    -fx-background-radius: 8px;
+    -fx-border-color: rgba(126, 63, 13, 0.14);
+    -fx-border-radius: 8px;
+    -fx-text-fill: #4b1f0b;
+    -fx-font-weight: bold;
+    -fx-padding: 4px 8px;
+}
+
+.transport-map-city-label {
+    -fx-text-fill: #7f1111;
+}
+
 .transport-map-tiles {
     -fx-opacity: 0.96;
 }
 
 .transport-map-image {
-    -fx-opacity: 0.98;
+    -fx-opacity: 0.92;
 }
 
 .transport-route-line {

@@ -1,9 +1,8 @@
 package com.simhastha.view;
 
 import java.net.URL;
-import java.util.HashMap;
-import java.util.Map;
 
+import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
@@ -23,8 +22,6 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 public class UserAuthPage {
-
-    private static final Map<String, String> registeredUsers = new HashMap<>();
 
     private VBox formSlot;
     private Stage currentStage;
@@ -78,24 +75,26 @@ public class UserAuthPage {
         Button createTab = tabButton("CREATE ACCOUNT", false, this::showCreateAccountForm);
         HBox tabs = tabs(loginTab, createTab);
 
-        TextField emailMobile = AppUi.textField("Email / Mobile");
+        TextField emailMobile = AppUi.textField("Email");
         PasswordField password = AppUi.passwordField("Password");
 
         Button loginButton = primaryButton("LOGIN");
         loginButton.setOnAction(event -> {
             String userId = emailMobile.getText().trim();
             String userPassword = password.getText().trim();
-            if (AppDataStore.isAdmin(userId, userPassword)) {
-                AdminDashboardPage adminDashboardPage = new AdminDashboardPage();
-                currentStage.setScene(adminDashboardPage.createScene(currentStage));
-            } else {
-                DashboardPage dashboardPage = new DashboardPage();
-                currentStage.setScene(dashboardPage.createScene(currentStage));
+            if (userId.isEmpty() || userPassword.isEmpty()) {
+                showInfo("Validation", "Please enter email and password.");
+                return;
             }
+            if (!AuthService.isFirebaseEnabled() && AppDataStore.isAdmin(userId, userPassword)) {
+                AppSession.set(new AppSession.User("dev-admin", userId, "admin", "", "Admin", "active"));
+                currentStage.setScene(new AdminDashboardPage().createScene(currentStage));
+                return;
+            }
+            runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
         });
 
-        Button forgotButton = linkButton("Forgot Password?", () -> showInfo("Forgot Password",
-                "Password recovery will be added later."));
+        Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
         Button createAccount = linkButton("Don't have an account? Create Account", this::showCreateAccountForm);
 
         replaceForm(createFormCard("Pilgrim / User Login", tabs, emailMobile, password, loginButton, forgotButton,
@@ -119,14 +118,19 @@ public class UserAuthPage {
                 showInfo("Validation", "Please fill all fields before creating an account.");
             } else if (!password.getText().trim().equals(confirmPassword.getText().trim())) {
                 showInfo("Validation", "Password and Confirm Password must match.");
-            } else if (registeredUsers.containsKey(email.getText().trim().toLowerCase())
-                    || registeredUsers.containsKey(mobile.getText().trim().toLowerCase())) {
-                showInfo("Validation", "This email or mobile number is already registered.");
             } else {
-                registeredUsers.put(email.getText().trim().toLowerCase(), password.getText().trim());
-                registeredUsers.put(mobile.getText().trim().toLowerCase(), password.getText().trim());
-                showInfo("Account Created", "Registration successful. You can login now.");
-                showLoginForm();
+                createButton.setDisable(true);
+                createButton.setText("CREATING...");
+                AuthService.registerUser(fullName.getText().trim(), mobile.getText().trim(), email.getText().trim(),
+                        password.getText().trim()).whenComplete((result, error) -> Platform.runLater(() -> {
+                            createButton.setDisable(false);
+                            createButton.setText("CREATE ACCOUNT");
+                            if (error != null || result == null || !result.success()) {
+                                showInfo("Registration Failed", result == null ? "Registration failed." : result.message());
+                                return;
+                            }
+                            currentStage.setScene(new DashboardPage().createScene(currentStage));
+                        }));
             }
         });
 
@@ -226,6 +230,43 @@ public class UserAuthPage {
         button.getStyleClass().add("text-button");
         button.setOnAction(event -> action.run());
         return button;
+    }
+
+    private void runAuth(Button button, java.util.concurrent.CompletableFuture<AuthService.AuthOutcome> action) {
+        button.setDisable(true);
+        button.setText("PLEASE WAIT...");
+        action.whenComplete((result, error) -> Platform.runLater(() -> {
+            button.setDisable(false);
+            button.setText("LOGIN");
+            if (error != null || result == null || !result.success()) {
+                showInfo("Login Failed", result == null ? "Unable to login." : result.message());
+                return;
+            }
+            openDashboardFor(result.user());
+        }));
+    }
+
+    private void openDashboardFor(AppSession.User user) {
+        switch (user.role()) {
+            case "admin" -> currentStage.setScene(new AdminDashboardPage().createScene(currentStage));
+            case "business" -> currentStage.setScene(new BusinessOwnerDashboardPage(
+                    new BusinessAuthPage.BusinessAccount(user.displayName(), user.displayName(), "Business",
+                            "", user.email(), "", "")).createScene(currentStage));
+            case "transport_operator" -> currentStage.setScene(new OperatorDashboardPage(
+                    new OperatorAuthPage.OperatorAccount(user.displayName(), user.displayName(), "",
+                            user.email(), "Transport", "")).createScene(currentStage));
+            case "user" -> currentStage.setScene(new DashboardPage().createScene(currentStage));
+            default -> showInfo("Login Failed", "Account role is not valid.");
+        }
+    }
+
+    private void sendReset(TextField emailField) {
+        String email = emailField.getText().trim();
+        if (email.isEmpty()) {
+            showInfo("Forgot Password", "Please enter your email first.");
+            return;
+        }
+        AuthService.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
     }
 
     private void replaceForm(VBox form) {

@@ -49,6 +49,7 @@ public class BusinessOwnerDashboardPage {
         Button logout = new Button("Logout");
         logout.getStyleClass().add("back-button");
         logout.setOnAction(event -> {
+            AppSession.clear();
             BusinessAuthPage authPage = new BusinessAuthPage();
             stage.setScene(authPage.createScene(stage));
         });

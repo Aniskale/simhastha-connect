@@ -1,0 +1,159 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userExists() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function role() {
+      return userExists()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : "";
+    }
+
+    function isAdmin() {
+      return role() == "admin";
+    }
+
+    function isBusiness() {
+      return role() == "business";
+    }
+
+    function isTransportOperator() {
+      return role() == "transport_operator";
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function approvedPublic() {
+      return resource.data.approved == true
+        || resource.data.status == "approved"
+        || resource.data.published == true;
+    }
+
+    // ================= USERS =================
+
+    match /users/{uid} {
+
+      allow create: if isOwner(uid)
+        && request.resource.data.uid == uid
+        && (
+          (
+            request.resource.data.role == "user"
+            && request.resource.data.status == "active"
+          )
+          ||
+          (
+            request.resource.data.role in [
+              "business",
+              "transport_operator"
+            ]
+            && request.resource.data.status == "pending"
+          )
+        );
+
+      allow read: if isOwner(uid) || isAdmin();
+
+      // Owner can edit profile,
+      // but cannot change own role or approval status.
+      allow update: if isOwner(uid)
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.uid == resource.data.uid;
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ================= BUSINESSES =================
+
+    match /businesses/{uid} {
+
+      allow create: if isOwner(uid)
+        && isBusiness()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == "pending"
+        && request.resource.data.approved == false;
+
+      allow read: if isAdmin()
+        || isOwner(uid)
+        || approvedPublic();
+
+      // Business owner may edit normal information only.
+      // They cannot approve themselves.
+      allow update: if isOwner(uid)
+        && isBusiness()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.approved == resource.data.approved;
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ================= TRANSPORT OPERATORS =================
+
+    match /transportOperators/{uid} {
+
+      allow create: if isOwner(uid)
+        && isTransportOperator()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == "pending"
+        && request.resource.data.approved == false;
+
+      allow read: if isAdmin()
+        || isOwner(uid)
+        || approvedPublic();
+
+      allow update: if isOwner(uid)
+        && isTransportOperator()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.approved == resource.data.approved;
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ================= APPROVAL REQUESTS =================
+
+    match /approvalRequests/{id} {
+
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == "pending";
+
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ================= APP DATA =================
+
+    match /appItems/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ================= PUBLIC MODULES =================
+
+    match /{collection}/{id} {
+
+      allow read: if collection in [
+        "transportRoutes",
+        "pujaServices",
+        "ghats",
+        "stays",
+        "announcements",
+        "events",
+        "lostFound"
+      ] && approvedPublic();
+
+      allow write: if isAdmin();
+    }
+  }
+}

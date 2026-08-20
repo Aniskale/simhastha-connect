@@ -59,8 +59,15 @@ public class AdminDashboardPage {
         userView.getStyleClass().add("back-button");
         userView.setOnAction(event -> stage.setScene(new DashboardPage().createScene(stage)));
 
+        Button logout = new Button("Logout");
+        logout.getStyleClass().add("back-button");
+        logout.setOnAction(event -> {
+            AppSession.clear();
+            stage.setScene(new UserAuthPage().createScene(stage));
+        });
+
         HBox header = new HBox(18, new VBox(3, brand, title, subtitle), AppUi.spacer(), AppUi.createThemeToggle(),
-                userView);
+                userView, logout);
         header.getStyleClass().add("management-header");
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPadding(new Insets(18, 38, 8, 38));
@@ -147,8 +154,8 @@ public class AdminDashboardPage {
                 infoRow("\uE753", "Firebase status",
                         AppDataStore.isFirebaseEnabled() ? "Connected mode enabled from firebase.properties."
                                 : "Local mode active. Add firebase.properties to sync with Firestore."),
-                infoRow("\uE8A5", "Firebase-ready flow",
-                        "This local store is the single place to replace with Firestore later."),
+                infoRow("\uE8A5", "Role-based access",
+                        "User, business, transport operator and admin accounts are checked from Firestore profiles."),
                 infoRow("\uE7BA", "Approval gate",
                         "Business and transport registrations stay pending until admin approves them."),
                 infoRow("\uE8FD", "User dashboard sync",

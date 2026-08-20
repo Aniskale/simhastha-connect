@@ -141,7 +141,7 @@ public class IntroPage {
         entrance = new ParallelTransition(fadeIn, scaleIn);
         entrance.play();
 
-        handoff = new Timeline(new KeyFrame(Duration.seconds(8), event -> {
+        handoff = new Timeline(new KeyFrame(Duration.seconds(5), event -> {
             WelcomePage welcomePage = new WelcomePage();
             stage.setScene(welcomePage.createScene(stage));
         }));

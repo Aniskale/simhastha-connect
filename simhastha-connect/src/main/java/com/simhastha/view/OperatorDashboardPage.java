@@ -49,6 +49,7 @@ public class OperatorDashboardPage {
         Button logout = new Button("Logout");
         logout.getStyleClass().add("back-button");
         logout.setOnAction(event -> {
+            AppSession.clear();
             OperatorAuthPage authPage = new OperatorAuthPage();
             stage.setScene(authPage.createScene(stage));
         });
