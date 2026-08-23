@@ -83,7 +83,8 @@ public class BusinessOwnerDashboardPage {
         grid.add(createBookingsPanel(), 0, 0);
         grid.add(createServicesPanel(), 1, 0);
         grid.add(createAnalyticsPanel(), 0, 1);
-        grid.add(createOwnerToolsPanel(), 1, 1);
+        grid.add(createPaymentsPanel(), 1, 1);
+        grid.add(createOwnerToolsPanel(), 0, 2, 2, 1);
 
         VBox content = new VBox(18, stats, grid);
         content.setPadding(new Insets(16, 42, 42, 42));
@@ -126,6 +127,38 @@ public class BusinessOwnerDashboardPage {
                 infoRow("\uE9D2", "Reviews & trust score", "Track ratings and owner response quality"));
 
         VBox panel = new VBox(14, sectionTitle("Owner Growth Tools"), list);
+        panel.getStyleClass().add("management-panel");
+        panel.setPrefWidth(560);
+        panel.setMinHeight(300);
+        return panel;
+    }
+
+    private VBox createPaymentsPanel() {
+        java.util.List<AppDataStore.BookingRecord> businessBookings = AppDataStore.bookings().stream()
+                .filter(booking -> "BUSINESS".equals(booking.moduleType))
+                .toList();
+        long paid = businessBookings.stream()
+                .filter(booking -> "PAID".equals(booking.paymentStatus))
+                .mapToLong(booking -> booking.amountPaise)
+                .sum();
+
+        VBox list = new VBox(10,
+                metricRow("Confirmed paid value", "Rs " + (paid / 100), 0.72, "Derived from verified payment records"),
+                metricRow("Pending bookings", String.valueOf(businessBookings.stream()
+                        .filter(booking -> "PENDING".equals(booking.paymentStatus)).count()), 0.42,
+                        "Awaiting payment or webhook verification"));
+
+        if (businessBookings.isEmpty()) {
+            list.getChildren().add(infoRow("\uE8A5", "No business payment records yet",
+                    "Paid business bookings will appear after pilgrims reserve approved services."));
+        } else {
+            for (AppDataStore.BookingRecord booking : businessBookings) {
+                list.getChildren().add(infoRow("\uE8A7", booking.title + " | " + booking.paymentStatus,
+                        "Booking: " + booking.bookingId + " | Amount: Rs " + (booking.amountPaise / 100)));
+            }
+        }
+
+        VBox panel = new VBox(14, sectionTitle("Payments & Revenue"), list);
         panel.getStyleClass().add("management-panel");
         panel.setPrefWidth(560);
         panel.setMinHeight(300);

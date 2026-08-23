@@ -99,7 +99,8 @@ public class AdminDashboardPage {
         grid.setVgap(18);
         grid.add(createApprovalPanel(), 0, 0);
         grid.add(createDataPanel(), 1, 0);
-        grid.add(createFirebasePanel(), 0, 1, 2, 1);
+        grid.add(createPaymentsPanel(), 0, 1, 2, 1);
+        grid.add(createFirebasePanel(), 0, 2, 2, 1);
 
         VBox content = new VBox(18, stats, grid);
         content.setPadding(new Insets(14, 38, 40, 38));
@@ -161,6 +162,45 @@ public class AdminDashboardPage {
                 infoRow("\uE8FD", "User dashboard sync",
                         "Approved data appears in user Transport, Business, Stay and other module pages."));
         VBox panel = new VBox(14, sectionTitle("Application Control Logic"), list);
+        panel.getStyleClass().add("management-panel");
+        panel.setPrefWidth(1160);
+        return panel;
+    }
+
+    private VBox createPaymentsPanel() {
+        long successful = AppDataStore.bookings().stream()
+                .filter(booking -> "PAID".equals(booking.paymentStatus))
+                .count();
+        long pending = AppDataStore.bookings().stream()
+                .filter(booking -> "PENDING".equals(booking.paymentStatus))
+                .count();
+        long failed = AppDataStore.bookings().stream()
+                .filter(booking -> "FAILED".equals(booking.paymentStatus))
+                .count();
+        long collected = AppDataStore.bookings().stream()
+                .filter(booking -> "PAID".equals(booking.paymentStatus))
+                .mapToLong(booking -> booking.amountPaise)
+                .sum();
+
+        HBox summary = new HBox(12,
+                statCard("Total Transactions", String.valueOf(AppDataStore.bookings().size()), "Central payment records"),
+                statCard("Successful", String.valueOf(successful), "Verified paid bookings"),
+                statCard("Pending", String.valueOf(pending), "Processing or awaiting webhook"),
+                statCard("Failed", String.valueOf(failed), "Failed or cancelled payments"),
+                statCard("Total Collected", "Rs " + (collected / 100), "Paid amount only"));
+
+        VBox rows = new VBox(9);
+        if (AppDataStore.bookings().isEmpty()) {
+            rows.getChildren().add(infoRow("\uE8A5", "No transactions yet", "Paid module bookings will appear here."));
+        } else {
+            for (AppDataStore.BookingRecord booking : AppDataStore.bookings()) {
+                rows.getChildren().add(infoRow("\uE8A7", booking.title + " | " + booking.paymentStatus,
+                        "Booking: " + booking.bookingId + " | User: " + booking.userId + " | Module: "
+                                + booking.moduleType + " | Amount: Rs " + (booking.amountPaise / 100)));
+            }
+        }
+
+        VBox panel = new VBox(14, sectionTitle("Payments & Transactions"), summary, rows);
         panel.getStyleClass().add("management-panel");
         panel.setPrefWidth(1160);
         return panel;

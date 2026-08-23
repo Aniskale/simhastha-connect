@@ -37,6 +37,7 @@ import javafx.util.Duration;
 public class DashboardPage {
 
     private BorderPane root;
+    private final AppPaymentCoordinator paymentCoordinator = new AppPaymentCoordinator();
     private final java.util.Map<String, Button> navButtons = new java.util.LinkedHashMap<>();
     private static final java.util.Map<String, Place> TRANSPORT_PLACES = createTransportPlaces();
 
@@ -66,6 +67,7 @@ public class DashboardPage {
 
         VBox menu = new VBox(4,
                 nav("home", "Dashboard", true),
+                nav("packages", "Kumbh Packages", false),
                 nav("transport", "Transport", false),
                 nav("puja", "Puja Services", false),
                 nav("ghat", "Ghats & Snan", false),
@@ -74,6 +76,7 @@ public class DashboardPage {
                 nav("lost", "Lost & Found", false),
                 nav("schedule", "All Day Schedule", false),
                 nav("business", "Business", false),
+                nav("bookings", "My Bookings", false),
                 nav("announcement", "Announcement", false),
                 nav("about", "About Us", false));
 
@@ -121,6 +124,7 @@ public class DashboardPage {
     private Label moduleIcon(String module, String styleClass) {
         String glyph = switch (module) {
             case "home" -> "\uE80F";
+            case "packages" -> "\uE8EC";
             case "transport" -> "\uE806";
             case "puja" -> "\uEC29";
             case "ghat" -> "\uE707";
@@ -129,6 +133,7 @@ public class DashboardPage {
             case "lost" -> "\uE721";
             case "schedule" -> "\uE787";
             case "business" -> "\uE719";
+            case "bookings" -> "\uE8A7";
             case "announcement" -> "\uE789";
             case "about" -> "\uE946";
             case "logout" -> "\uE7E8";
@@ -145,6 +150,7 @@ public class DashboardPage {
     private void showModulePage(String module) {
         setActiveModule(module);
         Node page = switch (module) {
+            case "packages" -> packagesPage();
             case "transport" -> transportPage();
             case "puja" -> pujaPage();
             case "ghat" -> ghatsPage();
@@ -153,6 +159,7 @@ public class DashboardPage {
             case "lost" -> lostFoundPage();
             case "schedule" -> schedulePage();
             case "business" -> businessPage();
+            case "bookings" -> myBookingsPage();
             case "announcement" -> announcementPage();
             case "about" -> aboutPage();
             default -> genericModulePage(module);
@@ -184,6 +191,7 @@ public class DashboardPage {
 
     private VBox createHomePage() {
         HBox services = new HBox(12,
+                serviceCard("packages", "Kumbh Packages", "Guided paid plans"),
                 serviceCard("transport", "Transport", "Routes & Timings"),
                 serviceCard("puja", "Puja Services", "Book Puja & Pandit"),
                 serviceCard("ghat", "Ghats & Snan", "Bathing Places"),
@@ -304,7 +312,25 @@ public class DashboardPage {
         return pageShell("Transport Services", "Bus, train, flight and last-mile Kumbh movement planner.",
                 transportJourneyPlanner(),
                 transportQuickStatus(),
+                infoPanel("Government Transport", "Official route information, bus schedules and public crowd movement guidance remain free."),
+                twoColumnGrid(
+                        richCard("transport", "Ozar Airport Arrival Plan",
+                                "Ozar Airport to Nashik Road / CBS connector guidance. Public information only.", "Free Info"),
+                        paidCard("transport", "Private Cab Reservation",
+                                "Optional paid private cab booking for approved service providers.", "Book Cab",
+                                "transport-private-cab", 1, 1)),
                 transportSolutionsGrid());
+    }
+
+    private VBox packagesPage() {
+        return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
+                twoColumnGrid(
+                        paidCard("packages", "Divine Nashik Package",
+                                "Ramkund, Trimbakeshwar and guided darshan support\nTraveller pass generated after verified payment.",
+                                "Pay Securely", "package-divine-nashik", 1, 1),
+                        paidCard("packages", "Family Seva Package",
+                                "Family assistance, route help and puja desk coordination\nIncludes a reusable booking pass.",
+                                "Pay Securely", "package-family-seva", 1, 1)));
     }
 
     private VBox transportJourneyPlanner() {
@@ -718,8 +744,8 @@ public class DashboardPage {
     private VBox pujaPage() {
         return pageShell("Puja Services", "Traditional puja support, verified counters and darshan guidance.",
                 twoColumnGrid(
-                        richCard("puja", "Ramkund Rudrabhishek Help Desk", "Pandit Booking\nReceipt Guidance\nPuja Slot Assistance", "Open"),
-                        richCard("puja", "Trimbakeshwar Darshan Support", "Temple Direction\nPuja Counter Guidance\nElderly Assistance", "Available"),
+                        paidCard("puja", "Ramkund Rudrabhishek Help Desk", "Pandit Booking\nReceipt Guidance\nPuja Slot Assistance", "Pay Securely", "puja-rudrabhishek", 1, 1),
+                        paidCard("puja", "Trimbakeshwar Darshan Support", "Temple Direction\nPuja Counter Guidance\nElderly Assistance", "Pay Securely", "puja-trimbakeshwar-darshan", 1, 1),
                         richCard("puja", "Pind Daan Information Counter", "Ritual Requirements\nTiming Windows\nVerified Contact Support", "Timings")));
     }
 
@@ -751,9 +777,9 @@ public class DashboardPage {
         return pageShell("Stay & Accommodation", "Hotels, dharamshalas and camp information.",
                 filterRow("Area", "Type", "Budget"),
                 twoColumnGrid(
-                        richCard("stay", "Dharamshala Availability Desk", "Panchavati / Trimbakeshwar\nBudget\nPilgrim-friendly", "Budget"),
-                        richCard("stay", "Family Hotel Zone", "Nashik Road\nCBS\nGangapur Road", "Family"),
-                        richCard("stay", "Festival Camp Stay", "Temporary camps\nVerified group stay support", "Camp"),
+                        paidCard("stay", "Dharamshala Availability Desk", "Panchavati / Trimbakeshwar\nBudget\nPilgrim-friendly", "Reserve", "stay-dharamshala-bed", 1, 1),
+                        paidCard("stay", "Family Hotel Zone", "Nashik Road\nCBS\nGangapur Road", "Reserve", "stay-family-room", 1, 1),
+                        paidCard("stay", "Festival Camp Stay", "Temporary camps\nVerified group stay support", "Reserve", "stay-festival-tent", 1, 1),
                         infoPanel("Area Guide", "Panchavati: close to Ramkund\nNashik Road: rail access\nTrimbakeshwar: temple-focused stay")));
     }
 
@@ -792,10 +818,26 @@ public class DashboardPage {
         return pageShell("Approved Businesses & Local Services", "Verified local services for pilgrims.",
                 categories,
                 twoColumnGrid(
-                        businessCard("Verified Food & Prasadam Zone", "Food & Prasadam", "Ramkund approach road"),
-                        businessCard("Approved Local Services", "Guides / Lockers / Charging", "Panchavati service lane"),
+                        richCard("business", "Verified Food & Prasadam Zone", "Food & Prasadam\nInformation-only listing\nNo forced online payment", "Contact"),
+                        paidCard("business", "Paid Parking Reservation", "Approved private parking near Ramkund approach road", "Pay Securely", "business-paid-parking", 1, 1),
+                        paidCard("business", "Tent Booking Advance", "Approved paid tent booking advance for festival camp stay", "Pay Advance", "business-tent-advance", 1, 1),
+                        paidCard("business", "Local Guide Inquiry", "Pay at location after service confirmation", "Request", "business-guide-pay-location", 1, 1),
                         businessCard("Medical Store Cluster", "Medical Stores", "CBS and Ramkund route"),
                         businessCard("Puja Items Market", "Puja Items", "Temple approach zone")));
+    }
+
+    private VBox myBookingsPage() {
+        AppSession.User user = AppSession.currentUser();
+        VBox rows = new VBox(10);
+        if (user == null || AppDataStore.bookingsForUser(user.uid()).isEmpty()) {
+            rows.getChildren().add(infoPanel("No bookings yet",
+                    "Paid bookings and tickets will appear here after you reserve a package, stay, puja or approved business service."));
+        } else {
+            for (AppDataStore.BookingRecord booking : AppDataStore.bookingsForUser(user.uid())) {
+                rows.getChildren().add(bookingRow(booking));
+            }
+        }
+        return pageShell("My Bookings & Payments", "Your real booking records, payment status and tickets.", rows);
     }
 
     private VBox announcementPage() {
@@ -901,6 +943,49 @@ public class DashboardPage {
                 paragraph(detail), arrowAction(action));
         card.getStyleClass().add("pilgrim-rich-card");
         return card;
+    }
+
+    private VBox paidCard(String module, String title, String detail, String action, String catalogItemId,
+            int quantity, int nights) {
+        Button button = new Button(action + "  >");
+        button.getStyleClass().add("pilgrim-small-action");
+        button.setOnAction(event -> {
+            button.setDisable(true);
+            paymentCoordinator.startPaidBooking(root.getScene() == null ? null : root.getScene().getWindow(),
+                    catalogItemId, quantity, nights);
+            button.setDisable(false);
+        });
+        VBox card = new VBox(8, new HBox(10, moduleIcon(module, "pilgrim-card-icon"), badge("Paid")),
+                strong(title), paragraph(detail), button);
+        card.getStyleClass().add("pilgrim-rich-card");
+        return card;
+    }
+
+    private HBox bookingRow(AppDataStore.BookingRecord booking) {
+        Button ticket = new Button("View Ticket");
+        ticket.getStyleClass().add("pilgrim-small-action");
+        ticket.setDisable(AppDataStore.ticketForBooking(booking.bookingId) == null);
+        ticket.setOnAction(event -> {
+            AppDataStore.TicketRecord record = AppDataStore.ticketForBooking(booking.bookingId);
+            if (record != null) {
+                TicketViewDialog.show(record);
+            }
+        });
+
+        Button refresh = new Button("Payment Status");
+        refresh.getStyleClass().add("text-button");
+        refresh.setOnAction(event -> showInfo("Payment Status",
+                booking.title + "\nBooking: " + booking.bookingId + "\nPayment: " + booking.paymentStatus
+                        + "\nBooking Status: " + booking.bookingStatus));
+
+        VBox text = new VBox(2, strong(booking.title),
+                muted(booking.bookingId + " | " + booking.moduleType + " | " + booking.dateText),
+                muted("Payment: " + booking.paymentStatus + " | Booking: " + booking.bookingStatus));
+        HBox row = new HBox(10, moduleIcon(booking.moduleType.toLowerCase(), "pilgrim-row-icon"), text,
+                createSpacer(), refresh, ticket);
+        row.getStyleClass().add("pilgrim-data-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 
     private VBox emergencyCard(String title, String number, String detail) {

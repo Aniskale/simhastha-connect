@@ -132,6 +132,41 @@ service cloud.firestore {
       allow read, update, delete: if isAdmin();
     }
 
+    // ================= PAYMENTS =================
+
+    match /payments/{id} {
+
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      // Normal clients may not create or mutate authoritative payment state.
+      // Trusted backend/admin mechanisms must perform payment writes.
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ================= BOOKINGS & TICKETS =================
+
+    match /bookings/{id} {
+
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid)
+        || (isBusiness() && resource.data.businessOwnerId == request.auth.uid)
+        || (isTransportOperator() && resource.data.transportOwnerId == request.auth.uid);
+
+      // Normal clients cannot forge payment or confirmation state.
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /tickets/{id} {
+
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid)
+        || (isBusiness() && resource.data.businessOwnerId == request.auth.uid);
+
+      // Tickets are issued by trusted backend/admin mechanisms only.
+      allow create, update, delete: if isAdmin();
+    }
+
     // ================= APP DATA =================
 
     match /appItems/{id} {

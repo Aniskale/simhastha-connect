@@ -21,6 +21,8 @@ public final class AppDataStore {
     private static final List<ServiceItem> announcements = new ArrayList<>();
     private static final List<ServiceItem> about = new ArrayList<>();
     private static final List<ApprovalRequest> pendingApprovals = new ArrayList<>();
+    private static final List<BookingRecord> bookings = new ArrayList<>();
+    private static final List<TicketRecord> tickets = new ArrayList<>();
     private static final FirestoreGateway firestore = new FirestoreGateway(FirebaseConfig.load());
 
     static {
@@ -120,6 +122,57 @@ public final class AppDataStore {
 
     public static List<ApprovalRequest> pendingApprovals() {
         return pendingApprovals;
+    }
+
+    public static List<BookingRecord> bookings() {
+        return bookings;
+    }
+
+    public static List<BookingRecord> bookingsForUser(String userId) {
+        return bookings.stream()
+                .filter(booking -> booking.userId.equals(userId))
+                .toList();
+    }
+
+    public static List<BookingRecord> bookingsForBusiness(String businessId) {
+        return bookings.stream()
+                .filter(booking -> booking.businessId.equals(businessId))
+                .toList();
+    }
+
+    public static BookingRecord addBooking(BookingRecord booking) {
+        bookings.add(booking);
+        return booking;
+    }
+
+    public static void updateBookingStatus(String bookingId, String bookingStatus, String paymentStatus) {
+        for (BookingRecord booking : bookings) {
+            if (booking.bookingId.equals(bookingId)) {
+                booking.bookingStatus = bookingStatus;
+                booking.paymentStatus = paymentStatus;
+                booking.updatedAt = String.valueOf(System.currentTimeMillis());
+                return;
+            }
+        }
+    }
+
+    public static TicketRecord addTicket(TicketRecord ticket) {
+        tickets.removeIf(existing -> existing.bookingId.equals(ticket.bookingId));
+        tickets.add(ticket);
+        return ticket;
+    }
+
+    public static List<TicketRecord> ticketsForUser(String userId) {
+        return tickets.stream()
+                .filter(ticket -> ticket.userId.equals(userId))
+                .toList();
+    }
+
+    public static TicketRecord ticketForBooking(String bookingId) {
+        return tickets.stream()
+                .filter(ticket -> ticket.bookingId.equals(bookingId))
+                .findFirst()
+                .orElse(null);
     }
 
     public static void addItem(String module, String title, String detail) {
@@ -243,6 +296,89 @@ public final class AppDataStore {
             this.detail = detail;
             this.targetModule = targetModule;
             this.ownerId = ownerId == null ? "" : ownerId;
+        }
+    }
+
+    public static final class BookingRecord {
+        public final String bookingId;
+        public final String userId;
+        public final String moduleType;
+        public final String catalogItemId;
+        public final String businessId;
+        public final String title;
+        public final String customerName;
+        public final String dateText;
+        public final String location;
+        public final int quantity;
+        public final int nights;
+        public final long amountPaise;
+        public final String currency;
+        public String bookingStatus;
+        public String paymentStatus;
+        public final String internalPaymentId;
+        public final String razorpayPaymentId;
+        public final String createdAt;
+        public String updatedAt;
+
+        public BookingRecord(String bookingId, String userId, String moduleType, String catalogItemId,
+                String businessId, String title, String customerName, String dateText, String location, int quantity,
+                int nights, long amountPaise, String currency, String bookingStatus, String paymentStatus,
+                String internalPaymentId, String razorpayPaymentId) {
+            this.bookingId = bookingId;
+            this.userId = userId;
+            this.moduleType = moduleType;
+            this.catalogItemId = catalogItemId;
+            this.businessId = businessId == null ? "" : businessId;
+            this.title = title;
+            this.customerName = customerName;
+            this.dateText = dateText;
+            this.location = location;
+            this.quantity = quantity;
+            this.nights = nights;
+            this.amountPaise = amountPaise;
+            this.currency = currency;
+            this.bookingStatus = bookingStatus;
+            this.paymentStatus = paymentStatus;
+            this.internalPaymentId = internalPaymentId == null ? "" : internalPaymentId;
+            this.razorpayPaymentId = razorpayPaymentId == null ? "" : razorpayPaymentId;
+            this.createdAt = String.valueOf(System.currentTimeMillis());
+            this.updatedAt = this.createdAt;
+        }
+    }
+
+    public static final class TicketRecord {
+        public final String ticketId;
+        public final String bookingId;
+        public final String paymentId;
+        public final String userId;
+        public final String moduleType;
+        public final String businessId;
+        public final String title;
+        public final String customerName;
+        public final String dateText;
+        public final String location;
+        public final long amountPaise;
+        public final String status;
+        public final String qrVerificationReference;
+        public final String issuedAt;
+
+        public TicketRecord(String ticketId, String bookingId, String paymentId, String userId, String moduleType,
+                String businessId, String title, String customerName, String dateText, String location,
+                long amountPaise, String status, String qrVerificationReference) {
+            this.ticketId = ticketId;
+            this.bookingId = bookingId;
+            this.paymentId = paymentId == null ? "" : paymentId;
+            this.userId = userId;
+            this.moduleType = moduleType;
+            this.businessId = businessId == null ? "" : businessId;
+            this.title = title;
+            this.customerName = customerName;
+            this.dateText = dateText;
+            this.location = location;
+            this.amountPaise = amountPaise;
+            this.status = status;
+            this.qrVerificationReference = qrVerificationReference;
+            this.issuedAt = String.valueOf(System.currentTimeMillis());
         }
     }
 
