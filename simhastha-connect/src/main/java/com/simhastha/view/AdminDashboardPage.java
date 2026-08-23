@@ -19,20 +19,65 @@ import javafx.stage.Stage;
 
 public class AdminDashboardPage {
 
+    private BorderPane page;
+    private Label pendingRequestsValue;
     private VBox approvalList;
     private VBox dataList;
     private ComboBox<String> moduleSelect;
 
     public Scene createScene(Stage stage) {
-        BorderPane page = new BorderPane();
+        if (!isAdminSession()) {
+            return createAccessDeniedScene(stage);
+        }
+
+        page = new BorderPane();
         page.getStyleClass().add("management-page");
         page.setTop(createHeader(stage));
-        page.setCenter(createScroll());
+        page.setCenter(loadingPanel());
 
         ThemedBackgroundPane root = new ThemedBackgroundPane(page);
         Scene scene = AppUi.createScene(root, this);
-        Platform.runLater(this::showPendingPopup);
+        refreshAdminData();
         return scene;
+    }
+
+    private boolean isAdminSession() {
+        AppSession.User user = AppSession.currentUser();
+        return user != null && user.isAdmin() && user.idToken() != null && !user.idToken().isBlank();
+    }
+
+    private Scene createAccessDeniedScene(Stage stage) {
+        BorderPane page = new BorderPane();
+        page.getStyleClass().add("management-page");
+        page.setTop(AppUi.createHeader(stage, "Admin Access Denied",
+                "A verified Firebase admin session is required.", () -> {
+                    AppSession.clear();
+                    stage.setScene(new LoginSelectionPage().createScene(stage));
+                }));
+
+        Label title = new Label("Admin session required");
+        title.getStyleClass().add("form-title");
+        Label detail = new Label("Please login with a Firebase account whose Firestore profile has role = admin.");
+        detail.getStyleClass().add("description-text");
+        detail.setWrapText(true);
+
+        Button login = new Button("Go to Admin Login");
+        login.getStyleClass().add("primary-button");
+        login.setOnAction(event -> {
+            AppSession.clear();
+            stage.setScene(new AdminAuthPage().createScene(stage));
+        });
+
+        VBox card = new VBox(14, title, detail, login);
+        card.getStyleClass().add("auth-card");
+        card.setMaxWidth(460);
+        card.setAlignment(Pos.CENTER_LEFT);
+
+        javafx.scene.layout.StackPane center = new javafx.scene.layout.StackPane(card);
+        center.setPadding(new Insets(38));
+        page.setCenter(center);
+        AppSession.clear();
+        return AppUi.createScene(new ThemedBackgroundPane(page), this);
     }
 
     private void showPendingPopup() {
@@ -82,10 +127,27 @@ public class AdminDashboardPage {
         return scroll;
     }
 
+    private VBox loadingPanel() {
+        VBox panel = new VBox(10, sectionTitle("Loading Admin Data"),
+                rowDetail("Fetching pending registrations from Firestore..."));
+        panel.getStyleClass().add("management-panel");
+        panel.setPadding(new Insets(24));
+        panel.setMaxWidth(520);
+        return panel;
+    }
+
+    private void refreshAdminData() {
+        String token = AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken();
+        java.util.concurrent.CompletableFuture.runAsync(() -> AppDataStore.refreshFirebaseData(token))
+                .whenComplete((ignored, error) -> Platform.runLater(() -> {
+                    page.setCenter(createScroll());
+                    showPendingPopup();
+                }));
+    }
+
     private VBox createContent() {
         HBox stats = new HBox(14,
-                statCard("Pending Requests", String.valueOf(AppDataStore.pendingApprovals().size()),
-                        "Business and transport approval queue"),
+                pendingRequestsStatCard(),
                 statCard("Transport Items", String.valueOf(AppDataStore.items("transport").size()),
                         "Approved user-facing routes"),
                 statCard("Business Listings", String.valueOf(AppDataStore.items("business").size()),
@@ -217,16 +279,23 @@ public class AdminDashboardPage {
             Button approve = new Button("Approve");
             approve.getStyleClass().add("primary-button");
             approve.setOnAction(event -> {
-                AppDataStore.approve(request);
-                refreshApprovals();
-                refreshDataList();
+                try {
+                    AppDataStore.approve(request);
+                    refreshAdminData();
+                } catch (AppDataStore.ApprovalUpdateException exception) {
+                    showInfo("Approval Failed", exception.getMessage());
+                }
             });
 
             Button reject = new Button("Reject");
             reject.getStyleClass().add("text-button");
             reject.setOnAction(event -> {
-                AppDataStore.reject(request);
-                refreshApprovals();
+                try {
+                    AppDataStore.reject(request);
+                    refreshAdminData();
+                } catch (AppDataStore.ApprovalUpdateException exception) {
+                    showInfo("Rejection Failed", exception.getMessage());
+                }
             });
 
             VBox text = new VBox(2, rowTitle(request.title + "  [" + request.type + "]"),
@@ -275,6 +344,26 @@ public class AdminDashboardPage {
         return card;
     }
 
+    private VBox pendingRequestsStatCard() {
+        pendingRequestsValue = new Label(String.valueOf(AppDataStore.pendingApprovals().size()));
+        pendingRequestsValue.getStyleClass().add("management-stat-value");
+        Label titleLabel = new Label("Pending Requests");
+        titleLabel.getStyleClass().add("management-stat-title");
+        Label detailLabel = new Label("Business and transport approval queue");
+        detailLabel.getStyleClass().add("management-stat-detail");
+        detailLabel.setWrapText(true);
+        VBox card = new VBox(5, pendingRequestsValue, titleLabel, detailLabel);
+        card.getStyleClass().add("management-stat-card");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private void syncPendingCounter() {
+        if (pendingRequestsValue != null) {
+            pendingRequestsValue.setText(String.valueOf(AppDataStore.pendingApprovals().size()));
+        }
+    }
+
     private HBox infoRow(String iconText, String title, String detail) {
         HBox row = new HBox(12, AppUi.symbolIcon(iconText, "management-row-icon"),
                 new VBox(2, rowTitle(title), rowDetail(detail)));
@@ -301,5 +390,13 @@ public class AdminDashboardPage {
         label.getStyleClass().add("management-row-detail");
         label.setWrapText(true);
         return label;
+    }
+
+    private void showInfo(String title, String message) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
     }
 }

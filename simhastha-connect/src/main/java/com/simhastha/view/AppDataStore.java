@@ -7,9 +7,6 @@ import java.util.UUID;
 
 public final class AppDataStore {
 
-    public static final String ADMIN_USER = "admin@simhastha.local";
-    public static final String ADMIN_PASSWORD = "admin123";
-
     private static final List<ServiceItem> transport = new ArrayList<>();
     private static final List<ServiceItem> puja = new ArrayList<>();
     private static final List<ServiceItem> ghats = new ArrayList<>();
@@ -98,10 +95,6 @@ public final class AppDataStore {
     }
 
     private AppDataStore() {
-    }
-
-    public static boolean isAdmin(String userId, String password) {
-        return ADMIN_USER.equalsIgnoreCase(userId.trim()) && ADMIN_PASSWORD.equals(password.trim());
     }
 
     public static List<ServiceItem> items(String module) {
@@ -200,27 +193,45 @@ public final class AppDataStore {
         }
     }
 
-    public static void approve(ApprovalRequest request) {
-        addItem(request.targetModule, request.title, request.detail);
-        if (request.ownerId != null && !request.ownerId.isBlank()) {
-            try {
-                firestore.updateUserStatus(request.ownerId, "approved", currentToken());
-                if ("business".equals(request.targetModule)) {
-                    firestore.updateDocumentStatus("businesses", request.ownerId, "approved", true, currentToken());
-                } else if ("transport".equals(request.targetModule)) {
-                    firestore.updateDocumentStatus("transportOperators", request.ownerId, "approved", true, currentToken());
-                }
-            } catch (Exception ignored) {
-                // Approval remains visible locally even if a remote rule blocks status update.
+    public static void approve(ApprovalRequest request) throws ApprovalUpdateException {
+        requireOwnerId(request);
+        try {
+            firestore.updateUserStatus(request.ownerId, "approved", currentToken());
+            if ("business".equals(request.targetModule)) {
+                firestore.updateDocumentStatus("businesses", request.ownerId, "approved", true, currentToken());
+            } else if ("transport".equals(request.targetModule)) {
+                firestore.updateDocumentStatus("transportOperators", request.ownerId, "approved", true, currentToken());
             }
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Approval could not be saved to Firestore. The request is still pending.", exception);
         }
+
+        addItem(request.targetModule, request.title, request.detail);
         pendingApprovals.remove(request);
         firestore.deleteApproval(request, currentToken());
     }
 
-    public static void reject(ApprovalRequest request) {
+    public static void reject(ApprovalRequest request) throws ApprovalUpdateException {
+        requireOwnerId(request);
+        try {
+            firestore.updateUserStatus(request.ownerId, "rejected", currentToken());
+            if ("business".equals(request.targetModule)) {
+                firestore.updateDocumentStatus("businesses", request.ownerId, "rejected", false, currentToken());
+            } else if ("transport".equals(request.targetModule)) {
+                firestore.updateDocumentStatus("transportOperators", request.ownerId, "rejected", false, currentToken());
+            }
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Rejection could not be saved to Firestore. The request is still pending.", exception);
+        }
+
         pendingApprovals.remove(request);
         firestore.deleteApproval(request, currentToken());
+    }
+
+    private static void requireOwnerId(ApprovalRequest request) throws ApprovalUpdateException {
+        if (request.ownerId == null || request.ownerId.isBlank()) {
+            throw new ApprovalUpdateException("Approval request is missing the Firebase UID. The request is still pending.");
+        }
     }
 
     public static boolean isFirebaseEnabled() {
@@ -295,7 +306,17 @@ public final class AppDataStore {
             this.title = title;
             this.detail = detail;
             this.targetModule = targetModule;
-            this.ownerId = ownerId == null ? "" : ownerId;
+            this.ownerId = ownerId == null ? "" : ownerId.trim();
+        }
+    }
+
+    public static final class ApprovalUpdateException extends Exception {
+        public ApprovalUpdateException(String message) {
+            super(message);
+        }
+
+        public ApprovalUpdateException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
@@ -400,9 +421,27 @@ public final class AppDataStore {
             }
 
             pendingApprovals.clear();
-            pendingApprovals.addAll(firestore.loadApprovals(idToken));
+            addUniqueApprovals(firestore.loadPendingBusinessApprovals(idToken), true);
+            addUniqueApprovals(firestore.loadApprovals(idToken), false);
         } catch (Exception ignored) {
             // Keep local seed data if Firebase is offline or rules are not ready yet.
+        }
+    }
+
+    private static void addUniqueApprovals(List<ApprovalRequest> approvals, boolean includeBusinessApprovals) {
+        for (ApprovalRequest approval : approvals) {
+            if (!includeBusinessApprovals && "business".equals(approval.targetModule)) {
+                continue;
+            }
+            if (approval.ownerId.isBlank()) {
+                continue;
+            }
+            boolean exists = pendingApprovals.stream()
+                    .anyMatch(existing -> approval.ownerId.equals(existing.ownerId)
+                            && approval.targetModule.equals(existing.targetModule));
+            if (!exists) {
+                pendingApprovals.add(approval);
+            }
         }
     }
 

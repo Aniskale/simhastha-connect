@@ -7,6 +7,8 @@ public final class AuthService {
     private static final FirebaseConfig CONFIG = FirebaseConfig.load();
     private static final FirebaseAuthGateway AUTH = new FirebaseAuthGateway(CONFIG);
     private static final FirestoreGateway FIRESTORE = new FirestoreGateway(CONFIG);
+    private static final java.util.Set<String> VALID_ROLES = java.util.Set.of(
+            "user", "business", "transport_operator", "admin");
 
     private AuthService() {
     }
@@ -31,15 +33,27 @@ public final class AuthService {
                     return AuthOutcome.failure("Your account profile is missing. Please contact admin.");
                 }
 
-                if (!profile.role().equals(expectedRole) && !"any".equals(expectedRole)) {
-                    return AuthOutcome.failure("This account is registered as " + profile.role() + ".");
+                if (!VALID_ROLES.contains(profile.role())) {
+                    return AuthOutcome.failure("Your account role is not valid. Please contact admin.");
+                }
+
+                boolean adminOverride = "admin".equals(profile.role());
+                if (!adminOverride && !profile.role().equals(expectedRole) && !"any".equals(expectedRole)) {
+                    return AuthOutcome.failure("Authentication succeeded, but this account is not authorized for this portal.");
                 }
 
                 if ("pending".equals(profile.status())) {
+                    if ("business".equals(profile.role())) {
+                        return AuthOutcome.failure("Your business registration is awaiting admin approval.");
+                    }
                     return AuthOutcome.failure("Your account is pending admin approval.");
                 }
-                if ("disabled".equals(profile.status()) || "rejected".equals(profile.status())) {
+                if ("disabled".equals(profile.status()) || "rejected".equals(profile.status())
+                        || "suspended".equals(profile.status())) {
                     return AuthOutcome.failure("This account is not active. Please contact admin.");
+                }
+                if ("business".equals(profile.role()) && !"approved".equals(profile.status())) {
+                    return AuthOutcome.failure("Your business registration is awaiting admin approval.");
                 }
 
                 AppSession.User user = new AppSession.User(
@@ -53,7 +67,7 @@ public final class AuthService {
                 AppDataStore.refreshFirebaseData(auth.idToken);
                 return AuthOutcome.success(user);
             } catch (Exception exception) {
-                return AuthOutcome.failure("Unable to connect to Firebase. Check internet and Firebase rules.");
+                return AuthOutcome.failure("Unable to complete authentication. Check internet, Firebase, and account permissions.");
             }
         });
     }

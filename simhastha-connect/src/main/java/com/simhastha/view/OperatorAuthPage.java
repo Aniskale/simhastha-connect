@@ -108,13 +108,8 @@ public class OperatorAuthPage {
 
             if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Operator Email and Password.");
-            } else if (!AuthService.isFirebaseEnabled() && AppDataStore.isAdmin(userId, userPassword)) {
-                AppSession.set(new AppSession.User("dev-admin", userId, "admin", "", "Admin", "active"));
-                Stage currentStage = (Stage) loginButton.getScene().getWindow();
-                AdminDashboardPage adminDashboardPage = new AdminDashboardPage();
-                currentStage.setScene(adminDashboardPage.createScene(currentStage));
             } else if (AuthService.isFirebaseEnabled()) {
-                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
+                runAuth(loginButton, AuthService.login(userId, userPassword, "transport_operator"));
             } else if (!registeredOperators.containsKey(userId)) {
                 showInfo("Login Failed", "Operator account not found. Please register first.");
             } else if (!registeredOperators.get(userId).password.equals(userPassword)) {

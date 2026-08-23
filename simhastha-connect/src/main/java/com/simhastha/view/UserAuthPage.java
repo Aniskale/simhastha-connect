@@ -86,11 +86,6 @@ public class UserAuthPage {
                 showInfo("Validation", "Please enter email and password.");
                 return;
             }
-            if (!AuthService.isFirebaseEnabled() && AppDataStore.isAdmin(userId, userPassword)) {
-                AppSession.set(new AppSession.User("dev-admin", userId, "admin", "", "Admin", "active"));
-                currentStage.setScene(new AdminDashboardPage().createScene(currentStage));
-                return;
-            }
             runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
         });
 

@@ -108,12 +108,8 @@ public class BusinessAuthPage {
 
             if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Business Email and Password.");
-            } else if (!AuthService.isFirebaseEnabled() && AppDataStore.isAdmin(userId, userPassword)) {
-                AppSession.set(new AppSession.User("dev-admin", userId, "admin", "", "Admin", "active"));
-                Stage stage = (Stage) loginButton.getScene().getWindow();
-                stage.setScene(new AdminDashboardPage().createScene(stage));
             } else if (AuthService.isFirebaseEnabled()) {
-                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
+                runAuth(loginButton, AuthService.login(userId, userPassword, "business"));
             } else if (!registeredBusinesses.containsKey(userId)) {
                 showInfo("Login Failed", "Business account not found. Please create an account first.");
             } else if (!registeredBusinesses.get(userId).password.equals(userPassword)) {

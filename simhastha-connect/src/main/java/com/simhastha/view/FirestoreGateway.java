@@ -73,6 +73,36 @@ public final class FirestoreGateway {
         return approvals;
     }
 
+    public List<AppDataStore.ApprovalRequest> loadPendingBusinessApprovals(String idToken)
+            throws IOException, InterruptedException {
+        String json = get(collectionUrl("businesses"), idToken);
+        List<AppDataStore.ApprovalRequest> approvals = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            String ownerId = ownerIdFromBusinessDocument(document);
+            String status = field(document.fields, "status");
+            String approved = boolField(document.fields, "approved");
+            if (!notBlank(ownerId) || (!"pending".equals(status) && !"false".equals(approved))) {
+                continue;
+            }
+
+            String businessName = valueOr("Business Registration", field(document.fields, "businessName"));
+            String category = field(document.fields, "category");
+            String location = field(document.fields, "location");
+            String mobile = field(document.fields, "mobile");
+            String detail = String.join(" | ", java.util.stream.Stream.of(category, location, mobile)
+                    .filter(this::notBlank)
+                    .toList());
+            approvals.add(new AppDataStore.ApprovalRequest(
+                    "business-" + ownerId,
+                    "Business Registration",
+                    businessName,
+                    detail,
+                    "business",
+                    ownerId));
+        }
+        return approvals;
+    }
+
     public UserProfile loadUserProfile(String uid, String idToken) throws IOException, InterruptedException {
         HttpRequest request = authorizedBuilder(documentUri("users", uid), idToken)
                 .timeout(Duration.ofSeconds(8))
@@ -313,6 +343,25 @@ public final class FirestoreGateway {
             return "";
         }
         return unescape(matcher.group(1));
+    }
+
+    private String boolField(String fieldsJson, String name) {
+        Matcher matcher = Pattern.compile("\"" + Pattern.quote(name)
+                + "\"\\s*:\\s*\\{\\s*\"booleanValue\"\\s*:\\s*(true|false)\\s*\\}", Pattern.DOTALL)
+                .matcher(fieldsJson == null ? "" : fieldsJson);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private String ownerIdFromBusinessDocument(Document document) {
+        String ownerId = field(document.fields, "ownerId");
+        if (notBlank(ownerId)) {
+            return ownerId.trim();
+        }
+        return looksLikeFirebaseUid(document.id) ? document.id.trim() : "";
+    }
+
+    private boolean looksLikeFirebaseUid(String value) {
+        return notBlank(value) && !value.contains("/") && value.length() >= 8;
     }
 
     private String extractFieldsObject(String json) {
