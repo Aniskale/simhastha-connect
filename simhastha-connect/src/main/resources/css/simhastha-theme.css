@@ -3917,3 +3917,70 @@
 .theme-dark .ticket-small {
     -fx-text-fill: #d8c8aa;
 }
+
+/* Business owner dashboard: compact operational workspace */
+.business-dashboard-root, .business-scroll > .viewport { -fx-background-color: #fff4df; }
+.business-scroll { -fx-background-color: transparent; -fx-background: transparent; }
+.business-sidebar { -fx-background-color: linear-gradient(to bottom, #641416, #3c0a0d); -fx-font-family: "Segoe UI", "Nirmala UI", sans-serif; }
+.business-sidebar-brand { -fx-text-fill: #fff4d6; -fx-font-size: 17px; -fx-font-weight: bold; -fx-font-family: "Georgia", serif; }
+.business-sidebar-tagline { -fx-text-fill: #edc673; -fx-font-size: 10px; -fx-font-weight: bold; }
+.business-nav-button, .business-sidebar-logout { -fx-background-color: transparent; -fx-text-fill: #fae6bb; -fx-font-size: 12px; -fx-font-weight: bold; -fx-alignment: center-left; -fx-padding: 10px 12px; -fx-background-radius: 8px; -fx-cursor: hand; }
+.business-nav-button:hover { -fx-background-color: rgba(255, 239, 198, 0.10); }
+.business-nav-button.business-nav-active { -fx-background-color: #e4901e; -fx-text-fill: #581112; }
+.business-sidebar-logout { -fx-text-fill: #ffc7a9; }
+.business-nav-icon { -fx-text-fill: #f0bd57; -fx-font-size: 17px; }
+.business-nav-active .business-nav-icon { -fx-text-fill: #581112; }
+.business-dashboard-content { -fx-font-family: "Segoe UI", "Nirmala UI", sans-serif; }
+.business-dashboard-header { -fx-padding: 2px 0 4px 0; }
+.business-welcome { -fx-text-fill: #5b1414; -fx-font-family: "Georgia", serif; -fx-font-size: 25px; -fx-font-weight: bold; }
+.business-name { -fx-text-fill: #8b3d0d; -fx-font-size: 13px; -fx-font-weight: bold; }
+.business-header-date, .business-stat-detail, .business-row-detail { -fx-text-fill: #76563b; -fx-font-size: 11px; }
+.business-header-icon { -fx-background-color: #fffaf0; -fx-background-radius: 999px; -fx-border-color: #e7c891; -fx-border-radius: 999px; -fx-text-fill: #7a0f12; -fx-font-size: 16px; }
+.business-summary-card, .business-panel { -fx-background-color: rgba(255, 251, 242, 0.96); -fx-background-radius: 12px; -fx-border-color: rgba(184, 100, 6, 0.25); -fx-border-radius: 12px; -fx-effect: dropshadow(gaussian, rgba(76, 27, 9, 0.11), 13, 0.12, 0, 4); }
+.business-summary-card { -fx-padding: 16px; -fx-min-height: 106px; }
+.business-panel { -fx-padding: 17px; }
+.business-stat-value { -fx-text-fill: #7a0f12; -fx-font-family: "Georgia", serif; -fx-font-size: 24px; -fx-font-weight: bold; }
+.business-stat-title, .business-row-title, .business-overview-value { -fx-text-fill: #3c1e13; -fx-font-size: 13px; -fx-font-weight: bold; }
+.business-section-title { -fx-text-fill: #6b1712; -fx-font-family: "Georgia", serif; -fx-font-size: 18px; -fx-font-weight: bold; }
+.business-data-row { -fx-background-color: #fff9ed; -fx-background-radius: 8px; -fx-border-color: rgba(184, 100, 6, 0.14); -fx-border-radius: 8px; -fx-padding: 9px 10px; }
+.business-row-icon { -fx-text-fill: #c55b0b; -fx-font-size: 17px; }
+.business-overview-key { -fx-text-fill: #76563b; -fx-font-size: 12px; }
+.business-status-badge { -fx-background-color: rgba(230, 145, 30, 0.15); -fx-background-radius: 999px; -fx-text-fill: #8b3d0d; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 4px 9px; }
+.business-empty-title { -fx-text-fill: #6b1712; -fx-font-size: 13px; -fx-font-weight: bold; }
+.business-text-action { -fx-background-color: transparent; -fx-text-fill: #a24606; -fx-font-size: 11px; -fx-font-weight: bold; -fx-cursor: hand; }
+.theme-dark .business-dashboard-root, .theme-dark .business-scroll > .viewport { -fx-background-color: #10151d; }
+.theme-dark .business-summary-card, .theme-dark .business-panel, .theme-dark .business-data-row { -fx-background-color: #17202b; -fx-border-color: rgba(229, 180, 76, 0.30); }
+.theme-dark .business-welcome, .theme-dark .business-stat-value, .theme-dark .business-section-title, .theme-dark .business-stat-title, .theme-dark .business-row-title, .theme-dark .business-overview-value, .theme-dark .business-empty-title { -fx-text-fill: #fff4d6; }
+.theme-dark .business-name, .theme-dark .business-row-icon, .theme-dark .business-text-action { -fx-text-fill: #f5c86b; }
+.theme-dark .business-header-date, .theme-dark .business-stat-detail, .theme-dark .business-row-detail, .theme-dark .business-overview-key { -fx-text-fill: #d8c8aa; }
+
+/* Keep settings controls readable on the warm light surface. */
+.business-dashboard-root .theme-toggle {
+    -fx-background-color: #fff8e9;
+    -fx-border-color: #d99b31;
+    -fx-border-radius: 999px;
+    -fx-background-radius: 999px;
+    -fx-padding: 2px 5px;
+}
+.business-dashboard-root .theme-toggle-icon,
+.business-dashboard-root .theme-toggle-button .theme-toggle-icon {
+    -fx-text-fill: #7a0f12;
+}
+.business-dashboard-root .theme-toggle-button-active .theme-toggle-icon {
+    -fx-text-fill: #d65c0b;
+}
+.business-panel .check-box .text {
+    -fx-fill: #3c1e13;
+    -fx-font-size: 12px;
+}
+.business-panel .check-box .box {
+    -fx-background-color: #fffdf7;
+    -fx-border-color: #a24606;
+    -fx-border-radius: 3px;
+}
+.business-panel .check-box:selected .mark {
+    -fx-background-color: #7a0f12;
+}
+.theme-dark .business-panel .check-box .text { -fx-fill: #fff4d6; }
+.theme-dark .business-dashboard-root .theme-toggle { -fx-background-color: #253142; -fx-border-color: #e5b44c; }
+.theme-dark .business-dashboard-root .theme-toggle-icon { -fx-text-fill: #fff4d6; }

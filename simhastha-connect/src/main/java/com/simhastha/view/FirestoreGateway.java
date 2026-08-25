@@ -216,6 +216,65 @@ public final class FirestoreGateway {
         sendAuthorizedPatch(documentUri("businesses", uid), json, idToken);
     }
 
+    /**
+     * Business registrations are stored under the authenticated owner's UID.  Keeping
+     * this lookup server-side of the UI prevents an owner from choosing another
+     * business document by id.
+     */
+    public BusinessProfile loadBusinessForOwner(String ownerId, String idToken) throws IOException, InterruptedException {
+        if (!notBlank(ownerId)) {
+            return null;
+        }
+        HttpRequest request = authorizedBuilder(documentUri("businesses", ownerId), idToken)
+                .timeout(Duration.ofSeconds(8)).GET().build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() == 404) {
+            return null;
+        }
+        if (response.statusCode() >= 400) {
+            throw new IOException("Business profile read failed: " + response.statusCode());
+        }
+        String fields = extractFieldsObject(response.body());
+        String resolvedOwnerId = valueOr(ownerId, field(fields, "ownerId"));
+        return new BusinessProfile(ownerId, resolvedOwnerId, field(fields, "businessName"), field(fields, "ownerName"),
+                field(fields, "category"), field(fields, "location"), field(fields, "description"),
+                field(fields, "status"), boolField(fields, "approved"));
+    }
+
+    public List<BusinessInventoryItem> loadBusinessItems(String businessId, String ownerId, String idToken)
+            throws IOException, InterruptedException {
+        // Use an owner-constrained Firestore query.  Listing the entire collection
+        // would be rejected by the owner-scoped security rule and could leak data.
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"businessItems\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"ownerId\"},"
+                + "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + escape(ownerId) + "\"}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())), query, idToken);
+        List<BusinessInventoryItem> result = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            String fields = document.fields;
+            if (!businessId.equals(field(fields, "businessId")) || !ownerId.equals(field(fields, "ownerId"))) {
+                continue;
+            }
+            result.add(new BusinessInventoryItem(document.id, field(fields, "businessId"), field(fields, "ownerId"),
+                    field(fields, "category"), field(fields, "itemType"), field(fields, "name"),
+                    field(fields, "description"), field(fields, "price"), field(fields, "capacity"),
+                    field(fields, "totalUnits"), field(fields, "availableUnits"), field(fields, "stock"),
+                    field(fields, "facilities"), field(fields, "availability"),
+                    "true".equalsIgnoreCase(boolField(fields, "active"))));
+        }
+        return result;
+    }
+
+    public void saveBusinessItem(BusinessInventoryItem item, String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(fieldJson("businessId", item.businessId()), fieldJson("ownerId", item.ownerId()),
+                fieldJson("category", item.category()), fieldJson("itemType", item.itemType()), fieldJson("name", item.name()),
+                fieldJson("description", item.description()), fieldJson("price", item.price()), fieldJson("capacity", item.capacity()),
+                fieldJson("totalUnits", item.totalUnits()), fieldJson("availableUnits", item.availableUnits()),
+                fieldJson("stock", item.stock()), fieldJson("facilities", item.facilities()), fieldJson("availability", item.availability()),
+                boolFieldJson("active", item.active()), fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(documentUri("businessItems", item.itemId()), json, idToken);
+    }
+
     public void saveTransportOperatorProfile(String uid, OperatorAuthPage.OperatorAccount account, String idToken)
             throws IOException, InterruptedException {
         String json = fieldsJson(
@@ -298,6 +357,16 @@ public final class FirestoreGateway {
         return response.body();
     }
 
+    private String post(URI uri, String json, String idToken) throws IOException, InterruptedException {
+        HttpResponse<String> response = client.send(authorizedBuilder(uri, idToken)
+                .timeout(Duration.ofSeconds(8))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json))
+                .build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) {
+            throw new IOException("Firestore query failed: " + response.statusCode());
+        }
+        return response.body();
     private List<Document> loadCollectionDocuments(String collection, String idToken)
             throws IOException, InterruptedException {
         try {
@@ -516,6 +585,13 @@ public final class FirestoreGateway {
     public record UserProfile(String uid, String name, String email, String mobile, String role, String status) {
     }
 
+    public record BusinessProfile(String businessId, String ownerId, String businessName, String ownerName,
+            String category, String location, String description, String status, String approved) {
+    }
+
+    public record BusinessInventoryItem(String itemId, String businessId, String ownerId, String category,
+            String itemType, String name, String description, String price, String capacity, String totalUnits,
+            String availableUnits, String stock, String facilities, String availability, boolean active) {
     public static class PermissionDeniedException extends IOException {
         public PermissionDeniedException(String message) {
             super(message);

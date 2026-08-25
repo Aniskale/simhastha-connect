@@ -40,6 +40,16 @@ service cloud.firestore {
         || resource.data.published == true;
     }
 
+    function ownsActiveBusiness(businessId) {
+      return isBusiness()
+        && exists(/databases/$(database)/documents/businesses/$(businessId))
+        && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid
+        && (
+          get(/databases/$(database)/documents/businesses/$(businessId)).data.status == "approved"
+          || get(/databases/$(database)/documents/businesses/$(businessId)).data.status == "active"
+        );
+    }
+
     // ================= USERS =================
 
     match /users/{uid} {
@@ -93,7 +103,11 @@ service cloud.firestore {
         && isBusiness()
         && request.resource.data.ownerId == resource.data.ownerId
         && request.resource.data.status == resource.data.status
-        && request.resource.data.approved == resource.data.approved;
+        && request.resource.data.approved == resource.data.approved
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'description', 'mobile', 'location', 'openingTime', 'closingTime',
+          'facilities', 'amenities', 'photoReferences', 'updatedAt'
+        ]);
 
       allow update, delete: if isAdmin();
     }
@@ -153,8 +167,28 @@ service cloud.firestore {
         || (isBusiness() && resource.data.businessOwnerId == request.auth.uid)
         || (isTransportOperator() && resource.data.transportOwnerId == request.auth.uid);
 
-      // Normal clients cannot forge payment or confirmation state.
-      allow create, update, delete: if isAdmin();
+      // A business may only advance its own operational booking state.  Payment,
+      // user, business and transaction fields remain immutable on this path.
+      allow update: if isBusiness()
+        && resource.data.businessOwnerId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'bookingStatus', 'updatedAt', 'rejectionReason', 'ownerOperationalNotes'
+        ])
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.businessId == resource.data.businessId
+        && request.resource.data.amountPaise == resource.data.amountPaise
+        && request.resource.data.paymentStatus == resource.data.paymentStatus
+        && request.resource.data.razorpayPaymentId == resource.data.razorpayPaymentId
+        && request.resource.data.internalPaymentId == resource.data.internalPaymentId
+        && (
+          (resource.data.bookingStatus == 'PENDING'
+            && request.resource.data.bookingStatus in ['CONFIRMED', 'REJECTED'])
+          || (resource.data.bookingStatus == 'CONFIRMED'
+            && request.resource.data.bookingStatus == 'COMPLETED')
+        );
+
+      // Booking creation, payment state, and deletion stay authoritative.
+      allow create, delete: if isAdmin();
     }
 
     match /tickets/{id} {
@@ -172,6 +206,69 @@ service cloud.firestore {
     match /appItems/{id} {
       allow read: if true;
       allow write: if isAdmin();
+    }
+
+    // ================= BUSINESS OPERATIONAL DATA =================
+
+    match /businessItems/{itemId} {
+      allow read: if isAdmin()
+        || (isBusiness() && resource.data.ownerId == request.auth.uid)
+        || (resource.data.active == true
+          && exists(/databases/$(database)/documents/businesses/$(resource.data.businessId))
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.approved == true
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.status in ['approved', 'active']);
+
+      allow create: if isBusiness()
+        && request.resource.data.ownerId == request.auth.uid
+        && ownsActiveBusiness(request.resource.data.businessId)
+        && request.resource.data.active is bool
+        && request.resource.data.price is string
+        && request.resource.data.ownerId == get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerId;
+
+      allow update: if isAdmin() || (
+        isBusiness()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.businessId == resource.data.businessId
+        && ownsActiveBusiness(resource.data.businessId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'itemType', 'name', 'description', 'price', 'capacity', 'totalUnits',
+          'availableUnits', 'stock', 'facilities', 'availability', 'active', 'updatedAt'
+        ])
+      );
+
+      // Historical items are soft-deactivated by their owner; only admins delete.
+      allow delete: if isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if isAdmin()
+        || (isBusiness() && exists(/databases/$(database)/documents/businesses/$(resource.data.businessId))
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.ownerId == request.auth.uid)
+        || resource.data.moderationStatus == 'approved';
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1 && request.resource.data.rating <= 5;
+
+      allow update: if isAdmin() || (
+        isSignedIn() && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.businessId == resource.data.businessId
+      );
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /businessNotifications/{notificationId} {
+      allow read: if isAdmin()
+        || (isBusiness() && resource.data.ownerId == request.auth.uid);
+      allow update: if isBusiness()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.businessId == resource.data.businessId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'updatedAt']);
+      allow create, delete: if isAdmin();
     }
 
     // ================= PUBLIC MODULES =================
