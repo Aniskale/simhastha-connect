@@ -11,14 +11,14 @@ public final class AppNavigator {
 
     public static void openDashboardFor(Stage stage, AppSession.User user, BiConsumer<String, String> showMessage) {
         switch (user.role()) {
-            case "admin" -> stage.setScene(new AdminDashboardPage().createScene(stage));
-            case "business" -> stage.setScene(new BusinessOwnerDashboardPage(
+            case "admin" -> NavigationUtil.navigate(stage, new AdminDashboardPage().createScene(stage));
+            case "business" -> NavigationUtil.navigate(stage, new BusinessOwnerDashboardPage(
                     new BusinessAuthPage.BusinessAccount(user.displayName(), user.displayName(), "Business",
                             "", user.email(), "", "")).createScene(stage));
-            case "transport_operator" -> stage.setScene(new OperatorDashboardPage(
+            case "transport_operator" -> NavigationUtil.navigate(stage, new OperatorDashboardPage(
                     new OperatorAuthPage.OperatorAccount(user.displayName(), user.displayName(), "",
                             user.email(), "Transport", "")).createScene(stage));
-            case "user" -> stage.setScene(new DashboardPage().createScene(stage));
+            case "user" -> NavigationUtil.navigate(stage, new DashboardPage().createScene(stage));
             default -> showMessage.accept("Login Failed", "Account role is not valid.");
         }
     }

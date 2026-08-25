@@ -33,7 +33,7 @@ public class UserAuthPage {
         page.getStyleClass().add("themed-content-page");
         page.setTop(AppUi.createHeader(stage, "User Authentication", "Login or create your pilgrim account", () -> {
             LoginSelectionPage loginSelectionPage = new LoginSelectionPage();
-            stage.setScene(loginSelectionPage.createScene(stage));
+            NavigationUtil.navigate(stage, loginSelectionPage.createScene(stage));
         }));
 
         formSlot = new VBox();
@@ -124,7 +124,7 @@ public class UserAuthPage {
                                 showInfo("Registration Failed", result == null ? "Registration failed." : result.message());
                                 return;
                             }
-                            currentStage.setScene(new DashboardPage().createScene(currentStage));
+                            NavigationUtil.navigate(currentStage, new DashboardPage().createScene(currentStage));
                         }));
             }
         });

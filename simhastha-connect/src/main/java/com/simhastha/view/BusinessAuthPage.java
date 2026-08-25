@@ -39,7 +39,7 @@ public class BusinessAuthPage {
         page.setTop(AppUi.createHeader(stage, "Business Login / Registration",
                 "For local services in the Simhastha ecosystem", () -> {
                     BusinessPartnerPage businessPartnerPage = new BusinessPartnerPage();
-                    stage.setScene(businessPartnerPage.createScene(stage));
+                    NavigationUtil.navigate(stage, businessPartnerPage.createScene(stage));
                 }));
 
         formSlot = new VBox();
@@ -116,7 +116,8 @@ public class BusinessAuthPage {
                 showInfo("Login Failed", "Incorrect password. Please try again.");
             } else {
                 BusinessOwnerDashboardPage dashboardPage = new BusinessOwnerDashboardPage(registeredBusinesses.get(userId));
-                ((Stage) loginButton.getScene().getWindow()).setScene(dashboardPage.createScene((Stage) loginButton.getScene().getWindow()));
+                Stage currentStage = (Stage) loginButton.getScene().getWindow();
+                NavigationUtil.navigate(currentStage, dashboardPage.createScene(currentStage));
             }
         });
 

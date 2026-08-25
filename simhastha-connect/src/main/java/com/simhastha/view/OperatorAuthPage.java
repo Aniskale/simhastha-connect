@@ -39,7 +39,7 @@ public class OperatorAuthPage {
         page.setTop(AppUi.createHeader(stage, "Transport Operator Login / Registration",
                 "For buses, routes, timings and fare information", () -> {
                     BusinessPartnerPage businessPartnerPage = new BusinessPartnerPage();
-                    stage.setScene(businessPartnerPage.createScene(stage));
+                    NavigationUtil.navigate(stage, businessPartnerPage.createScene(stage));
                 }));
 
         formSlot = new VBox();
@@ -117,7 +117,7 @@ public class OperatorAuthPage {
             } else {
                 Stage currentStage = (Stage) loginButton.getScene().getWindow();
                 OperatorDashboardPage dashboardPage = new OperatorDashboardPage(registeredOperators.get(userId));
-                currentStage.setScene(dashboardPage.createScene(currentStage));
+                NavigationUtil.navigate(currentStage, dashboardPage.createScene(currentStage));
             }
         });
 

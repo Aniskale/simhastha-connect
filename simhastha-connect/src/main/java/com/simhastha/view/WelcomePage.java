@@ -56,7 +56,7 @@ public class WelcomePage {
         root.getChildren().addAll(backgroundImage, createHeroOverlay(), page);
 
         Scene scene = new Scene(root, 1200, 680);
-        bindCoverImage(scene);
+        bindCoverImage();
         addTheme(scene);
         ThemeManager.addListener(() -> {
             ThemeManager.applyTo(root);
@@ -530,13 +530,13 @@ public class WelcomePage {
         return imageView;
     }
 
-    private void bindCoverImage(Scene scene) {
-        backgroundImage.fitWidthProperty().bind(scene.widthProperty());
-        backgroundImage.fitHeightProperty().bind(scene.heightProperty());
+    private void bindCoverImage() {
+        backgroundImage.fitWidthProperty().bind(root.widthProperty());
+        backgroundImage.fitHeightProperty().bind(root.heightProperty());
 
         ChangeListener<Number> viewportListener = (observable, oldValue, newValue) -> updateImageViewport();
-        scene.widthProperty().addListener(viewportListener);
-        scene.heightProperty().addListener(viewportListener);
+        root.widthProperty().addListener(viewportListener);
+        root.heightProperty().addListener(viewportListener);
         backgroundImage.imageProperty().addListener((observable, oldValue, newValue) -> updateImageViewport());
         updateImageViewport();
     }
@@ -580,7 +580,7 @@ public class WelcomePage {
 
     private void openLoginSelection(Stage stage) {
         LoginSelectionPage loginSelectionPage = new LoginSelectionPage();
-        stage.setScene(loginSelectionPage.createScene(stage));
+        NavigationUtil.navigate(stage, loginSelectionPage.createScene(stage));
     }
 
     private void playTitleAnimation(BorderPane content) {

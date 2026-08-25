@@ -21,7 +21,7 @@ public class AdminAuthPage {
         page.getStyleClass().add("themed-content-page");
         page.setTop(AppUi.createHeader(stage, "Admin Login", "Secure Firebase role-based access", () -> {
             LoginSelectionPage loginSelectionPage = new LoginSelectionPage();
-            stage.setScene(loginSelectionPage.createScene(stage));
+            NavigationUtil.navigate(stage, loginSelectionPage.createScene(stage));
         }));
 
         TextField email = AppUi.textField("Admin Email");

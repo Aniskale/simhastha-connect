@@ -367,6 +367,8 @@ public final class FirestoreGateway {
             throw new IOException("Firestore query failed: " + response.statusCode());
         }
         return response.body();
+    }
+
     private List<Document> loadCollectionDocuments(String collection, String idToken)
             throws IOException, InterruptedException {
         try {
@@ -592,6 +594,8 @@ public final class FirestoreGateway {
     public record BusinessInventoryItem(String itemId, String businessId, String ownerId, String category,
             String itemType, String name, String description, String price, String capacity, String totalUnits,
             String availableUnits, String stock, String facilities, String availability, boolean active) {
+    }
+
     public static class PermissionDeniedException extends IOException {
         public PermissionDeniedException(String message) {
             super(message);

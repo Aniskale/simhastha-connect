@@ -51,7 +51,7 @@ public class OperatorDashboardPage {
         logout.setOnAction(event -> {
             AppSession.clear();
             OperatorAuthPage authPage = new OperatorAuthPage();
-            stage.setScene(authPage.createScene(stage));
+            NavigationUtil.navigate(stage, authPage.createScene(stage));
         });
 
         HBox header = new HBox(18, titleBox, AppUi.spacer(), AppUi.createThemeToggle(), logout);

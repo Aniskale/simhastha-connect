@@ -25,7 +25,7 @@ public class LoginSelectionPage {
         page.getStyleClass().add("themed-content-page");
         page.setTop(AppUi.createHeader(stage, "Choose Your Portal", "Continue your Simhastha journey", () -> {
             WelcomePage welcomePage = new WelcomePage();
-            stage.setScene(welcomePage.createScene(stage));
+            NavigationUtil.navigate(stage, welcomePage.createScene(stage));
         }));
         page.setCenter(createPortalOptions(stage));
 
@@ -43,7 +43,7 @@ public class LoginSelectionPage {
         Button userButton = (Button) userCard.getChildren().get(userCard.getChildren().size() - 1);
         userButton.setOnAction(event -> {
             UserAuthPage userAuthPage = new UserAuthPage();
-            stage.setScene(userAuthPage.createScene(stage));
+            NavigationUtil.navigate(stage, userAuthPage.createScene(stage));
         });
 
         VBox businessCard = createPortalCard(
@@ -55,7 +55,7 @@ public class LoginSelectionPage {
         Button businessButton = (Button) businessCard.getChildren().get(businessCard.getChildren().size() - 1);
         businessButton.setOnAction(event -> {
             BusinessPartnerPage businessPartnerPage = new BusinessPartnerPage();
-            stage.setScene(businessPartnerPage.createScene(stage));
+            NavigationUtil.navigate(stage, businessPartnerPage.createScene(stage));
         });
 
         StackPane visual = createScenicFeature();

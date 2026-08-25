@@ -86,7 +86,7 @@ public class DashboardPage {
         Button logout = sidebarAction("logout", "Logout");
         logout.setOnAction(eventAction -> {
             AppSession.clear();
-            stage.setScene(new UserAuthPage().createScene(stage));
+            NavigationUtil.navigate(stage, new UserAuthPage().createScene(stage));
         });
 
         VBox sidebar = new VBox(12, brand, menu, createSpacer(), support, logout);

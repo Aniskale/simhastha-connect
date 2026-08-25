@@ -19,7 +19,7 @@ public class BusinessPartnerPage {
         page.getStyleClass().add("themed-content-page");
         page.setTop(AppUi.createHeader(stage, "Business & Partner", "Select your service role", () -> {
             LoginSelectionPage loginSelectionPage = new LoginSelectionPage();
-            stage.setScene(loginSelectionPage.createScene(stage));
+            NavigationUtil.navigate(stage, loginSelectionPage.createScene(stage));
         }));
         page.setCenter(createSelectionCards(stage));
 
@@ -38,7 +38,7 @@ public class BusinessPartnerPage {
         Button businessButton = (Button) localBusiness.getChildren().get(localBusiness.getChildren().size() - 1);
         businessButton.setOnAction(event -> {
             BusinessAuthPage businessAuthPage = new BusinessAuthPage();
-            stage.setScene(businessAuthPage.createScene(stage));
+            NavigationUtil.navigate(stage, businessAuthPage.createScene(stage));
         });
 
         VBox transportOperator = createCard(
@@ -51,7 +51,7 @@ public class BusinessPartnerPage {
         Button operatorButton = (Button) transportOperator.getChildren().get(transportOperator.getChildren().size() - 1);
         operatorButton.setOnAction(event -> {
             OperatorAuthPage operatorAuthPage = new OperatorAuthPage();
-            stage.setScene(operatorAuthPage.createScene(stage));
+            NavigationUtil.navigate(stage, operatorAuthPage.createScene(stage));
         });
 
         HBox cards = new HBox(26, localBusiness, transportOperator);

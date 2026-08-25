@@ -1,12 +1,17 @@
 package com.simhastha.view;
 
+import java.net.URL;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
+import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -18,30 +23,26 @@ import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
-import javafx.scene.layout.TilePane;
 import javafx.scene.layout.VBox;
-import javafx.scene.shape.Rectangle;
 import javafx.stage.Stage;
 
 public class AdminDashboardPage {
 
     private static final DateTimeFormatter ADMIN_TIME = DateTimeFormatter.ofPattern("dd MMM yyyy | hh:mm a");
     private static final List<String> SECTIONS = List.of(
-            "Overview", "Live Operations", "Users", "Business Approvals", "Businesses", "Bookings",
+            "Dashboard", "Live Operations", "Users", "Business Approvals", "Businesses", "Bookings",
             "Transport", "Transport Operators", "Puja Services", "Ghats & Snan", "Stay", "Lost & Found",
-            "Schedule & Events", "Announcements", "Emergency", "Reports & Analytics", "System", "Logout");
+            "Schedule & Events", "Announcements", "Emergency", "Reports & Analytics", "System");
 
-    private BorderPane page;
+    private final Map<String, Button> navButtons = new LinkedHashMap<>();
+    private BorderPane root;
     private Stage stage;
-    private VBox sidebar;
-    private VBox contentHost;
-    private VBox approvalList;
-    private VBox dataList;
-    private ComboBox<String> moduleSelect;
-    private String selectedSection = "Overview";
+    private String selectedSection = "Dashboard";
 
     public Scene createScene(Stage stage) {
         this.stage = stage;
@@ -49,13 +50,14 @@ public class AdminDashboardPage {
             return createAccessDeniedScene(stage);
         }
 
-        page = new BorderPane();
-        page.getStyleClass().add("admin-dashboard-root");
-        page.setCenter(loadingPanel());
+        root = new BorderPane();
+        root.getStyleClass().add("pilgrim-dashboard-root");
+        root.setLeft(createSidebar());
+        root.setCenter(scroll(loadingPanel()));
 
-        Scene scene = new Scene(page, 1200, 680);
+        Scene scene = new Scene(root, 1200, 680);
         ThemeManager.addTheme(scene, this);
-        ThemeManager.addListener(() -> ThemeManager.applyTo(page));
+        ThemeManager.addListener(() -> ThemeManager.applyTo(root));
         refreshAdminData();
         return scene;
     }
@@ -75,7 +77,7 @@ public class AdminDashboardPage {
         accessPage.setTop(AppUi.createHeader(stage, "Admin Access Denied",
                 "A verified active Firebase admin session is required.", () -> {
                     AppSession.clear();
-                    stage.setScene(new LoginSelectionPage().createScene(stage));
+                    NavigationUtil.navigate(stage, new LoginSelectionPage().createScene(stage));
                 }));
 
         Label title = new Label("Admin session required");
@@ -88,7 +90,7 @@ public class AdminDashboardPage {
         login.getStyleClass().add("primary-button");
         login.setOnAction(event -> {
             AppSession.clear();
-            stage.setScene(new AdminAuthPage().createScene(stage));
+            NavigationUtil.navigate(stage, new AdminAuthPage().createScene(stage));
         });
 
         VBox card = new VBox(14, title, detail, login);
@@ -103,56 +105,61 @@ public class AdminDashboardPage {
         return AppUi.createScene(new ThemedBackgroundPane(accessPage), this);
     }
 
-    private HBox createHeader() {
-        Label title = new Label("Admin Dashboard");
-        title.getStyleClass().add("admin-page-title");
-        Label subtitle = new Label("Operations & Governance Control");
-        subtitle.getStyleClass().add("page-subtitle");
+    private VBox createSidebar() {
+        navButtons.clear();
+        ImageView logo = createImage("/images/sclogo.png", 54, 54, 0.5, 0.5);
+        logo.getStyleClass().add("pilgrim-sidebar-logo-image");
 
-        AppSession.User user = AppSession.currentUser();
-        HBox profile = adminProfile(user);
-        Label time = new Label(currentTimeText());
-        time.getStyleClass().add("admin-time-chip");
-        Label connection = compactSystemChip(AppDataStore.adminOverview());
+        Label name = new Label("SIMHASTHA\nCONNECT");
+        name.getStyleClass().add("pilgrim-sidebar-brand-strong");
+        Label event = new Label("Nashik Simhastha 2027");
+        event.getStyleClass().add("pilgrim-sidebar-tagline");
+        Label role = new Label("ADMIN CONTROL CENTER");
+        role.getStyleClass().add("admin-sidebar-role");
 
-        HBox header = new HBox(12, new VBox(2, title, subtitle), AppUi.spacer(), connection, notificationBell(),
-                time, AppUi.createThemeToggle(), profile);
-        header.getStyleClass().add("admin-topbar");
-        header.setAlignment(Pos.CENTER_LEFT);
-        return header;
+        HBox brand = new HBox(10, logo, new VBox(1, name, event, role));
+        brand.getStyleClass().add("pilgrim-sidebar-brand");
+        brand.setAlignment(Pos.CENTER_LEFT);
+
+        VBox menu = new VBox(4);
+        for (String section : SECTIONS) {
+            menu.getChildren().add(nav(section, section.equals(selectedSection)));
+        }
+        ScrollPane menuScroll = new ScrollPane(menu);
+        menuScroll.getStyleClass().add("admin-sidebar-scroll");
+        menuScroll.setFitToWidth(true);
+        menuScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        VBox.setVgrow(menuScroll, Priority.ALWAYS);
+
+        Button logout = sidebarAction("Logout");
+        logout.setOnAction(actionEvent -> {
+            AppSession.clear();
+            NavigationUtil.navigate(stage, new AdminAuthPage().createScene(stage));
+        });
+
+        VBox sidebar = new VBox(12, brand, menuScroll, logout);
+        sidebar.getStyleClass().add("pilgrim-sidebar");
+        sidebar.setPadding(new Insets(15, 13, 14, 13));
+        sidebar.setPrefWidth(238);
+        return sidebar;
     }
 
-    private StackPane notificationBell() {
-        Label bell = AppUi.symbolIcon("\uE7F4", "admin-bell-icon");
-        int unread = AppDataStore.pendingApprovals().size();
-        Label badge = new Label(String.valueOf(unread));
-        badge.getStyleClass().add("admin-badge");
-        badge.setVisible(unread > 0);
-        StackPane stack = new StackPane(bell, badge);
-        stack.getStyleClass().add("admin-bell");
-        StackPane.setAlignment(badge, Pos.TOP_RIGHT);
-        return stack;
+    private Button nav(String section, boolean active) {
+        Button button = new Button(section);
+        button.setGraphic(moduleIcon(section, active ? "pilgrim-nav-icon-active" : "pilgrim-nav-icon"));
+        button.getStyleClass().add(active ? "pilgrim-nav-button-active" : "pilgrim-nav-button");
+        button.setMaxWidth(Double.MAX_VALUE);
+        navButtons.put(section, button);
+        button.setOnAction(event -> showSection(section));
+        return button;
     }
 
-    private HBox adminProfile(AppSession.User user) {
-        Label avatar = AppUi.symbolIcon("\uE77B", "admin-avatar-icon");
-        Label name = new Label(user == null || user.displayName().isBlank() ? "Admin" : user.displayName());
-        name.getStyleClass().add("admin-profile-name");
-        Label role = new Label("Administrator");
-        role.getStyleClass().add("admin-profile-role");
-        HBox profile = new HBox(9, avatar, new VBox(1, name, role));
-        profile.getStyleClass().add("admin-profile-chip");
-        profile.setAlignment(Pos.CENTER_LEFT);
-        return profile;
-    }
-
-    private VBox loadingPanel() {
-        VBox panel = new VBox(10, sectionTitle("Loading Administration Data"),
-                rowDetail("Fetching Firestore overview, business approvals and platform modules..."));
-        panel.getStyleClass().add("management-panel");
-        panel.setPadding(new Insets(24));
-        panel.setMaxWidth(620);
-        return panel;
+    private Button sidebarAction(String text) {
+        Button button = new Button(text);
+        button.setGraphic(moduleIcon("Logout", "pilgrim-nav-icon-danger"));
+        button.getStyleClass().add("pilgrim-sidebar-action");
+        button.setMaxWidth(Double.MAX_VALUE);
+        return button;
     }
 
     private void refreshAdminData() {
@@ -160,320 +167,292 @@ public class AdminDashboardPage {
         java.util.concurrent.CompletableFuture.runAsync(() -> {
             AppDataStore.refreshFirebaseData(token);
             AppDataStore.refreshAdminOverview(token);
-        }).whenComplete((ignored, error) -> Platform.runLater(() -> {
-            page.setCenter(createAdminShell());
-        }));
+        }).whenComplete((ignored, error) -> Platform.runLater(() -> showSection(selectedSection)));
     }
 
-    private HBox createAdminShell() {
-        sidebar = createSidebar();
-        contentHost = new VBox();
-        contentHost.getStyleClass().add("admin-content-host");
-        renderSelectedSection();
-
-        ScrollPane contentScroll = new ScrollPane(contentHost);
-        contentScroll.getStyleClass().add("page-scroll");
-        contentScroll.setFitToWidth(true);
-        contentScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-
-        VBox workspace = new VBox(12, createHeader(), contentScroll);
-        workspace.getStyleClass().add("admin-workspace");
-        VBox.setVgrow(contentScroll, Priority.ALWAYS);
-
-        HBox shell = new HBox(sidebar, workspace);
-        shell.getStyleClass().add("admin-shell");
-        HBox.setHgrow(workspace, Priority.ALWAYS);
-        return shell;
+    private void showSection(String section) {
+        selectedSection = section;
+        setActiveSection(section);
+        Node page = switch (section) {
+            case "Dashboard" -> dashboardPage();
+            case "Live Operations" -> liveOperationsPage();
+            case "Users" -> usersPage();
+            case "Business Approvals" -> businessApprovalsPage();
+            case "Businesses" -> businessesPage();
+            case "Bookings" -> bookingsPage();
+            case "Transport" -> transportPage();
+            case "Transport Operators" -> transportOperatorsPage();
+            case "Puja Services" -> pujaServicesPage();
+            case "Ghats & Snan" -> ghatsPage();
+            case "Stay" -> stayPage();
+            case "Lost & Found" -> lostFoundPage();
+            case "Schedule & Events" -> schedulePage();
+            case "Announcements" -> announcementsPage();
+            case "Emergency" -> emergencyPage();
+            case "Reports & Analytics" -> reportsPage();
+            case "System" -> systemPage();
+            default -> dashboardPage();
+        };
+        root.setCenter(scroll(page));
     }
 
-    private VBox createSidebar() {
-        VBox nav = new VBox(6);
-        nav.getStyleClass().add("admin-sidebar");
-        nav.getChildren().add(adminSidebarBrand());
-        VBox menu = new VBox(5);
-        menu.getStyleClass().add("admin-sidebar-menu");
-        for (String section : SECTIONS) {
-            if ("Logout".equals(section)) {
-                continue;
-            }
-            Button button = new Button(section);
-            button.setGraphic(AppUi.symbolIcon(sectionIcon(section),
-                    section.equals(selectedSection) ? "admin-nav-icon-active" : "admin-nav-icon"));
-            button.getStyleClass().add(section.equals(selectedSection) ? "admin-nav-active" : "admin-nav-button");
-            button.setMaxWidth(Double.MAX_VALUE);
-            button.setAlignment(Pos.CENTER_LEFT);
-            button.setOnAction(event -> {
-                selectedSection = section;
-                sidebar.getChildren().setAll(createSidebar().getChildren());
-                renderSelectedSection();
-            });
-            menu.getChildren().add(button);
-        }
-        ScrollPane menuScroll = new ScrollPane(menu);
-        menuScroll.getStyleClass().add("admin-menu-scroll");
-        menuScroll.setFitToWidth(true);
-        menuScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        VBox.setVgrow(menuScroll, Priority.ALWAYS);
-
-        Button logout = new Button("Logout");
-        logout.setGraphic(AppUi.symbolIcon("\uE7E8", "admin-nav-icon-danger"));
-        logout.getStyleClass().add("admin-sidebar-action");
-        logout.setMaxWidth(Double.MAX_VALUE);
-        logout.setAlignment(Pos.CENTER_LEFT);
-        logout.setOnAction(event -> {
-            AppSession.clear();
-            stage.setScene(new AdminAuthPage().createScene(stage));
+    private void setActiveSection(String section) {
+        navButtons.forEach((key, button) -> {
+            boolean selected = key.equals(section);
+            button.getStyleClass().removeAll("pilgrim-nav-button", "pilgrim-nav-button-active");
+            button.getStyleClass().add(selected ? "pilgrim-nav-button-active" : "pilgrim-nav-button");
+            button.setGraphic(moduleIcon(key, selected ? "pilgrim-nav-icon-active" : "pilgrim-nav-icon"));
         });
-        nav.getChildren().addAll(menuScroll, logout);
-        return nav;
     }
 
-    private HBox adminSidebarBrand() {
-        ImageView logo = createImage("/images/sclogo.png", 52, 52);
-        logo.getStyleClass().add("admin-sidebar-logo-image");
-        Label name = new Label("SIMHASTHA\nCONNECT");
-        name.getStyleClass().add("admin-sidebar-brand-strong");
-        Label detail = new Label("ADMINISTRATION\nNashik Simhastha 2027");
-        detail.getStyleClass().add("admin-sidebar-tagline");
-        HBox brand = new HBox(10, logo, new VBox(1, name, detail));
-        brand.getStyleClass().add("admin-sidebar-brand");
-        brand.setAlignment(Pos.CENTER_LEFT);
-        return brand;
+    private ScrollPane scroll(Node content) {
+        ScrollPane scroll = new ScrollPane(content);
+        scroll.getStyleClass().add("pilgrim-dashboard-scroll");
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        return scroll;
     }
 
-    private void renderSelectedSection() {
-        if (contentHost != null) {
-            contentHost.getChildren().setAll(sectionHeader(selectedSection), sectionContent(selectedSection));
-        }
+    private VBox loadingPanel() {
+        return pageShell("Admin Dashboard", "Operations & Governance Control",
+                infoPanel("Loading", "Refreshing approvals, bookings and operational data."));
     }
 
-    private VBox sectionContent(String section) {
-        return switch (section) {
-            case "Overview" -> overviewSection();
-            case "Live Operations" -> liveOperationsSection();
-            case "Users" -> usersSection();
-            case "Business Approvals" -> createApprovalPanel();
-            case "Businesses" -> businessesSection();
-            case "Bookings" -> createBookingsPanel();
-            case "Transport" -> createModuleManager("transport", "Transport", "Publish approved user-facing routes and fare guidance.");
-            case "Transport Operators" -> transportOperatorsSection();
-            case "Puja Services" -> createModuleManager("puja", "Puja Services", "Manage public puja support listings.");
-            case "Ghats & Snan" -> createModuleManager("ghat", "Ghats & Snan", "Manage bathing ghat and crowd guidance.");
-            case "Stay" -> createModuleManager("stay", "Stay", "Manage accommodation and camp guidance.");
-            case "Lost & Found" -> createModuleManager("lost", "Lost & Found", "Manage public lost/found help information.");
-            case "Schedule & Events" -> createModuleManager("schedule", "Schedule & Events", "Publish event schedule and operations windows.");
-            case "Announcements" -> createModuleManager("announcement", "Announcements", "Publish official notices and alerts.");
-            case "Emergency" -> createModuleManager("emergency", "Emergency", "Maintain verified emergency contacts.");
-            case "Reports & Analytics" -> reportsSection();
-            case "System" -> systemSection();
-            default -> overviewSection();
-        };
-    }
-
-    private VBox sectionHeader(String titleText) {
-        Label title = new Label(titleText);
-        title.getStyleClass().add("admin-section-heading");
-        Label detail = new Label(sectionSubtitle(titleText));
-        detail.getStyleClass().add("page-subtitle");
-        detail.setWrapText(true);
-        VBox header = new VBox(4, title, detail);
-        header.getStyleClass().add("admin-section-header");
-        return header;
-    }
-
-    private String sectionSubtitle(String section) {
-        return switch (section) {
-            case "Overview" -> "Firestore-backed platform snapshot with live operational signals.";
-            case "Business Approvals" -> "Approve or reject pending business registrations from Firestore.";
-            case "Reports & Analytics" -> "High-level platform metrics and analytics foundations.";
-            case "System" -> "Firebase connection, admin bootstrap and operational safeguards.";
-            default -> "Monitor, manage and publish platform-wide Simhastha Connect data.";
-        };
-    }
-
-    private VBox overviewSection() {
+    private VBox dashboardPage() {
         AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        TilePane kpis = kpiGrid();
-        kpis.getChildren().addAll(
-                kpiCard("Total Users", overview.totalUsers(), "Registered platform accounts", "\uE716"),
-                kpiCard("Approved Businesses", overview.approvedBusinesses(), "Published marketplace providers", "\uE719"),
-                kpiCard("Pending Approvals", overview.pendingBusinesses(), "Waiting for admin decision", "\uE7BA"),
-                kpiCard("Transport Operators", overview.transportOperators(), "Registered operator profiles", "\uE806"),
-                kpiCard("Active Routes", overview.activeRoutes(), "Published transport items", "\uE707"),
-                kpiCard("Today's Bookings", overview.todaysBookings(), "Booking records available", "\uE8A7"),
-                kpiCard("Active Events", overview.activeEvents(), "Published schedule items", "\uE787"),
-                kpiCard("Open Lost & Found Cases", overview.lostFoundOpenCases(), "Open help cases/items", "\uE721"));
+        HBox quick = new HBox(12,
+                quickCard("Business Approvals", "Pending registrations", "Business Approvals"),
+                quickCard("Bookings", "Transactions & reservations", "Bookings"),
+                quickCard("Transport", "Routes & operations", "Transport"),
+                quickCard("Emergency", "Safety operations", "Emergency"),
+                quickCard("Lost & Found", "Priority cases", "Lost & Found"),
+                quickCard("Announcements", "Official notices", "Announcements"));
+        quick.setAlignment(Pos.CENTER_LEFT);
 
-        HBox lower = new HBox(14, recentActivityPanel(), operationsStatusPanel());
+        HBox lower = new HBox(14, operationalOverviewPanel(overview), operationsStatusPanel(overview));
         HBox.setHgrow(lower.getChildren().get(0), Priority.ALWAYS);
         HBox.setHgrow(lower.getChildren().get(1), Priority.ALWAYS);
 
-        VBox content = new VBox(14, overviewHero(), sectionTitle("Operational Overview"), kpis, lower,
-                liveOperationsPreview());
-        if (!overview.firebaseConnected()) {
-            content.getChildren().add(1, syncIssueBanner());
-        }
-        return content;
+        return pageShell("Admin Dashboard", "Official Nashik Simhastha 2027 operations control",
+                photoHeader(),
+                quick,
+                overview.firebaseConnected() ? alertStrip("Operational alerts, pending approvals and important system updates will appear here.")
+                        : syncIssueStrip(),
+                lower);
     }
 
-    private VBox liveOperationsSection() {
-        return new VBox(16, liveOperationsPreview(), recentActivityPanel(),
-                emptyPanel("Live command stream", "Realtime incident, crowd, transport and alert streams can be connected in Part 2."));
+    private HBox topControls() {
+        Label title = new Label("Admin Dashboard");
+        title.getStyleClass().add("pilgrim-page-title");
+
+        HBox actions = new HBox(10, title, createSpacer(), AppUi.createThemeToggle(),
+                roundButton("\uE7F4", "Notifications"), roundButton("\uE77B", "Admin Profile"));
+        actions.getStyleClass().add("pilgrim-top-actions");
+        actions.setAlignment(Pos.CENTER_LEFT);
+        return actions;
     }
 
-    private VBox usersSection() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        TilePane stats = kpiGrid();
-        stats.getChildren().addAll(
-                kpiCard("Total Users", overview.totalUsers(), "Firestore users collection"),
-                kpiCard("Admin Access", isAdminSession() ? 1 : 0, "Current active admin session"));
-        return moduleTemplate("Users", "Review platform identities and role safety.", stats,
-                emptyPanel("User management foundation",
-                "Role-filtered user table, suspension actions and profile inspection are reserved for Part 2."));
-    }
+    private StackPane photoHeader() {
+        ImageView image = createImage("/images/welcome-light.png", 980, 148, 0.54, 0.48);
+        image.getStyleClass().add("pilgrim-hero-image");
+        VBox copy = new VBox(3,
+                label("SIMHASTHA CONNECT", "pilgrim-hero-title"),
+                label("ADMINISTRATION & OPERATIONS", "pilgrim-hero-subtitle"),
+                label("॥ ॐ नमः शिवाय ॥", "pilgrim-hero-mantra"),
+                label("Official Nashik Simhastha 2027 Control Center", "pilgrim-hero-detail"),
+                label("Government Operations • Safety • Services • Monitoring", "pilgrim-hero-detail"));
+        copy.setAlignment(Pos.CENTER);
+        copy.setPadding(new Insets(16));
 
-    private VBox businessesSection() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        TilePane stats = kpiGrid();
-        stats.getChildren().addAll(
-                kpiCard("Approved Businesses", overview.approvedBusinesses(), "Firestore businesses approved"),
-                kpiCard("Pending Businesses", overview.pendingBusinesses(), "Needs admin review"));
-        return moduleTemplate("Businesses", "Monitor approved business records and public listings.", stats,
-                listPanel("Approved Business Listings", AppDataStore.items("business"),
-                        "No approved business listings are published yet."));
-    }
-
-    private VBox transportOperatorsSection() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        TilePane stats = kpiGrid();
-        stats.getChildren().addAll(
-                kpiCard("Transport Operators", overview.transportOperators(), "Firestore transportOperators collection"),
-                kpiCard("Active Routes", overview.activeRoutes(), "Published user routes"));
-        return moduleTemplate("Transport Operators", "Monitor operator profiles and route publishing readiness.", stats,
-                emptyPanel("Transport operator registry foundation",
-                "Operator profile table, suspend actions and operator detail review are reserved for Part 2."));
-    }
-
-    private VBox reportsSection() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        TilePane cards = kpiGrid();
-        cards.getChildren().addAll(
-                kpiCard("Users", overview.totalUsers(), "Current platform reach", "\uE716"),
-                kpiCard("Businesses", overview.approvedBusinesses(), "Approved providers", "\uE719"),
-                kpiCard("Bookings", overview.todaysBookings(), "Booking records visible to admin", "\uE8A7"),
-                kpiCard("Open Lost & Found", overview.lostFoundOpenCases(), "Open support items", "\uE721"));
-        return moduleTemplate("Reports & Analytics", "Platform, business, transport, bookings and safety insights.", cards,
-                emptyPanel("Analytics foundation",
-                "Charts, exports, date filters and operational reports are intended for Part 2."));
-    }
-
-    private StackPane overviewHero() {
-        ImageView image = createImage("/images/ramkund_sunrise.jpg", 980, 148);
-        image.getStyleClass().add("admin-hero-image");
-        Rectangle clip = new Rectangle(980, 148);
-        clip.setArcWidth(22);
-        clip.setArcHeight(22);
-        image.setClip(clip);
-
-        Label eyebrow = new Label("SIMHASTHA CONNECT");
-        eyebrow.getStyleClass().add("admin-hero-eyebrow");
-        Label title = new Label("Administration & Operations Control Center");
-        title.getStyleClass().add("admin-hero-title");
-        Label detail = new Label("Unified control for Simhastha services, safety and public operations.");
-        detail.getStyleClass().add("admin-hero-detail");
-        detail.setWrapText(true);
-        HBox badges = new HBox(8,
-                statusChip("Admin Active", true),
-                statusChip("Operations", true));
-        VBox text = new VBox(6, eyebrow, title, detail, badges);
-        text.setPadding(new Insets(18, 20, 18, 22));
-        StackPane hero = new StackPane(image, text);
-        hero.getStyleClass().add("admin-hero");
-        StackPane.setAlignment(text, Pos.CENTER_LEFT);
+        StackPane hero = new StackPane(image, copy);
+        hero.getStyleClass().add("pilgrim-hero");
+        hero.setMinHeight(148);
         return hero;
     }
 
-    private VBox systemSection() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        VBox bootstrap = new VBox(9,
-                infoRow("\uE8D7", "First admin bootstrap",
-                        "Create a Firebase Authentication user, then create users/{uid} with uid, name, email, role = admin, status = active, createdAt."),
-                infoRow("\uE72E", "No public admin registration",
-                        "Admin access remains Firebase Auth plus Firestore role/status verification only."),
-                infoRow("\uE753", "Firebase project",
-                        "Configured through existing firebase.properties, expected project: superxkhumbh."));
-        bootstrap.getStyleClass().add("management-panel");
-        bootstrap.setPadding(new Insets(16));
-        return moduleTemplate("System", "Connection health, admin access and application safety.", statusBanner(overview),
-                createFirebasePanel(), bootstrap);
+    private VBox quickCard(String title, String detail, String targetSection) {
+        VBox card = new VBox(8, moduleIcon(targetSection, "pilgrim-card-icon"), strong(title), muted(detail), arrowAction("View", targetSection));
+        card.getStyleClass().add("pilgrim-module-card");
+        card.setMinSize(132, 104);
+        card.setOnMouseClicked(event -> showSection(targetSection));
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
     }
 
-    private VBox createApprovalPanel() {
-        approvalList = new VBox(9);
-        refreshApprovals();
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        TilePane stats = kpiGrid();
-        stats.getChildren().addAll(
-                kpiCard("Pending Requests", AppDataStore.pendingApprovals().size(), "Awaiting admin decision", "\uE7BA"),
-                kpiCard("Approved Today", 0, "Daily approval analytics in Part 2", "\uE73E"),
-                kpiCard("Rejected", 0, "Rejection analytics in Part 2", "\uE711"),
-                kpiCard("Total Businesses", overview.approvedBusinesses() + overview.pendingBusinesses(),
-                        "Approved plus pending records", "\uE719"));
-        VBox panel = new VBox(14, sectionTitle("Pending Request Queue"), approvalList);
-        panel.getStyleClass().add("management-panel");
-        panel.setMinHeight(360);
-        return moduleTemplate("Business Approvals", "Review and manage pending business registrations.", stats, panel);
+    private StackPane alertStrip(String text) {
+        Label label = new Label(text);
+        label.getStyleClass().add("pilgrim-ticker-text");
+        StackPane strip = new StackPane(label);
+        strip.getStyleClass().add("pilgrim-alert-ticker");
+        strip.setMinHeight(30);
+        return strip;
     }
 
-    private VBox createModuleManager(String module, String titleText, String helperText) {
-        moduleSelect = new ComboBox<>();
-        moduleSelect.getItems().addAll("transport", "puja", "ghat", "emergency", "stay", "lost", "schedule",
-                "business", "announcement");
-        moduleSelect.setValue(module);
-        moduleSelect.getStyleClass().add("input-combo");
-        moduleSelect.setOnAction(event -> {
-            selectedSection = moduleSectionName(moduleSelect.getValue());
-            renderSelectedSection();
-        });
+    private HBox syncIssueStrip() {
+        Button retry = new Button("Retry");
+        retry.getStyleClass().add("pilgrim-small-action");
+        retry.setOnAction(event -> refreshAdminData());
+        HBox row = new HBox(10, muted("Some live data is temporarily unavailable."), createSpacer(), retry);
+        row.getStyleClass().add("pilgrim-alert-ticker");
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.setPadding(new Insets(0, 12, 0, 12));
+        row.setMinHeight(34);
+        return row;
+    }
 
-        TextField titleInput = AppUi.textField("Title / time / name");
-        TextField detailInput = AppUi.textField("Details / number / route / instruction");
-        Button add = new Button("Publish to User App");
-        add.getStyleClass().add("primary-button");
-        add.setOnAction(event -> {
-            if (!titleInput.getText().trim().isEmpty() && !detailInput.getText().trim().isEmpty()) {
-                AppDataStore.addItem(moduleSelect.getValue(), titleInput.getText().trim(), detailInput.getText().trim());
-                titleInput.clear();
-                detailInput.clear();
-                refreshDataList();
+    private VBox operationalOverviewPanel(AppDataStore.AdminOverview overview) {
+        VBox rows = new VBox(8,
+                metricRow("Users", String.valueOf(overview.totalUsers()), "Total registered accounts"),
+                metricRow("Approved Businesses", String.valueOf(overview.approvedBusinesses()), "Verified providers"),
+                metricRow("Pending Approvals", String.valueOf(AppDataStore.pendingApprovals().size()), "Business registrations"),
+                metricRow("Today's Bookings", String.valueOf(overview.todaysBookings()), "Booking records"));
+        VBox panel = new VBox(12, sectionTitle("Operational Overview"), rows);
+        panel.getStyleClass().add("pilgrim-panel");
+        return panel;
+    }
+
+    private VBox operationsStatusPanel(AppDataStore.AdminOverview overview) {
+        VBox rows = new VBox(8,
+                statusDataRow("Transport", overview.activeRoutes() > 0 ? "Normal" : "No active update"),
+                statusDataRow("Ghats", AppDataStore.items("ghat").isEmpty() ? "No active update" : "Guidance published"),
+                statusDataRow("Emergency", AppDataStore.items("emergency").isEmpty() ? "No active alerts" : "Contacts active"),
+                statusDataRow("Schedule", overview.activeEvents() > 0 ? "Published" : "No active update"),
+                statusDataRow("Announcements", overview.activeAnnouncements() + " active"));
+        VBox panel = new VBox(12, sectionTitle("Operations Status"), rows);
+        panel.getStyleClass().add("pilgrim-panel");
+        return panel;
+    }
+
+    private HBox metricRow(String title, String value, String detail) {
+        HBox row = dataRow("Reports & Analytics", title, detail);
+        Label count = label(value, "admin-compact-count");
+        row.getChildren().addAll(createSpacer(), count);
+        return row;
+    }
+
+    private HBox statusDataRow(String title, String status) {
+        HBox row = dataRow("Live Operations", title, status);
+        row.getChildren().add(statusBadge(status));
+        return row;
+    }
+
+    private VBox liveOperationsPage() {
+        GridPane grid = twoColumnGrid(
+                richCard("Transport", "Transport", "Routes, stops, fare guidance and alerts.", "Open"),
+                richCard("Ghats & Snan", "Ghats", "Crowd, bathing and safety guidance.", "Open"),
+                richCard("Emergency", "Emergency", "Contacts, hospitals, camps and alerts.", "Open"),
+                richCard("Schedule & Events", "Schedule / Events", "Published event and operation windows.", "Open"));
+        return pageShell("Live Operations", "Monitor current Simhastha operational signals.", grid,
+                infoPanel("Command Stream", "Realtime incident, crowd, transport and alert streams can be connected when backend streams are available."));
+    }
+
+    private VBox usersPage() {
+        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
+        HBox stats = new HBox(12,
+                metric("0", "Suspended"),
+                metric(String.valueOf(overview.totalUsers()), "Total Users"),
+                metric(isAdminSession() ? "Active" : "Inactive", "Admin Session"));
+        return pageShell("Users", "Manage registered Simhastha Connect accounts.",
+                stats,
+                filterRow("Search user / email / phone", "Role", "Status"),
+                infoPanel("User Registry", "Role-filtered user table, suspension actions and profile inspection will appear here when user list APIs are available."));
+    }
+
+    private VBox businessApprovalsPage() {
+        VBox rows = new VBox(10);
+        if (AppDataStore.pendingApprovals().isEmpty()) {
+            rows.getChildren().add(dataRow("Business Approvals", "No pending requests", "New business registrations will appear here."));
+        } else {
+            for (AppDataStore.ApprovalRequest request : List.copyOf(AppDataStore.pendingApprovals())) {
+                rows.getChildren().add(approvalRow(request));
+            }
+        }
+        HBox stats = new HBox(12,
+                metric(String.valueOf(AppDataStore.pendingApprovals().size()), "Pending"),
+                metric("0", "Approved"),
+                metric("0", "Rejected"),
+                metric(String.valueOf(AppDataStore.adminOverview().approvedBusinesses() + AppDataStore.adminOverview().pendingBusinesses()), "Total"));
+        return pageShell("Business Approvals", "Review and verify business registrations.",
+                stats,
+                infoPanel("Registration Queue", rows));
+    }
+
+    private HBox approvalRow(AppDataStore.ApprovalRequest request) {
+        Button view = smallButton("View Details");
+        view.setOnAction(event -> showInfo(request.title, request.detail));
+
+        Button approve = smallButton("Approve");
+        approve.getStyleClass().add("admin-success-action");
+        approve.setOnAction(event -> {
+            if (!confirm("Approve Business", "Approve " + request.title + "?")) {
+                return;
+            }
+            try {
+                AppDataStore.approve(request);
                 refreshAdminData();
+            } catch (AppDataStore.ApprovalUpdateException exception) {
+                showInfo("Approval Failed", exception.getMessage());
             }
         });
 
-        dataList = new VBox(9);
-        refreshDataList();
-        VBox panel = new VBox(12, sectionTitle(titleText + " Management"), rowDetail(helperText),
-                moduleSelect, titleInput, detailInput, add, dataList);
-        panel.getStyleClass().add("management-panel");
-        return moduleTemplate(titleText, helperText, panel);
+        Button reject = smallButton("Reject");
+        reject.getStyleClass().add("admin-danger-action");
+        reject.setOnAction(event -> {
+            if (!confirm("Reject Business", "Reject " + request.title + "?")) {
+                return;
+            }
+            try {
+                AppDataStore.reject(request);
+                refreshAdminData();
+            } catch (AppDataStore.ApprovalUpdateException exception) {
+                showInfo("Rejection Failed", exception.getMessage());
+            }
+        });
+
+        VBox text = new VBox(2,
+                strong(request.title),
+                muted("Owner: " + valueOr("Unknown", request.ownerId)
+                        + " | Category: " + request.type
+                        + " | Location/Contact: " + request.detail
+                        + " | Status: Pending"));
+        HBox row = new HBox(10, moduleIcon("Business Approvals", "pilgrim-row-icon"), text, createSpacer(), view, approve, reject);
+        row.getStyleClass().add("pilgrim-data-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 
-    private String moduleSectionName(String module) {
-        return switch (module) {
-            case "transport" -> "Transport";
-            case "puja" -> "Puja Services";
-            case "ghat" -> "Ghats & Snan";
-            case "stay" -> "Stay";
-            case "lost" -> "Lost & Found";
-            case "schedule" -> "Schedule & Events";
-            case "announcement" -> "Announcements";
-            case "emergency" -> "Emergency";
-            case "business" -> "Businesses";
-            default -> "Overview";
-        };
+    private VBox businessesPage() {
+        HBox filters = new HBox(8, badge("All"), badge("Stay"), badge("Food"), badge("Parking"), badge("Tent"),
+                badge("Shop"), badge("Toilet"), badge("Other"));
+        VBox rows = new VBox(10);
+        List<AppDataStore.ServiceItem> businesses = AppDataStore.items("business");
+        if (businesses.isEmpty()) {
+            rows.getChildren().add(dataRow("Businesses", "No approved business listings", "Approved providers will appear here."));
+        } else {
+            for (AppDataStore.ServiceItem business : businesses) {
+                rows.getChildren().add(providerRow(business));
+            }
+        }
+        return pageShell("Businesses", "Manage approved Simhastha service providers.",
+                searchBar("Search business / owner / contact"),
+                filters,
+                infoPanel("Approved Providers", rows));
     }
 
-    private VBox createBookingsPanel() {
+    private HBox providerRow(AppDataStore.ServiceItem item) {
+        Button view = smallButton("View");
+        view.setOnAction(event -> showInfo(item.title, item.detail));
+        Button edit = smallButton("Edit");
+        Button suspend = smallButton("Suspend/Activate");
+        HBox row = new HBox(10, moduleIcon("Businesses", "pilgrim-row-icon"),
+                new VBox(2, strong(item.title), muted(item.category + " | Owner: - | " + item.detail + " | Status: Approved")),
+                createSpacer(), view, edit, suspend);
+        row.getStyleClass().add("pilgrim-data-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private VBox bookingsPage() {
         long successful = AppDataStore.bookings().stream().filter(booking -> "PAID".equals(booking.paymentStatus)).count();
         long pending = AppDataStore.bookings().stream().filter(booking -> "PENDING".equals(booking.paymentStatus)).count();
         long failed = AppDataStore.bookings().stream().filter(booking -> "FAILED".equals(booking.paymentStatus)).count();
@@ -482,384 +461,423 @@ public class AdminDashboardPage {
                 .mapToLong(booking -> booking.amountPaise)
                 .sum();
 
-        TilePane summary = kpiGrid();
-        summary.getChildren().addAll(
-                kpiCard("Total Transactions", AppDataStore.bookings().size(), "Central payment records"),
-                kpiCard("Successful", successful, "Verified paid bookings"),
-                kpiCard("Pending", pending, "Processing or awaiting webhook"),
-                kpiCard("Failed", failed, "Failed or cancelled payments"),
-                kpiCard("Total Collected", "Rs " + (collected / 100), "Paid amount only"));
+        HBox stats = new HBox(12,
+                metric(String.valueOf(AppDataStore.bookings().size()), "Total Bookings"),
+                metric(String.valueOf(successful), "Successful"),
+                metric(String.valueOf(pending), "Pending"),
+                metric(String.valueOf(failed), "Failed"),
+                metric("Rs " + (collected / 100), "Total Collected"));
 
-        VBox rows = new VBox(9);
+        VBox rows = new VBox(10);
         if (AppDataStore.bookings().isEmpty()) {
-            rows.getChildren().add(infoRow("\uE8A5", "No transactions yet", "Paid module bookings will appear here."));
+            rows.getChildren().add(dataRow("Bookings", "No bookings yet", "Paid module bookings will appear here."));
         } else {
             for (AppDataStore.BookingRecord booking : AppDataStore.bookings()) {
-                rows.getChildren().add(infoRow("\uE8A7", booking.title + " | " + booking.paymentStatus,
-                        "Booking: " + booking.bookingId + " | User: " + booking.userId + " | Module: "
-                                + booking.moduleType + " | Amount: Rs " + (booking.amountPaise / 100)));
+                rows.getChildren().add(bookingRow(booking));
             }
         }
-        VBox panel = new VBox(14, summary, rows);
-        panel.getStyleClass().add("management-panel");
-        return moduleTemplate("Bookings", "Monitor booking and payment records without changing payment internals.", panel);
+        return pageShell("Bookings", "Manage booking and payment records.",
+                stats,
+                filterRow("Search booking / user / service", "Payment", "Status"),
+                infoPanel("Booking Records", rows));
     }
 
-    private VBox createFirebasePanel() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        VBox list = new VBox(9,
-                infoRow("\uE753", "Authentication", "Connected"),
-                infoRow("\uE8D7", "Database",
-                        overview.firebaseConnected() ? "Connected" : systemStateLabel(overview)),
-                infoRow("\uE8C7", "Payments", "Payment foundation configured through existing payment service."),
-                infoRow("\uE7C3", "Current Session", isAdminSession() ? "Active" : "Inactive"),
-                infoRow("\uE8A5", "Role-based access",
-                        "user, business, transport_operator and admin are checked from users/{uid}."),
-                infoRow("\uE8FD", "Sync Detail",
-                        valueOr("No sync issues reported.", overview.message())));
-        VBox panel = new VBox(14, sectionTitle("Application Control Logic"), list);
-        panel.getStyleClass().add("management-panel");
-        return panel;
-    }
-
-    private VBox moduleTemplate(String titleText, String detailText, javafx.scene.Node... body) {
-        Label icon = AppUi.symbolIcon(sectionIcon(titleText), "admin-module-title-icon");
-        Label title = sectionTitle(titleText);
-        Label detail = rowDetail(detailText);
-        VBox copy = new VBox(2, title, detail);
-        HBox head = new HBox(10, icon, copy);
-        head.getStyleClass().add("admin-module-title-row");
-        head.setAlignment(Pos.CENTER_LEFT);
-
-        VBox shell = new VBox(14, head);
-        shell.getChildren().addAll(body);
-        return shell;
-    }
-
-    private VBox recentActivityPanel() {
-        VBox rows = new VBox(9);
-        if (!AppDataStore.pendingApprovals().isEmpty()) {
-            for (AppDataStore.ApprovalRequest request : AppDataStore.pendingApprovals().stream().limit(5).toList()) {
-                rows.getChildren().add(infoRow("\uE8A7", "Pending " + request.type,
-                        request.title + " | " + AppDataStore.displayName(request.targetModule)));
-            }
-        }
-        if (!AppDataStore.bookings().isEmpty()) {
-            for (AppDataStore.BookingRecord booking : AppDataStore.bookings().stream().limit(5).toList()) {
-                rows.getChildren().add(infoRow("\uE8C7", booking.paymentStatus + " booking",
-                        booking.title + " | Rs " + (booking.amountPaise / 100)));
-            }
-        }
-        if (rows.getChildren().isEmpty()) {
-            rows.getChildren().add(infoRow("\uE73E", "No recent activity",
-                    "Firestore-backed approvals and local booking events will appear here."));
-        }
-        VBox panel = new VBox(14, sectionTitle("Recent Activity"), rows);
-        panel.getStyleClass().add("management-panel");
-        return panel;
-    }
-
-    private VBox operationsStatusPanel() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        VBox rows = new VBox(9,
-                statusRow("Transport", overview.activeRoutes() > 0 ? "Normal" : "No active update"),
-                statusRow("Ghats", AppDataStore.items("ghat").isEmpty() ? "No active update" : "Guidance published"),
-                statusRow("Emergency", AppDataStore.items("emergency").isEmpty() ? "No active alerts" : "Contacts active"),
-                statusRow("Announcements", overview.activeAnnouncements() + " active"),
-                infoRow("\uE787", "Updated", currentTimeText()));
-        VBox panel = new VBox(14, sectionTitle("Operations Status"), rows);
-        panel.getStyleClass().add("management-panel");
-        return panel;
-    }
-
-    private VBox liveOperationsPreview() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        TilePane cards = kpiGrid();
-        cards.getChildren().addAll(
-                liveOperationCard("Transport", overview.activeRoutes() > 0 ? "Normal" : "No active update",
-                        overview.activeRoutes() + " published route(s)", "View Details"),
-                liveOperationCard("Ghats", AppDataStore.items("ghat").isEmpty() ? "No active update" : "Guidance published",
-                        AppDataStore.items("ghat").size() + " public guidance item(s)", "View Details"),
-                liveOperationCard("Emergency", AppDataStore.items("emergency").isEmpty() ? "No active alerts" : "Contacts active",
-                        AppDataStore.items("emergency").size() + " verified contact item(s)", "View Details"),
-                liveOperationCard("Schedule / Events", overview.activeEvents() > 0 ? "Published" : "No active update",
-                        overview.activeEvents() + " active event item(s)", "View Details"));
-        return moduleTemplate("Live Operations", "Quick operational signals. Detailed management stays in each module.", cards);
-    }
-
-    private VBox liveOperationCard(String title, String status, String detail, String actionText) {
-        Label icon = AppUi.symbolIcon(sectionIcon(title), "admin-kpi-icon");
-        Label titleLabel = rowTitle(title);
-        Label detailLabel = rowDetail(detail);
-        Label updated = rowDetail("Last updated: " + currentTimeText());
-        Button action = new Button(actionText);
-        action.getStyleClass().add("admin-small-action");
-        action.setOnAction(event -> showInfo(title, detail));
-        HBox top = new HBox(9, icon, titleLabel, AppUi.spacer(), statusChip(status, !"No active update".equals(status)));
-        top.setAlignment(Pos.CENTER_LEFT);
-        VBox card = new VBox(8, top, detailLabel, updated, action);
-        card.getStyleClass().add("management-stat-card");
-        return card;
-    }
-
-    private HBox statusRow(String title, String status) {
-        HBox row = new HBox(10, rowTitle(title), AppUi.spacer(), statusChip(status, !status.contains("No active update")));
-        row.getStyleClass().add("management-row");
+    private HBox bookingRow(AppDataStore.BookingRecord booking) {
+        HBox row = new HBox(10, moduleIcon("Bookings", "pilgrim-row-icon"),
+                new VBox(2, strong(booking.bookingId),
+                        muted("User: " + booking.userId + " | Service: " + booking.title + " | Business: "
+                                + booking.businessId + " | Date: " + booking.dateText + " | Amount: Rs "
+                                + (booking.amountPaise / 100) + " | Payment: " + booking.paymentStatus
+                                + " | Status: " + booking.bookingStatus)));
+        row.getStyleClass().add("pilgrim-data-row");
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
     }
 
-    private VBox listPanel(String titleText, List<AppDataStore.ServiceItem> items, String emptyText) {
-        VBox rows = new VBox(9);
-        if (items.isEmpty()) {
-            rows.getChildren().add(infoRow("\uE73E", "Empty", emptyText));
+    private VBox transportPage() {
+        VBox form = structuredForm("Route Name", "From", "To", "Via", "Start Time", "End Time", "Fare", "Status");
+        return pageShell("Transport Operations", "Manage routes, stops, fare guidance and service alerts.",
+                tabRow("Routes", "Stops", "Fare Guidance", "Service Alerts"),
+                infoPanel("Route Editor", form, actionRow("transport", form, "Save Draft", "Publish", "Edit", "Disable")),
+                listPanel("Published Routes", "transport", "No published routes yet."));
+    }
+
+    private VBox transportOperatorsPage() {
+        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
+        HBox stats = new HBox(12,
+                metric(String.valueOf(overview.transportOperators()), "Total Operators"),
+                metric("0", "Active Operators"),
+                metric(String.valueOf(overview.activeRoutes()), "Routes Published"));
+        return pageShell("Transport Operators", "Manage operator registry and route readiness.",
+                stats,
+                filterRow("Search operator / contact", "Area", "Status"),
+                infoPanel("Operator Registry", dataRow("Transport Operators", "No operator list available", "Operator, contact, assigned area, routes, status and last updated will appear here.")));
+    }
+
+    private VBox pujaServicesPage() {
+        VBox form = structuredForm("Puja Name", "Temple / Ghat", "Puja Type", "Price", "Available Slots",
+                "Pandit / Provider", "Verification Status", "Booking Status");
+        return pageShell("Puja Services", "Manage verified puja services and booking readiness.",
+                infoPanel("Puja Service Editor", form, actionRow("puja", form, "Add", "Edit", "Verify", "Disable", "View Bookings")),
+                listPanel("Published Puja Services", "puja", "No puja services published yet."));
+    }
+
+    private VBox ghatsPage() {
+        VBox form = structuredForm("Ghat Name", "Location", "Crowd Level", "Bathing Status", "Opening / Closure",
+                "Safety Status", "Last Updated");
+        return pageShell("Ghats & Snan", "Manage bathing ghat status and public guidance.",
+                infoPanel("Ghat Operations", form, actionRow("ghat", form, "Update Crowd", "Open/Close", "Add Guidance", "Publish Alert")),
+                listPanel("Published Ghat Guidance", "ghat", "No ghat guidance published yet."));
+    }
+
+    private VBox stayPage() {
+        HBox stats = new HBox(12, metric(String.valueOf(AppDataStore.items("stay").size()), "Total Properties"),
+                metric("0", "Available"), metric("0", "Booked"), metric("0", "Pending"));
+        VBox form = structuredForm("Property", "Type", "Owner", "Location", "Rooms / Units", "Available", "Price", "Status");
+        return pageShell("Stay", "Manage approved accommodation listings.",
+                stats,
+                infoPanel("Stay Administration", form, actionRow("stay", form, "Add", "Edit", "Disable", "View Bookings")),
+                listPanel("Published Stay Listings", "stay", "No stay listings published yet."));
+    }
+
+    private VBox lostFoundPage() {
+        HBox stats = new HBox(12, metric(String.valueOf(AppDataStore.adminOverview().lostFoundOpenCases()), "Open Cases"),
+                metric("0", "Found"), metric("0", "High Priority"), metric("0", "Today Reports"));
+        VBox rows = new VBox(10);
+        if (AppDataStore.items("lost").isEmpty()) {
+            rows.getChildren().add(dataRow("Lost & Found", "No open cases", "Missing ID, name, age/gender, last seen and reporter contact will appear here."));
         } else {
-            for (AppDataStore.ServiceItem item : items) {
-                rows.getChildren().add(infoRow("\uE8D4", item.title, item.detail));
+            for (AppDataStore.ServiceItem item : AppDataStore.items("lost")) {
+                rows.getChildren().add(dataRow("Lost & Found", item.title, item.detail + " | Status: Open"));
             }
         }
-        VBox panel = new VBox(14, sectionTitle(titleText), rows);
-        panel.getStyleClass().add("management-panel");
-        return panel;
+        return pageShell("Lost & Found Control Center", "Track priority cases and reporter follow-up.",
+                stats,
+                searchBar("Missing ID / Name / Contact"),
+                tabRow("Missing", "Found", "High Priority", "Today"),
+                infoPanel("Case Records", rows));
     }
 
-    private VBox emptyPanel(String titleText, String detailText) {
-        VBox panel = new VBox(9, infoRow("\uE73E", titleText, detailText));
-        panel.getStyleClass().add("management-panel");
-        return panel;
+    private VBox schedulePage() {
+        VBox form = structuredForm("Event", "Date", "Start", "End", "Location", "Type", "Status");
+        return pageShell("Schedule & Events", "Manage official event schedule and operational windows.",
+                infoPanel("Schedule Manager", form, actionRow("schedule", form, "Add Event", "Edit", "Publish", "Cancel")),
+                listPanel("Published Events", "schedule", "No schedule items published yet."));
     }
 
-    private HBox statusBanner(AppDataStore.AdminOverview overview) {
-        Label firebase = compactSystemChip(overview);
-        Label admin = statusChip("Admin Active", true);
-        Label unread = statusChip(AppDataStore.pendingApprovals().size() + " Notifications",
-                AppDataStore.pendingApprovals().isEmpty());
-        HBox banner = new HBox(10, firebase, admin, unread, AppUi.spacer(),
-                rowDetail(overview.firebaseConnected() ? "Operational overview ready." : "Data sync temporarily unavailable."));
-        banner.getStyleClass().add("admin-status-banner");
-        banner.setAlignment(Pos.CENTER_LEFT);
-        return banner;
+    private VBox announcementsPage() {
+        VBox form = structuredForm("Title", "Category", "Priority", "Message", "Location optional",
+                "Start Time", "Expiry Time");
+        return pageShell("Announcements", "Compose and publish official notices.",
+                tabRow("General", "Traffic", "Ghat", "Emergency", "Event", "Weather/Operational"),
+                infoPanel("Announcement Composer", form, actionRow("announcement", form, "Save Draft", "Publish", "Expire")),
+                listPanel("Published Announcements", "announcement", "No announcements published yet."));
     }
 
-    private HBox syncIssueBanner() {
-        Button retry = new Button("\uE72C");
-        retry.getStyleClass().add("admin-icon-button");
-        retry.setOnAction(event -> refreshAdminData());
-        Label text = rowDetail("Some operational data could not be refreshed.");
-        HBox banner = new HBox(10, statusChip("Data Sync Issue", false), text, AppUi.spacer(), retry);
-        banner.getStyleClass().add("admin-sync-banner");
-        banner.setAlignment(Pos.CENTER_LEFT);
-        return banner;
+    private VBox emergencyPage() {
+        VBox form = structuredForm("Name / Location", "Category", "Phone / Contact", "Area", "Availability", "Verification Status");
+        return pageShell("Emergency Operations Center", "Maintain verified emergency information.",
+                tabRow("Emergency Contacts", "Hospitals", "Medical Camps", "Police", "Women Safety", "Active Alerts"),
+                infoPanel("Verified Emergency Information", form, actionRow("emergency", form, "Add", "Edit", "Verify", "Publish Alert")),
+                listPanel("Published Emergency Items", "emergency", "No emergency items published yet."));
     }
 
-    private TilePane kpiGrid() {
-        TilePane grid = new TilePane();
-        grid.getStyleClass().add("admin-kpi-grid");
+    private VBox reportsPage() {
+        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
+        long revenue = AppDataStore.bookings().stream()
+                .filter(booking -> "PAID".equals(booking.paymentStatus))
+                .mapToLong(booking -> booking.amountPaise)
+                .sum() / 100;
+        HBox stats = new HBox(12,
+                metric(String.valueOf(overview.totalUsers()), "Users"),
+                metric(String.valueOf(overview.approvedBusinesses()), "Businesses"),
+                metric(String.valueOf(AppDataStore.bookings().size()), "Bookings"),
+                metric("Rs " + revenue, "Revenue"),
+                metric(String.valueOf(overview.activeRoutes()), "Transport"),
+                metric(String.valueOf(overview.lostFoundOpenCases()), "Safety Cases"));
+        return pageShell("Reports & Analytics", "Use actual available data for platform insights.",
+                stats,
+                infoPanel("Analytics", "No chart data available yet. Charts will appear when enough real records exist."));
+    }
+
+    private VBox systemPage() {
+        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
+        return pageShell("System", "Technical infrastructure status.",
+                infoPanel("Application Status",
+                        dataRow("System", "Authentication", "Connected"),
+                        dataRow("System", "Database", overview.firebaseConnected() ? "Connected" : "Sync Issue"),
+                        dataRow("Bookings", "Payments", "Configured"),
+                        dataRow("Users", "Current Session", isAdminSession() ? "Active" : "Inactive"),
+                        dataRow("System", "Role Access", "user, business, transport_operator and admin checked from users/{uid}."),
+                        dataRow("System", "Application", "Simhastha Connect | Nashik Simhastha 2027")));
+    }
+
+    private VBox listPanel(String title, String module, String emptyText) {
+        VBox rows = new VBox(10);
+        List<AppDataStore.ServiceItem> items = AppDataStore.items(module);
+        if (items.isEmpty()) {
+            rows.getChildren().add(dataRow(module, "No published items", emptyText));
+        } else {
+            for (AppDataStore.ServiceItem item : items) {
+                rows.getChildren().add(dataRow(module, item.title, item.detail));
+            }
+        }
+        return infoPanel(title, rows);
+    }
+
+    private VBox structuredForm(String... prompts) {
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        for (int i = 0; i < prompts.length; i++) {
+            TextField field = AppUi.textField(prompts[i]);
+            field.setMaxWidth(Double.MAX_VALUE);
+            grid.add(field, i % 2, i / 2);
+            GridPane.setHgrow(field, Priority.ALWAYS);
+        }
+        VBox box = new VBox(grid);
+        box.getStyleClass().add("admin-structured-form");
+        return box;
+    }
+
+    private HBox actionRow(String module, VBox form, String... actions) {
+        HBox row = new HBox(10);
+        for (String action : actions) {
+            Button button = smallButton(action);
+            if ("Add".equals(action) || "Publish".equals(action) || "Publish Alert".equals(action)
+                    || "Add Event".equals(action) || "Update Crowd".equals(action)) {
+                button.setOnAction(event -> publishStructuredItem(module, form));
+            }
+            row.getChildren().add(button);
+        }
+        return row;
+    }
+
+    private void publishStructuredItem(String module, VBox form) {
+        List<TextField> fields = form.lookupAll(".input-field").stream()
+                .filter(TextField.class::isInstance)
+                .map(TextField.class::cast)
+                .toList();
+        String title = fields.stream()
+                .map(field -> field.getText().trim())
+                .filter(text -> !text.isBlank())
+                .findFirst()
+                .orElse("");
+        String detail = fields.stream()
+                .map(field -> {
+                    String value = field.getText().trim();
+                    String label = field.getPromptText() == null ? "Field" : field.getPromptText();
+                    return value.isBlank() ? "" : label + ": " + value;
+                })
+                .filter(text -> !text.isBlank())
+                .reduce((left, right) -> left + " | " + right)
+                .orElse("");
+        if (title.isBlank() || detail.isBlank()) {
+            showInfo("Missing Details", "Enter at least the main name/title and one detail before publishing.");
+            return;
+        }
+        AppDataStore.addItem(module, title, detail);
+        fields.forEach(TextField::clear);
+        refreshAdminData();
+    }
+
+    private HBox filterRow(String... prompts) {
+        HBox row = new HBox(10);
+        row.getStyleClass().add("pilgrim-filter-row");
+        for (String prompt : prompts) {
+            if (prompt.equals("Role") || prompt.equals("Status") || prompt.equals("Area") || prompt.equals("Payment")) {
+                ComboBox<String> combo = new ComboBox<>();
+                combo.setPromptText(prompt);
+                combo.getItems().addAll("All", "Active", "Pending", "Approved", "Rejected", "Suspended");
+                combo.getStyleClass().add("input-combo");
+                combo.setMaxWidth(Double.MAX_VALUE);
+                row.getChildren().add(combo);
+                HBox.setHgrow(combo, Priority.ALWAYS);
+            } else {
+                TextField field = AppUi.textField(prompt);
+                row.getChildren().add(field);
+                HBox.setHgrow(field, Priority.ALWAYS);
+            }
+        }
+        return row;
+    }
+
+    private HBox tabRow(String... labels) {
+        HBox row = new HBox(8);
+        for (String text : labels) {
+            row.getChildren().add(badge(text));
+        }
+        return row;
+    }
+
+    private HBox searchBar(String prompt) {
+        TextField search = AppUi.textField(prompt);
+        search.getStyleClass().add("pilgrim-search-field");
+        Button button = new Button("Search");
+        button.getStyleClass().add("pilgrim-search-button");
+        HBox row = new HBox(0, search, button);
+        row.getStyleClass().add("pilgrim-search-bar");
+        HBox.setHgrow(search, Priority.ALWAYS);
+        return row;
+    }
+
+    private GridPane twoColumnGrid(Node... nodes) {
+        GridPane grid = new GridPane();
         grid.setHgap(12);
         grid.setVgap(12);
-        grid.setPrefColumns(4);
+        for (int i = 0; i < nodes.length; i++) {
+            grid.add(nodes[i], i % 2, i / 2);
+            GridPane.setHgrow(nodes[i], Priority.ALWAYS);
+        }
         return grid;
     }
 
-    private VBox kpiCard(String title, long value, String detail) {
-        return kpiCard(title, String.valueOf(value), detail, "\uE9D2");
+    private VBox pageShell(String title, String subtitle, Node... sections) {
+        VBox content = new VBox(10, topControls());
+        if (!"Admin Dashboard".equals(title)) {
+            content.getChildren().add(new VBox(2, sectionTitle(title), muted(subtitle)));
+        }
+        content.getChildren().addAll(sections);
+        content.getStyleClass().add("pilgrim-dashboard-main");
+        content.setPadding(new Insets(12, 22, 28, 22));
+        return content;
     }
 
-    private VBox kpiCard(String title, String value, String detail) {
-        return kpiCard(title, value, detail, "\uE9D2");
-    }
-
-    private VBox kpiCard(String title, long value, String detail, String iconText) {
-        return kpiCard(title, String.valueOf(value), detail, iconText);
-    }
-
-    private VBox kpiCard(String title, String value, String detail, String iconText) {
-        Label icon = AppUi.symbolIcon(iconText, "admin-kpi-icon");
-        Label valueLabel = new Label(value);
-        valueLabel.getStyleClass().add("management-stat-value");
-        Label titleLabel = new Label(title);
-        titleLabel.getStyleClass().add("management-stat-title");
-        Label detailLabel = new Label(detail);
-        detailLabel.getStyleClass().add("management-stat-detail");
-        detailLabel.setWrapText(true);
-        HBox top = new HBox(icon, AppUi.spacer(), valueLabel);
-        top.setAlignment(Pos.CENTER_LEFT);
-        VBox card = new VBox(7, top, titleLabel, detailLabel);
-        card.getStyleClass().add("management-stat-card");
-        card.setMinWidth(210);
-        card.setPrefWidth(240);
+    private VBox richCard(String targetSection, String title, String detail, String action) {
+        VBox card = new VBox(8, new HBox(10, moduleIcon(targetSection, "pilgrim-card-icon"), badge(action)),
+                strong(title), paragraph(detail), arrowAction(action, targetSection));
+        card.getStyleClass().add("pilgrim-rich-card");
         return card;
     }
 
-    private Label statusChip(String text, boolean ok) {
-        Label chip = new Label(text);
-        chip.getStyleClass().add(ok ? "status-chip-ok" : "status-chip-warn");
-        return chip;
+    private VBox infoPanel(String title, String body) {
+        return infoPanel(title, paragraph(body));
     }
 
-    private void refreshApprovals() {
-        approvalList.getChildren().clear();
-        if (AppDataStore.pendingApprovals().isEmpty()) {
-            approvalList.getChildren().add(infoRow("\uE73E", "No pending requests", "New business registrations will appear here."));
-            return;
-        }
-
-        for (AppDataStore.ApprovalRequest request : new java.util.ArrayList<>(AppDataStore.pendingApprovals())) {
-            Button approve = new Button("Approve");
-            approve.getStyleClass().add("admin-success-action");
-            approve.setOnAction(event -> {
-                if (!confirm("Approve Business", "Approve " + request.title + "?")) {
-                    return;
-                }
-                try {
-                    AppDataStore.approve(request);
-                    refreshAdminData();
-                } catch (AppDataStore.ApprovalUpdateException exception) {
-                    showInfo("Approval Failed", exception.getMessage());
-                }
-            });
-
-            Button reject = new Button("Reject");
-            reject.getStyleClass().add("admin-danger-action");
-            reject.setOnAction(event -> {
-                if (!confirm("Reject Business", "Reject " + request.title + "?")) {
-                    return;
-                }
-                try {
-                    AppDataStore.reject(request);
-                    refreshAdminData();
-                } catch (AppDataStore.ApprovalUpdateException exception) {
-                    showInfo("Rejection Failed", exception.getMessage());
-                }
-            });
-
-            Button view = new Button("View Details");
-            view.getStyleClass().add("admin-neutral-action");
-            view.setOnAction(event -> showInfo(request.title, request.detail));
-
-            VBox text = new VBox(3, rowTitle(request.title),
-                    rowDetail("Owner UID: " + valueOr("Available after Firestore refresh", request.ownerId)),
-                    rowDetail(request.detail + " | Status: Pending"));
-            HBox row = new HBox(12, AppUi.symbolIcon("\uE8A7", "management-row-icon"), text, AppUi.spacer(), view,
-                    approve, reject);
-            row.getStyleClass().add("management-row");
-            row.setAlignment(Pos.CENTER_LEFT);
-            approvalList.getChildren().add(row);
-        }
+    private VBox infoPanel(String title, Node... body) {
+        VBox panel = new VBox(10, sectionTitle(title));
+        panel.getChildren().addAll(body);
+        panel.getStyleClass().add("pilgrim-panel");
+        return panel;
     }
 
-    private void refreshDataList() {
-        if (dataList == null || moduleSelect == null) {
-            return;
-        }
-        dataList.getChildren().clear();
-        String module = moduleSelect.getValue();
-        List<AppDataStore.ServiceItem> items = AppDataStore.items(module);
-        if (items.isEmpty()) {
-            dataList.getChildren().add(infoRow("\uE73E", "No published items",
-                    "Use the form above to publish the first item for this module."));
-            return;
-        }
-        for (AppDataStore.ServiceItem item : new java.util.ArrayList<>(items)) {
-            Button remove = new Button("Remove");
-            remove.getStyleClass().add("text-button");
-            remove.setOnAction(event -> {
-                AppDataStore.removeItem(module, item);
-                refreshDataList();
-                refreshAdminData();
-            });
-
-            HBox row = new HBox(12, AppUi.symbolIcon("\uE8D4", "management-row-icon"),
-                    new VBox(2, rowTitle(item.title), rowDetail(item.detail)), AppUi.spacer(), remove);
-            row.getStyleClass().add("management-row");
-            row.setAlignment(Pos.CENTER_LEFT);
-            dataList.getChildren().add(row);
-        }
-    }
-
-    private HBox infoRow(String iconText, String title, String detail) {
-        HBox row = new HBox(12, AppUi.symbolIcon(iconText, "management-row-icon"),
-                new VBox(2, rowTitle(title), rowDetail(detail)));
-        row.getStyleClass().add("management-row");
+    private HBox dataRow(String module, String title, String detail) {
+        HBox row = new HBox(10, moduleIcon(module, "pilgrim-row-icon"), new VBox(2, strong(title), muted(detail)));
+        row.getStyleClass().add("pilgrim-data-row");
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
     }
 
+    private VBox metric(String value, String label) {
+        VBox metric = new VBox(2, label(value, "pilgrim-stat-value"), muted(label));
+        metric.getStyleClass().add("pilgrim-stat-card");
+        HBox.setHgrow(metric, Priority.ALWAYS);
+        return metric;
+    }
+
+    private Button roundButton(String icon, String text) {
+        Button button = new Button(icon);
+        button.getStyleClass().add("pilgrim-round-icon-button");
+        button.setOnAction(event -> showInfo(text, text + " panel will open here."));
+        return button;
+    }
+
+    private Button smallButton(String text) {
+        Button button = new Button(text);
+        button.getStyleClass().add("pilgrim-small-action");
+        return button;
+    }
+
+    private Button arrowAction(String text, String targetSection) {
+        Button button = smallButton(text + "  >");
+        button.setOnAction(event -> showSection(targetSection));
+        return button;
+    }
+
     private Label sectionTitle(String text) {
-        Label label = new Label(text);
-        label.getStyleClass().add("management-section-title");
+        return label(text, "pilgrim-section-title");
+    }
+
+    private Label strong(String text) {
+        return label(text, "pilgrim-card-title");
+    }
+
+    private Label muted(String text) {
+        return label(text, "pilgrim-card-detail");
+    }
+
+    private Label paragraph(String text) {
+        Label label = muted(text);
+        label.setMaxWidth(780);
         return label;
     }
 
-    private Label rowTitle(String text) {
+    private Label badge(String text) {
+        return label(text, "pilgrim-badge");
+    }
+
+    private Label statusBadge(String text) {
+        Label label = badge(text);
+        label.getStyleClass().add(text.contains("No active") ? "admin-status-muted" : "admin-status-ok");
+        return label;
+    }
+
+    private Label label(String text, String styleClass) {
         Label label = new Label(text);
-        label.getStyleClass().add("management-row-title");
+        label.getStyleClass().add(styleClass);
         label.setWrapText(true);
         return label;
     }
 
-    private Label rowDetail(String text) {
-        Label label = new Label(text);
-        label.getStyleClass().add("management-row-detail");
-        label.setWrapText(true);
-        return label;
-    }
-
-    private Label compactSystemChip(AppDataStore.AdminOverview overview) {
-        return statusChip(systemStateLabel(overview), overview.firebaseConnected());
-    }
-
-    private String systemStateLabel(AppDataStore.AdminOverview overview) {
-        if (overview.firebaseConnected()) {
-            return "System Online";
-        }
-        String message = overview.message() == null ? "" : overview.message().toLowerCase();
-        if (message.contains("permission") || message.contains("access")) {
-            return "Data Sync Issue";
-        }
-        if (message.contains("configured") || message.contains("offline")) {
-            return "Offline Mode";
-        }
-        return "Data Sync Issue";
-    }
-
-    private String sectionIcon(String section) {
-        return switch (section) {
-            case "Overview" -> "\uE80F";
+    private Label moduleIcon(String module, String styleClass) {
+        String glyph = switch (module) {
+            case "Dashboard", "Overview" -> "\uE80F";
             case "Live Operations" -> "\uE7C1";
             case "Users" -> "\uE716";
             case "Business Approvals" -> "\uE7BA";
             case "Businesses" -> "\uE719";
             case "Bookings" -> "\uE8A7";
-            case "Transport" -> "\uE806";
+            case "Transport", "Transport Operations" -> "\uE806";
             case "Transport Operators" -> "\uE8EC";
-            case "Puja Services" -> "\uEC29";
-            case "Ghats & Snan" -> "\uE707";
-            case "Stay" -> "\uE809";
-            case "Lost & Found" -> "\uE721";
-            case "Schedule & Events" -> "\uE787";
-            case "Announcements" -> "\uE789";
-            case "Emergency" -> "\uE95E";
+            case "Puja Services", "puja" -> "\uEC29";
+            case "Ghats & Snan", "Ghats", "ghat" -> "\uE707";
+            case "Stay", "stay" -> "\uE809";
+            case "Lost & Found", "lost" -> "\uE721";
+            case "Schedule & Events", "Schedule / Events", "schedule" -> "\uE787";
+            case "Announcements", "announcement" -> "\uE789";
+            case "Emergency", "emergency" -> "\uE95E";
             case "Reports & Analytics" -> "\uE9D2";
             case "System" -> "\uE713";
+            case "Logout" -> "\uE7E8";
             default -> "\uE8A5";
         };
+        return AppUi.symbolIcon(glyph, styleClass);
     }
 
-    private ImageView createImage(String path, double width, double height) {
+    private Region createSpacer() {
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        VBox.setVgrow(spacer, Priority.ALWAYS);
+        return spacer;
+    }
+
+    private ImageView createImage(String path, double width, double height, double xBias, double yBias) {
+        URL imageUrl = getClass().getResource(path);
         ImageView imageView = new ImageView();
+        imageView.setPreserveRatio(false);
         imageView.setFitWidth(width);
         imageView.setFitHeight(height);
-        imageView.setPreserveRatio(false);
-        java.net.URL imageUrl = getClass().getResource(path);
         if (imageUrl != null) {
-            imageView.setImage(new Image(imageUrl.toExternalForm()));
+            Image image = new Image(imageUrl.toExternalForm());
+            imageView.setImage(image);
+            double scale = Math.max(width / image.getWidth(), height / image.getHeight());
+            double cropWidth = Math.min(image.getWidth(), width / scale);
+            double cropHeight = Math.min(image.getHeight(), height / scale);
+            double x = Math.max(0, (image.getWidth() - cropWidth) * xBias);
+            double y = Math.max(0, (image.getHeight() - cropHeight) * yBias);
+            imageView.setViewport(new Rectangle2D(x, y, cropWidth, cropHeight));
         }
         return imageView;
-    }
-
-    private String currentTimeText() {
-        return LocalDateTime.now().format(ADMIN_TIME);
     }
 
     private String valueOr(String fallback, String value) {

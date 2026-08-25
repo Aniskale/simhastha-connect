@@ -45,8 +45,8 @@ public class IntroPage {
         root.getChildren().addAll(background, overlay, createTopLine(), content);
 
         Scene scene = new Scene(root, 1200, 680);
-        background.fitWidthProperty().bind(scene.widthProperty());
-        background.fitHeightProperty().bind(scene.heightProperty());
+        background.fitWidthProperty().bind(root.widthProperty());
+        background.fitHeightProperty().bind(root.heightProperty());
         ThemeManager.addTheme(scene, this);
         playIntro(stage, content);
         return scene;
@@ -143,7 +143,7 @@ public class IntroPage {
 
         handoff = new Timeline(new KeyFrame(Duration.seconds(5), event -> {
             WelcomePage welcomePage = new WelcomePage();
-            stage.setScene(welcomePage.createScene(stage));
+            NavigationUtil.navigate(stage, welcomePage.createScene(stage));
         }));
         handoff.play();
     }
