@@ -381,10 +381,6 @@ public class BusinessAuthPage {
             this.email = email;
             this.location = location;
             this.password = password;
-            services.add(category + " - Standard Listing");
-            services.add("Festival visitor support");
-            bookings.add("2 pending inquiries");
-            bookings.add("1 confirmed service request");
         }
     }
 }
