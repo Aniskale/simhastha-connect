@@ -109,7 +109,7 @@ public class BusinessAuthPage {
             if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Business Email and Password.");
             } else if (AuthService.isFirebaseEnabled()) {
-                runAuth(loginButton, AuthService.login(userId, userPassword, "business"));
+                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
             } else if (!registeredBusinesses.containsKey(userId)) {
                 showInfo("Login Failed", "Business account not found. Please create an account first.");
             } else if (!registeredBusinesses.get(userId).password.equals(userPassword)) {
@@ -121,7 +121,8 @@ public class BusinessAuthPage {
         });
 
         Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
-        replaceNode(createFormCard("Local Business Login", tabs, emailMobile, password, loginButton, forgotButton));
+        replaceNode(createFormCard("Local Business Login", tabs, emailMobile, AppUi.passwordFieldWithToggle(password),
+                loginButton, forgotButton));
     }
 
     private void showRegisterForm() {
@@ -211,7 +212,7 @@ public class BusinessAuthPage {
                 businessName, ownerName,
                 businessType, mobile,
                 email, location,
-                password, confirmPassword);
+                AppUi.passwordFieldWithToggle(password), AppUi.passwordFieldWithToggle(confirmPassword));
         replaceNode(createFormCard("Create Business Account", tabs, fields, registerButton));
     }
 
@@ -308,22 +309,8 @@ public class BusinessAuthPage {
                 return;
             }
             Stage stage = (Stage) button.getScene().getWindow();
-            openDashboardFor(stage, result.user());
+            AppNavigator.openDashboardFor(stage, result.user(), this::showInfo);
         }));
-    }
-
-    private void openDashboardFor(Stage stage, AppSession.User user) {
-        switch (user.role()) {
-            case "admin" -> stage.setScene(new AdminDashboardPage().createScene(stage));
-            case "business" -> stage.setScene(new BusinessOwnerDashboardPage(
-                    new BusinessAccount(user.displayName(), user.displayName(), "Business", "", user.email(), "", ""))
-                    .createScene(stage));
-            case "transport_operator" -> stage.setScene(new OperatorDashboardPage(
-                    new OperatorAuthPage.OperatorAccount(user.displayName(), user.displayName(), "", user.email(),
-                            "Transport", "")).createScene(stage));
-            case "user" -> stage.setScene(new DashboardPage().createScene(stage));
-            default -> showInfo("Login Failed", "Account role is not valid.");
-        }
     }
 
     private ImageView createImage(String path, double width, double height) {

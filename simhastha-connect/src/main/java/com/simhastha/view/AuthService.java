@@ -27,19 +27,24 @@ public final class AuthService {
                 if (!auth.success) {
                     return AuthOutcome.failure(auth.errorMessage);
                 }
-
-                FirestoreGateway.UserProfile profile = FIRESTORE.loadUserProfile(auth.uid, auth.idToken);
-                if (profile == null || profile.role().isBlank()) {
-                    return AuthOutcome.failure("Your account profile is missing. Please contact admin.");
+                if (auth.uid == null || auth.uid.isBlank()) {
+                    return AuthOutcome.failure("Firebase authentication succeeded, but no authenticated UID was returned.");
                 }
 
+                FirestoreGateway.UserProfile profile = FIRESTORE.loadUserProfile(auth.uid, auth.idToken);
+                if (profile == null) {
+                    return AuthOutcome.failure("No Firestore profile was found at users/" + auth.uid + ". Please contact admin.");
+                }
                 if (!VALID_ROLES.contains(profile.role())) {
-                    return AuthOutcome.failure("Your account role is not valid. Please contact admin.");
+                    return AuthOutcome.failure("Your account role is not valid. Expected one of: user, business, transport_operator, admin.");
                 }
 
                 boolean adminOverride = "admin".equals(profile.role());
                 if (!adminOverride && !profile.role().equals(expectedRole) && !"any".equals(expectedRole)) {
                     return AuthOutcome.failure("Authentication succeeded, but this account is not authorized for this portal.");
+                }
+                if (adminOverride && !"active".equals(profile.status())) {
+                    return AuthOutcome.failure("Admin access requires an active Firestore admin profile.");
                 }
 
                 if ("pending".equals(profile.status())) {
@@ -66,6 +71,10 @@ public final class AuthService {
                 AppSession.set(user);
                 AppDataStore.refreshFirebaseData(auth.idToken);
                 return AuthOutcome.success(user);
+            } catch (FirestoreGateway.PermissionDeniedException exception) {
+                return AuthOutcome.failure("Firestore permission denied while reading your account profile.");
+            } catch (FirestoreGateway.MalformedProfileException exception) {
+                return AuthOutcome.failure(exception.getMessage());
             } catch (Exception exception) {
                 return AuthOutcome.failure("Unable to complete authentication. Check internet, Firebase, and account permissions.");
             }
@@ -137,16 +146,13 @@ public final class AuthService {
                 }
 
                 FirestoreGateway.UserProfile profile = new FirestoreGateway.UserProfile(
-                        auth.uid, account.contactPerson, auth.email, account.mobile, "transport_operator", "pending");
+                        auth.uid, account.contactPerson, auth.email, account.mobile, "transport_operator", "active");
                 FIRESTORE.saveUserProfile(profile, auth.idToken);
                 FIRESTORE.saveTransportOperatorProfile(auth.uid, account, auth.idToken);
-                FIRESTORE.saveApproval(new AppDataStore.ApprovalRequest(
-                        "Transport Operator Registration",
-                        account.organizationName,
-                        account.serviceType + " | " + account.contactPerson + " | " + account.mobile,
-                        "transport",
-                        auth.uid), auth.idToken);
-                return AuthOutcome.failure("Transport registration submitted. Admin approval is required before login.");
+                AppSession.set(new AppSession.User(auth.uid, auth.email, "transport_operator", auth.idToken,
+                        account.contactPerson, "active"));
+                AppDataStore.refreshFirebaseData(auth.idToken);
+                return AuthOutcome.success(AppSession.currentUser());
             } catch (Exception exception) {
                 return AuthOutcome.failure("Transport registration failed. Check internet and Firebase rules.");
             }

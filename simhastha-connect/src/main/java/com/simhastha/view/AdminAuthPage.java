@@ -44,7 +44,7 @@ public class AdminAuthPage {
                 label("Admin access is granted only after Firebase login and Firestore role verification.",
                         "description-text"),
                 email,
-                password,
+                AppUi.passwordFieldWithToggle(password),
                 login);
         card.getStyleClass().add("auth-card");
         card.setMaxWidth(420);
@@ -68,7 +68,7 @@ public class AdminAuthPage {
                 showInfo("Admin Access Denied", result == null ? "Unable to login." : result.message());
                 return;
             }
-            stage.setScene(new AdminDashboardPage().createScene(stage));
+            AppNavigator.openDashboardFor(stage, result.user(), this::showInfo);
         }));
     }
 

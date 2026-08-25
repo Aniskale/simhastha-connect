@@ -21,6 +21,7 @@ public final class AppDataStore {
     private static final List<BookingRecord> bookings = new ArrayList<>();
     private static final List<TicketRecord> tickets = new ArrayList<>();
     private static final FirestoreGateway firestore = new FirestoreGateway(FirebaseConfig.load());
+    private static AdminOverview adminOverview = AdminOverview.empty();
 
     static {
         transport.add(new ServiceItem("Nashik Road Railway Station to Ramkund Shuttle",
@@ -242,6 +243,23 @@ public final class AppDataStore {
         loadFirebaseDataIfAvailable(idToken);
     }
 
+    public static AdminOverview refreshAdminOverview(String idToken) {
+        if (!firestore.isEnabled()) {
+            adminOverview = AdminOverview.empty("Firebase is not configured.");
+            return adminOverview;
+        }
+        try {
+            adminOverview = firestore.loadAdminOverview(idToken);
+        } catch (Exception exception) {
+            adminOverview = AdminOverview.empty("Firebase is unavailable or permission was denied.");
+        }
+        return adminOverview;
+    }
+
+    public static AdminOverview adminOverview() {
+        return adminOverview;
+    }
+
     public static String displayName(String module) {
         return switch (module) {
             case "transport" -> "Transport";
@@ -317,6 +335,28 @@ public final class AppDataStore {
 
         public ApprovalUpdateException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    public record AdminOverview(
+            int totalUsers,
+            int approvedBusinesses,
+            int pendingBusinesses,
+            int transportOperators,
+            int activeRoutes,
+            int todaysBookings,
+            int activeEvents,
+            int lostFoundOpenCases,
+            int activeAnnouncements,
+            boolean firebaseConnected,
+            String message) {
+
+        public static AdminOverview empty() {
+            return empty("");
+        }
+
+        public static AdminOverview empty(String message) {
+            return new AdminOverview(0, 0, 0, 0, 0, 0, 0, 0, 0, false, message);
         }
     }
 
