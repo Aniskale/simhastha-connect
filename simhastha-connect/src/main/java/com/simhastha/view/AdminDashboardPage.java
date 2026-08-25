@@ -10,6 +10,7 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
@@ -49,12 +50,12 @@ public class AdminDashboardPage {
         }
 
         page = new BorderPane();
-        page.getStyleClass().add("management-page");
-        page.setTop(createHeader(stage));
+        page.getStyleClass().add("admin-dashboard-root");
         page.setCenter(loadingPanel());
 
-        ThemedBackgroundPane root = new ThemedBackgroundPane(page);
-        Scene scene = AppUi.createScene(root, this);
+        Scene scene = new Scene(page, 1200, 680);
+        ThemeManager.addTheme(scene, this);
+        ThemeManager.addListener(() -> ThemeManager.applyTo(page));
         refreshAdminData();
         return scene;
     }
@@ -102,10 +103,10 @@ public class AdminDashboardPage {
         return AppUi.createScene(new ThemedBackgroundPane(accessPage), this);
     }
 
-    private HBox createHeader(Stage stage) {
-        Label title = new Label("Administration Control Center");
-        title.getStyleClass().add("page-heading");
-        Label subtitle = new Label("Nashik Simhastha 2027 \u2022 Operations & Governance");
+    private HBox createHeader() {
+        Label title = new Label("Admin Dashboard");
+        title.getStyleClass().add("admin-page-title");
+        Label subtitle = new Label("Operations & Governance Control");
         subtitle.getStyleClass().add("page-subtitle");
 
         AppSession.User user = AppSession.currentUser();
@@ -114,19 +115,10 @@ public class AdminDashboardPage {
         time.getStyleClass().add("admin-time-chip");
         Label connection = compactSystemChip(AppDataStore.adminOverview());
 
-        Button refresh = new Button("Refresh");
-        refresh.getStyleClass().add("back-button");
-        refresh.setOnAction(event -> refreshAdminData());
-
-        Button userView = new Button("User Dashboard");
-        userView.getStyleClass().add("back-button");
-        userView.setOnAction(event -> stage.setScene(new DashboardPage().createScene(stage)));
-
-        HBox header = new HBox(14, new VBox(3, title, subtitle), AppUi.spacer(), connection, notificationBell(),
-                time, AppUi.createThemeToggle(), profile, refresh, userView);
-        header.getStyleClass().add("management-header");
+        HBox header = new HBox(12, new VBox(2, title, subtitle), AppUi.spacer(), connection, notificationBell(),
+                time, AppUi.createThemeToggle(), profile);
+        header.getStyleClass().add("admin-topbar");
         header.setAlignment(Pos.CENTER_LEFT);
-        header.setPadding(new Insets(18, 32, 8, 32));
         return header;
     }
 
@@ -169,7 +161,6 @@ public class AdminDashboardPage {
             AppDataStore.refreshFirebaseData(token);
             AppDataStore.refreshAdminOverview(token);
         }).whenComplete((ignored, error) -> Platform.runLater(() -> {
-            page.setTop(createHeader(stage));
             page.setCenter(createAdminShell());
         }));
     }
@@ -185,9 +176,13 @@ public class AdminDashboardPage {
         contentScroll.setFitToWidth(true);
         contentScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
 
-        HBox shell = new HBox(18, sidebar, contentScroll);
+        VBox workspace = new VBox(12, createHeader(), contentScroll);
+        workspace.getStyleClass().add("admin-workspace");
+        VBox.setVgrow(contentScroll, Priority.ALWAYS);
+
+        HBox shell = new HBox(sidebar, workspace);
         shell.getStyleClass().add("admin-shell");
-        HBox.setHgrow(contentScroll, Priority.ALWAYS);
+        HBox.setHgrow(workspace, Priority.ALWAYS);
         return shell;
     }
 
@@ -209,7 +204,6 @@ public class AdminDashboardPage {
             button.setAlignment(Pos.CENTER_LEFT);
             button.setOnAction(event -> {
                 selectedSection = section;
-                page.setTop(createHeader(stage));
                 sidebar.getChildren().setAll(createSidebar().getChildren());
                 renderSelectedSection();
             });
@@ -239,7 +233,7 @@ public class AdminDashboardPage {
         logo.getStyleClass().add("admin-sidebar-logo-image");
         Label name = new Label("SIMHASTHA\nCONNECT");
         name.getStyleClass().add("admin-sidebar-brand-strong");
-        Label detail = new Label("Administration Control Center\nNashik Simhastha 2027");
+        Label detail = new Label("ADMINISTRATION\nNashik Simhastha 2027");
         detail.getStyleClass().add("admin-sidebar-tagline");
         HBox brand = new HBox(10, logo, new VBox(1, name, detail));
         brand.getStyleClass().add("admin-sidebar-brand");
@@ -303,56 +297,60 @@ public class AdminDashboardPage {
         kpis.getChildren().addAll(
                 kpiCard("Total Users", overview.totalUsers(), "Registered platform accounts", "\uE716"),
                 kpiCard("Approved Businesses", overview.approvedBusinesses(), "Published marketplace providers", "\uE719"),
-                kpiCard("Pending Businesses", overview.pendingBusinesses(), "Waiting for admin decision", "\uE7BA"),
+                kpiCard("Pending Approvals", overview.pendingBusinesses(), "Waiting for admin decision", "\uE7BA"),
                 kpiCard("Transport Operators", overview.transportOperators(), "Registered operator profiles", "\uE806"),
                 kpiCard("Active Routes", overview.activeRoutes(), "Published transport items", "\uE707"),
                 kpiCard("Today's Bookings", overview.todaysBookings(), "Booking records available", "\uE8A7"),
                 kpiCard("Active Events", overview.activeEvents(), "Published schedule items", "\uE787"),
-                kpiCard("Lost & Found", overview.lostFoundOpenCases(), "Open help cases/items", "\uE721"),
-                kpiCard("Active Announcements", overview.activeAnnouncements(), "Published official notices", "\uE789"));
+                kpiCard("Open Lost & Found Cases", overview.lostFoundOpenCases(), "Open help cases/items", "\uE721"));
 
         HBox lower = new HBox(14, recentActivityPanel(), operationsStatusPanel());
         HBox.setHgrow(lower.getChildren().get(0), Priority.ALWAYS);
         HBox.setHgrow(lower.getChildren().get(1), Priority.ALWAYS);
-        return new VBox(16, overviewHero(overview), kpis, lower);
+
+        VBox content = new VBox(14, overviewHero(), sectionTitle("Operational Overview"), kpis, lower,
+                liveOperationsPreview());
+        if (!overview.firebaseConnected()) {
+            content.getChildren().add(1, syncIssueBanner());
+        }
+        return content;
     }
 
     private VBox liveOperationsSection() {
-        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        TilePane cards = kpiGrid();
-        cards.getChildren().addAll(
-                kpiCard("Pending Decisions", AppDataStore.pendingApprovals().size(), "Business approvals currently queued"),
-                kpiCard("Published Routes", overview.activeRoutes(), "User Transport module"),
-                kpiCard("Emergency Contacts", AppDataStore.items("emergency").size(), "User emergency module"),
-                kpiCard("Announcements", overview.activeAnnouncements(), "User announcement module"));
-        return new VBox(16, cards, recentActivityPanel(),
+        return new VBox(16, liveOperationsPreview(), recentActivityPanel(),
                 emptyPanel("Live command stream", "Realtime incident, crowd, transport and alert streams can be connected in Part 2."));
     }
 
     private VBox usersSection() {
         AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        HBox stats = new HBox(12,
+        TilePane stats = kpiGrid();
+        stats.getChildren().addAll(
                 kpiCard("Total Users", overview.totalUsers(), "Firestore users collection"),
                 kpiCard("Admin Access", isAdminSession() ? 1 : 0, "Current active admin session"));
-        return new VBox(16, stats, emptyPanel("User management foundation",
+        return moduleTemplate("Users", "Review platform identities and role safety.", stats,
+                emptyPanel("User management foundation",
                 "Role-filtered user table, suspension actions and profile inspection are reserved for Part 2."));
     }
 
     private VBox businessesSection() {
         AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        HBox stats = new HBox(12,
+        TilePane stats = kpiGrid();
+        stats.getChildren().addAll(
                 kpiCard("Approved Businesses", overview.approvedBusinesses(), "Firestore businesses approved"),
                 kpiCard("Pending Businesses", overview.pendingBusinesses(), "Needs admin review"));
-        return new VBox(16, stats, listPanel("Approved Business Listings", AppDataStore.items("business"),
-                "No approved business listings are published yet."));
+        return moduleTemplate("Businesses", "Monitor approved business records and public listings.", stats,
+                listPanel("Approved Business Listings", AppDataStore.items("business"),
+                        "No approved business listings are published yet."));
     }
 
     private VBox transportOperatorsSection() {
         AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
-        HBox stats = new HBox(12,
+        TilePane stats = kpiGrid();
+        stats.getChildren().addAll(
                 kpiCard("Transport Operators", overview.transportOperators(), "Firestore transportOperators collection"),
                 kpiCard("Active Routes", overview.activeRoutes(), "Published user routes"));
-        return new VBox(16, stats, emptyPanel("Transport operator registry foundation",
+        return moduleTemplate("Transport Operators", "Monitor operator profiles and route publishing readiness.", stats,
+                emptyPanel("Transport operator registry foundation",
                 "Operator profile table, suspend actions and operator detail review are reserved for Part 2."));
     }
 
@@ -364,14 +362,15 @@ public class AdminDashboardPage {
                 kpiCard("Businesses", overview.approvedBusinesses(), "Approved providers", "\uE719"),
                 kpiCard("Bookings", overview.todaysBookings(), "Booking records visible to admin", "\uE8A7"),
                 kpiCard("Open Lost & Found", overview.lostFoundOpenCases(), "Open support items", "\uE721"));
-        return new VBox(16, cards, emptyPanel("Analytics foundation",
+        return moduleTemplate("Reports & Analytics", "Platform, business, transport, bookings and safety insights.", cards,
+                emptyPanel("Analytics foundation",
                 "Charts, exports, date filters and operational reports are intended for Part 2."));
     }
 
-    private StackPane overviewHero(AppDataStore.AdminOverview overview) {
-        ImageView image = createImage("/images/godavari_kumbh.jpg", 980, 150);
+    private StackPane overviewHero() {
+        ImageView image = createImage("/images/ramkund_sunrise.jpg", 980, 148);
         image.getStyleClass().add("admin-hero-image");
-        Rectangle clip = new Rectangle(980, 150);
+        Rectangle clip = new Rectangle(980, 148);
         clip.setArcWidth(22);
         clip.setArcHeight(22);
         image.setClip(clip);
@@ -380,14 +379,12 @@ public class AdminDashboardPage {
         eyebrow.getStyleClass().add("admin-hero-eyebrow");
         Label title = new Label("Administration & Operations Control Center");
         title.getStyleClass().add("admin-hero-title");
-        Label detail = new Label("Unified control for pilgrims, businesses, transport and public operations.");
+        Label detail = new Label("Unified control for Simhastha services, safety and public operations.");
         detail.getStyleClass().add("admin-hero-detail");
         detail.setWrapText(true);
         HBox badges = new HBox(8,
                 statusChip("Admin Active", true),
-                statusChip("Operations", true),
-                statusChip("Nashik Simhastha 2027", true),
-                compactSystemChip(overview));
+                statusChip("Operations", true));
         VBox text = new VBox(6, eyebrow, title, detail, badges);
         text.setPadding(new Insets(18, 20, 18, 22));
         StackPane hero = new StackPane(image, text);
@@ -407,16 +404,25 @@ public class AdminDashboardPage {
                         "Configured through existing firebase.properties, expected project: superxkhumbh."));
         bootstrap.getStyleClass().add("management-panel");
         bootstrap.setPadding(new Insets(16));
-        return new VBox(16, statusBanner(overview), createFirebasePanel(), bootstrap);
+        return moduleTemplate("System", "Connection health, admin access and application safety.", statusBanner(overview),
+                createFirebasePanel(), bootstrap);
     }
 
     private VBox createApprovalPanel() {
         approvalList = new VBox(9);
         refreshApprovals();
-        VBox panel = new VBox(14, sectionTitle("Registration Approval Requests"), approvalList);
+        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
+        TilePane stats = kpiGrid();
+        stats.getChildren().addAll(
+                kpiCard("Pending Requests", AppDataStore.pendingApprovals().size(), "Awaiting admin decision", "\uE7BA"),
+                kpiCard("Approved Today", 0, "Daily approval analytics in Part 2", "\uE73E"),
+                kpiCard("Rejected", 0, "Rejection analytics in Part 2", "\uE711"),
+                kpiCard("Total Businesses", overview.approvedBusinesses() + overview.pendingBusinesses(),
+                        "Approved plus pending records", "\uE719"));
+        VBox panel = new VBox(14, sectionTitle("Pending Request Queue"), approvalList);
         panel.getStyleClass().add("management-panel");
         panel.setMinHeight(360);
-        return panel;
+        return moduleTemplate("Business Approvals", "Review and manage pending business registrations.", stats, panel);
     }
 
     private VBox createModuleManager(String module, String titleText, String helperText) {
@@ -446,10 +452,10 @@ public class AdminDashboardPage {
 
         dataList = new VBox(9);
         refreshDataList();
-        VBox panel = new VBox(12, sectionTitle(titleText + " Manager"), rowDetail(helperText),
+        VBox panel = new VBox(12, sectionTitle(titleText + " Management"), rowDetail(helperText),
                 moduleSelect, titleInput, detailInput, add, dataList);
         panel.getStyleClass().add("management-panel");
-        return panel;
+        return moduleTemplate(titleText, helperText, panel);
     }
 
     private String moduleSectionName(String module) {
@@ -496,7 +502,7 @@ public class AdminDashboardPage {
         }
         VBox panel = new VBox(14, summary, rows);
         panel.getStyleClass().add("management-panel");
-        return panel;
+        return moduleTemplate("Bookings", "Monitor booking and payment records without changing payment internals.", panel);
     }
 
     private VBox createFirebasePanel() {
@@ -514,6 +520,20 @@ public class AdminDashboardPage {
         VBox panel = new VBox(14, sectionTitle("Application Control Logic"), list);
         panel.getStyleClass().add("management-panel");
         return panel;
+    }
+
+    private VBox moduleTemplate(String titleText, String detailText, javafx.scene.Node... body) {
+        Label icon = AppUi.symbolIcon(sectionIcon(titleText), "admin-module-title-icon");
+        Label title = sectionTitle(titleText);
+        Label detail = rowDetail(detailText);
+        VBox copy = new VBox(2, title, detail);
+        HBox head = new HBox(10, icon, copy);
+        head.getStyleClass().add("admin-module-title-row");
+        head.setAlignment(Pos.CENTER_LEFT);
+
+        VBox shell = new VBox(14, head);
+        shell.getChildren().addAll(body);
+        return shell;
     }
 
     private VBox recentActivityPanel() {
@@ -542,13 +562,51 @@ public class AdminDashboardPage {
     private VBox operationsStatusPanel() {
         AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
         VBox rows = new VBox(9,
-                infoRow("\uE930", "Notifications",
-                        AppDataStore.pendingApprovals().size() + " unread approval notification(s)."),
-                infoRow("\uE753", "System State", systemStateLabel(overview)),
+                statusRow("Transport", overview.activeRoutes() > 0 ? "Normal" : "No active update"),
+                statusRow("Ghats", AppDataStore.items("ghat").isEmpty() ? "No active update" : "Guidance published"),
+                statusRow("Emergency", AppDataStore.items("emergency").isEmpty() ? "No active alerts" : "Contacts active"),
+                statusRow("Announcements", overview.activeAnnouncements() + " active"),
                 infoRow("\uE787", "Updated", currentTimeText()));
         VBox panel = new VBox(14, sectionTitle("Operations Status"), rows);
         panel.getStyleClass().add("management-panel");
         return panel;
+    }
+
+    private VBox liveOperationsPreview() {
+        AppDataStore.AdminOverview overview = AppDataStore.adminOverview();
+        TilePane cards = kpiGrid();
+        cards.getChildren().addAll(
+                liveOperationCard("Transport", overview.activeRoutes() > 0 ? "Normal" : "No active update",
+                        overview.activeRoutes() + " published route(s)", "View Details"),
+                liveOperationCard("Ghats", AppDataStore.items("ghat").isEmpty() ? "No active update" : "Guidance published",
+                        AppDataStore.items("ghat").size() + " public guidance item(s)", "View Details"),
+                liveOperationCard("Emergency", AppDataStore.items("emergency").isEmpty() ? "No active alerts" : "Contacts active",
+                        AppDataStore.items("emergency").size() + " verified contact item(s)", "View Details"),
+                liveOperationCard("Schedule / Events", overview.activeEvents() > 0 ? "Published" : "No active update",
+                        overview.activeEvents() + " active event item(s)", "View Details"));
+        return moduleTemplate("Live Operations", "Quick operational signals. Detailed management stays in each module.", cards);
+    }
+
+    private VBox liveOperationCard(String title, String status, String detail, String actionText) {
+        Label icon = AppUi.symbolIcon(sectionIcon(title), "admin-kpi-icon");
+        Label titleLabel = rowTitle(title);
+        Label detailLabel = rowDetail(detail);
+        Label updated = rowDetail("Last updated: " + currentTimeText());
+        Button action = new Button(actionText);
+        action.getStyleClass().add("admin-small-action");
+        action.setOnAction(event -> showInfo(title, detail));
+        HBox top = new HBox(9, icon, titleLabel, AppUi.spacer(), statusChip(status, !"No active update".equals(status)));
+        top.setAlignment(Pos.CENTER_LEFT);
+        VBox card = new VBox(8, top, detailLabel, updated, action);
+        card.getStyleClass().add("management-stat-card");
+        return card;
+    }
+
+    private HBox statusRow(String title, String status) {
+        HBox row = new HBox(10, rowTitle(title), AppUi.spacer(), statusChip(status, !status.contains("No active update")));
+        row.getStyleClass().add("management-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 
     private VBox listPanel(String titleText, List<AppDataStore.ServiceItem> items, String emptyText) {
@@ -583,12 +641,23 @@ public class AdminDashboardPage {
         return banner;
     }
 
+    private HBox syncIssueBanner() {
+        Button retry = new Button("\uE72C");
+        retry.getStyleClass().add("admin-icon-button");
+        retry.setOnAction(event -> refreshAdminData());
+        Label text = rowDetail("Some operational data could not be refreshed.");
+        HBox banner = new HBox(10, statusChip("Data Sync Issue", false), text, AppUi.spacer(), retry);
+        banner.getStyleClass().add("admin-sync-banner");
+        banner.setAlignment(Pos.CENTER_LEFT);
+        return banner;
+    }
+
     private TilePane kpiGrid() {
         TilePane grid = new TilePane();
         grid.getStyleClass().add("admin-kpi-grid");
         grid.setHgap(12);
         grid.setVgap(12);
-        grid.setPrefColumns(3);
+        grid.setPrefColumns(4);
         return grid;
     }
 
@@ -637,8 +706,11 @@ public class AdminDashboardPage {
 
         for (AppDataStore.ApprovalRequest request : new java.util.ArrayList<>(AppDataStore.pendingApprovals())) {
             Button approve = new Button("Approve");
-            approve.getStyleClass().add("primary-button");
+            approve.getStyleClass().add("admin-success-action");
             approve.setOnAction(event -> {
+                if (!confirm("Approve Business", "Approve " + request.title + "?")) {
+                    return;
+                }
                 try {
                     AppDataStore.approve(request);
                     refreshAdminData();
@@ -648,8 +720,11 @@ public class AdminDashboardPage {
             });
 
             Button reject = new Button("Reject");
-            reject.getStyleClass().add("text-button");
+            reject.getStyleClass().add("admin-danger-action");
             reject.setOnAction(event -> {
+                if (!confirm("Reject Business", "Reject " + request.title + "?")) {
+                    return;
+                }
                 try {
                     AppDataStore.reject(request);
                     refreshAdminData();
@@ -658,10 +733,15 @@ public class AdminDashboardPage {
                 }
             });
 
-            VBox text = new VBox(2, rowTitle(request.title + "  [" + request.type + "]"),
-                    rowDetail(request.detail + " | Target: " + AppDataStore.displayName(request.targetModule)));
-            HBox row = new HBox(12, AppUi.symbolIcon("\uE8A7", "management-row-icon"), text, AppUi.spacer(), approve,
-                    reject);
+            Button view = new Button("View Details");
+            view.getStyleClass().add("admin-neutral-action");
+            view.setOnAction(event -> showInfo(request.title, request.detail));
+
+            VBox text = new VBox(3, rowTitle(request.title),
+                    rowDetail("Owner UID: " + valueOr("Available after Firestore refresh", request.ownerId)),
+                    rowDetail(request.detail + " | Status: Pending"));
+            HBox row = new HBox(12, AppUi.symbolIcon("\uE8A7", "management-row-icon"), text, AppUi.spacer(), view,
+                    approve, reject);
             row.getStyleClass().add("management-row");
             row.setAlignment(Pos.CENTER_LEFT);
             approvalList.getChildren().add(row);
@@ -735,7 +815,7 @@ public class AdminDashboardPage {
         }
         String message = overview.message() == null ? "" : overview.message().toLowerCase();
         if (message.contains("permission") || message.contains("access")) {
-            return "Access Sync Issue";
+            return "Data Sync Issue";
         }
         if (message.contains("configured") || message.contains("offline")) {
             return "Offline Mode";
@@ -792,5 +872,13 @@ public class AdminDashboardPage {
         alert.setHeaderText(null);
         alert.setContentText(message);
         alert.showAndWait();
+    }
+
+    private boolean confirm(String title, String message) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        return alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK;
     }
 }
