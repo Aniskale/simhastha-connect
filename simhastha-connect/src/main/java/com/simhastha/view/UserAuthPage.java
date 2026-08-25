@@ -92,8 +92,8 @@ public class UserAuthPage {
         Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
         Button createAccount = linkButton("Don't have an account? Create Account", this::showCreateAccountForm);
 
-        replaceForm(createFormCard("Pilgrim / User Login", tabs, emailMobile, password, loginButton, forgotButton,
-                createAccount));
+        replaceForm(createFormCard("Pilgrim / User Login", tabs, emailMobile, AppUi.passwordFieldWithToggle(password),
+                loginButton, forgotButton, createAccount));
     }
 
     private void showCreateAccountForm() {
@@ -131,7 +131,8 @@ public class UserAuthPage {
 
         Button loginLink = linkButton("Already registered? Login", this::showLoginForm);
         ScrollPane formScroll = new ScrollPane(createFormCard("Create Pilgrim Account", tabs, fullName, mobile, email,
-                password, confirmPassword, createButton, loginLink));
+                AppUi.passwordFieldWithToggle(password), AppUi.passwordFieldWithToggle(confirmPassword), createButton,
+                loginLink));
         formScroll.getStyleClass().add("form-card-scroll");
         formScroll.setFitToWidth(true);
         formScroll.setMaxHeight(455);
@@ -237,22 +238,8 @@ public class UserAuthPage {
                 showInfo("Login Failed", result == null ? "Unable to login." : result.message());
                 return;
             }
-            openDashboardFor(result.user());
+            AppNavigator.openDashboardFor(currentStage, result.user(), this::showInfo);
         }));
-    }
-
-    private void openDashboardFor(AppSession.User user) {
-        switch (user.role()) {
-            case "admin" -> currentStage.setScene(new AdminDashboardPage().createScene(currentStage));
-            case "business" -> currentStage.setScene(new BusinessOwnerDashboardPage(
-                    new BusinessAuthPage.BusinessAccount(user.displayName(), user.displayName(), "Business",
-                            "", user.email(), "", "")).createScene(currentStage));
-            case "transport_operator" -> currentStage.setScene(new OperatorDashboardPage(
-                    new OperatorAuthPage.OperatorAccount(user.displayName(), user.displayName(), "",
-                            user.email(), "Transport", "")).createScene(currentStage));
-            case "user" -> currentStage.setScene(new DashboardPage().createScene(currentStage));
-            default -> showInfo("Login Failed", "Account role is not valid.");
-        }
     }
 
     private void sendReset(TextField emailField) {

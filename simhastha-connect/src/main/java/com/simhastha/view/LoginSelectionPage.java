@@ -66,13 +66,9 @@ public class LoginSelectionPage {
         HBox.setHgrow(userCard, Priority.ALWAYS);
         HBox.setHgrow(businessCard, Priority.ALWAYS);
 
-        Button adminLogin = new Button("ADMIN LOGIN");
-        adminLogin.getStyleClass().add("back-button");
-        adminLogin.setOnAction(event -> stage.setScene(new AdminAuthPage().createScene(stage)));
-
-        VBox cardArea = new VBox(20, showcase, createTrustStrip(), adminLogin);
+        VBox cardArea = new VBox(20, showcase, createTrustStrip());
         cardArea.setAlignment(Pos.CENTER);
-        cardArea.setPadding(new Insets(8, 44, 42, 44));
+        cardArea.setPadding(new Insets(18, 44, 34, 44));
         return cardArea;
     }
 

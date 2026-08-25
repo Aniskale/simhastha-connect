@@ -2654,6 +2654,201 @@
     -fx-padding: 10px 13px;
 }
 
+.password-field-wrapper .input-field {
+    -fx-padding: 10px 40px 10px 13px;
+}
+
+.password-toggle-button {
+    -fx-background-color: transparent;
+    -fx-font-family: "Segoe MDL2 Assets";
+    -fx-font-size: 15px;
+    -fx-text-fill: #7a0f12;
+    -fx-padding: 4px 7px;
+    -fx-cursor: hand;
+}
+
+.password-toggle-button:hover {
+    -fx-text-fill: #d89b2b;
+}
+
+.theme-dark .password-toggle-button {
+    -fx-text-fill: #e5b44c;
+}
+
+.admin-shell {
+    -fx-padding: 14px 28px 34px 28px;
+}
+
+.admin-sidebar {
+    -fx-min-width: 220px;
+    -fx-pref-width: 220px;
+    -fx-padding: 16px;
+    -fx-background-color: rgba(255, 249, 236, 0.90);
+    -fx-background-radius: 12px;
+    -fx-border-color: rgba(216, 155, 43, 0.36);
+    -fx-border-radius: 12px;
+    -fx-effect: dropshadow(gaussian, rgba(66, 31, 8, 0.16), 18, 0.14, 0, 6);
+}
+
+.theme-dark .admin-sidebar {
+    -fx-background-color: rgba(9, 18, 30, 0.90);
+    -fx-border-color: rgba(229, 180, 76, 0.34);
+}
+
+.admin-sidebar-title {
+    -fx-text-fill: #7a0f12;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-padding: 0 0 8px 0;
+}
+
+.theme-dark .admin-sidebar-title {
+    -fx-text-fill: #e5b44c;
+}
+
+.admin-nav-button,
+.admin-nav-active {
+    -fx-background-radius: 8px;
+    -fx-border-radius: 8px;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-padding: 9px 12px;
+    -fx-cursor: hand;
+}
+
+.admin-nav-button {
+    -fx-background-color: transparent;
+    -fx-text-fill: #5a3514;
+}
+
+.admin-nav-button:hover {
+    -fx-background-color: rgba(216, 155, 43, 0.14);
+    -fx-text-fill: #7a0f12;
+}
+
+.admin-nav-active {
+    -fx-background-color: linear-gradient(to right, #6b1712, #d65c0b);
+    -fx-text-fill: #fffaf0;
+}
+
+.theme-dark .admin-nav-button {
+    -fx-text-fill: #d8c8aa;
+}
+
+.theme-dark .admin-nav-button:hover {
+    -fx-background-color: rgba(229, 180, 76, 0.12);
+    -fx-text-fill: #e5b44c;
+}
+
+.theme-dark .admin-nav-active {
+    -fx-background-color: linear-gradient(to right, #e5b44c, #e87516);
+    -fx-text-fill: #1c0d07;
+}
+
+.admin-content-host {
+    -fx-spacing: 16px;
+    -fx-padding: 0 4px 4px 0;
+}
+
+.admin-section-header {
+    -fx-padding: 2px 2px 0 2px;
+}
+
+.admin-section-heading {
+    -fx-text-fill: #6b1712;
+    -fx-font-size: 25px;
+    -fx-font-weight: bold;
+}
+
+.theme-dark .admin-section-heading {
+    -fx-text-fill: #fff4d6;
+}
+
+.admin-kpi-grid {
+    -fx-pref-tile-width: 240px;
+    -fx-pref-tile-height: 116px;
+}
+
+.admin-status-banner {
+    -fx-padding: 12px 14px;
+    -fx-background-color: rgba(255, 249, 236, 0.84);
+    -fx-background-radius: 10px;
+    -fx-border-color: rgba(216, 155, 43, 0.30);
+    -fx-border-radius: 10px;
+}
+
+.theme-dark .admin-status-banner {
+    -fx-background-color: rgba(9, 18, 30, 0.82);
+    -fx-border-color: rgba(229, 180, 76, 0.28);
+}
+
+.status-chip-ok,
+.status-chip-warn {
+    -fx-background-radius: 999px;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-padding: 6px 10px;
+}
+
+.status-chip-ok {
+    -fx-background-color: rgba(34, 147, 95, 0.14);
+    -fx-text-fill: #1d7d51;
+}
+
+.status-chip-warn {
+    -fx-background-color: rgba(214, 92, 11, 0.15);
+    -fx-text-fill: #a74205;
+}
+
+.theme-dark .status-chip-ok {
+    -fx-background-color: rgba(68, 192, 126, 0.18);
+    -fx-text-fill: #8ee6b1;
+}
+
+.theme-dark .status-chip-warn {
+    -fx-background-color: rgba(229, 180, 76, 0.18);
+    -fx-text-fill: #f1c15d;
+}
+
+.admin-profile-chip {
+    -fx-background-color: rgba(255, 249, 236, 0.62);
+    -fx-background-radius: 10px;
+    -fx-border-color: rgba(216, 155, 43, 0.28);
+    -fx-border-radius: 10px;
+    -fx-text-fill: #5a3514;
+    -fx-font-size: 11px;
+    -fx-font-weight: bold;
+    -fx-padding: 8px 10px;
+}
+
+.theme-dark .admin-profile-chip {
+    -fx-background-color: rgba(255, 244, 214, 0.10);
+    -fx-border-color: rgba(229, 180, 76, 0.24);
+    -fx-text-fill: #fff4d6;
+}
+
+.admin-bell {
+    -fx-padding: 5px;
+}
+
+.admin-bell-icon {
+    -fx-text-fill: #7a0f12;
+    -fx-font-size: 22px;
+}
+
+.theme-dark .admin-bell-icon {
+    -fx-text-fill: #e5b44c;
+}
+
+.admin-badge {
+    -fx-background-color: #d65c0b;
+    -fx-background-radius: 999px;
+    -fx-text-fill: white;
+    -fx-font-size: 10px;
+    -fx-font-weight: bold;
+    -fx-padding: 2px 5px;
+}
+
 .input-field:focused,
 .input-combo:focused {
     -fx-border-color: #d89b2b;

@@ -7,10 +7,13 @@ import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextInputControl;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
@@ -29,7 +32,7 @@ public final class AppUi {
     }
 
     public static BorderPane createHeader(Stage stage, String titleText, String subtitleText, Runnable backAction) {
-        Button backButton = new Button("\uE72B  Back");
+        Button backButton = new Button("\u2190  Back");
         backButton.getStyleClass().add("back-button");
         backButton.setOnAction(event -> backAction.run());
 
@@ -126,6 +129,46 @@ public final class AppUi {
         passwordField.setPromptText(prompt);
         passwordField.getStyleClass().add("input-field");
         return passwordField;
+    }
+
+    public static StackPane passwordFieldWithToggle(PasswordField passwordField) {
+        TextField visibleField = new TextField();
+        visibleField.promptTextProperty().bind(passwordField.promptTextProperty());
+        visibleField.textProperty().bindBidirectional(passwordField.textProperty());
+        visibleField.getStyleClass().add("input-field");
+        visibleField.setManaged(false);
+        visibleField.setVisible(false);
+
+        passwordField.setMaxWidth(Double.MAX_VALUE);
+        visibleField.setMaxWidth(Double.MAX_VALUE);
+
+        Button toggle = new Button("\uE890");
+        toggle.getStyleClass().add("password-toggle-button");
+        toggle.setAccessibleText("Show password");
+        toggle.setTooltip(new Tooltip("Show password"));
+        toggle.setOnAction(event -> {
+            TextInputControl source = visibleField.isVisible() ? visibleField : passwordField;
+            int caret = source.getCaretPosition();
+            boolean showPassword = !visibleField.isVisible();
+            visibleField.setVisible(showPassword);
+            visibleField.setManaged(showPassword);
+            passwordField.setVisible(!showPassword);
+            passwordField.setManaged(!showPassword);
+            toggle.setText(showPassword ? "\uE8F5" : "\uE890");
+            toggle.setAccessibleText(showPassword ? "Hide password" : "Show password");
+            toggle.setTooltip(new Tooltip(showPassword ? "Hide password" : "Show password"));
+
+            TextInputControl target = showPassword ? visibleField : passwordField;
+            target.requestFocus();
+            target.positionCaret(Math.min(caret, target.getLength()));
+        });
+
+        StackPane wrapper = new StackPane(passwordField, visibleField, toggle);
+        wrapper.getStyleClass().add("password-field-wrapper");
+        wrapper.setMaxWidth(Double.MAX_VALUE);
+        StackPane.setAlignment(toggle, Pos.CENTER_RIGHT);
+        StackPane.setMargin(toggle, new Insets(0, 7, 0, 0));
+        return wrapper;
     }
 
     public static Region spacer() {

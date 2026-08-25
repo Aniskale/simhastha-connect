@@ -103,7 +103,50 @@ public final class FirestoreGateway {
         return approvals;
     }
 
+    public AppDataStore.AdminOverview loadAdminOverview(String idToken) throws IOException, InterruptedException {
+        List<Document> users = loadCollectionDocuments("users", idToken);
+        List<Document> businesses = loadCollectionDocuments("businesses", idToken);
+        List<Document> operators = loadCollectionDocuments("transportOperators", idToken);
+        List<Document> appItems = loadCollectionDocuments("appItems", idToken);
+        List<Document> bookings = loadCollectionDocuments("bookings", idToken);
+        List<Document> lostFoundReports = loadCollectionDocuments("lostFoundReports", idToken);
+
+        int approvedBusinesses = countMatching(businesses, document ->
+                "approved".equals(field(document.fields, "status")) || "true".equals(boolField(document.fields, "approved")));
+        int pendingBusinesses = countMatching(businesses, document ->
+                "pending".equals(field(document.fields, "status")) || "false".equals(boolField(document.fields, "approved")));
+        int activeOperators = countMatching(operators, document ->
+                !"rejected".equals(field(document.fields, "status"))
+                        && !"disabled".equals(field(document.fields, "status"))
+                        && !"suspended".equals(field(document.fields, "status")));
+        int activeRoutes = countModuleItems(appItems, "transport");
+        int activeEvents = countModuleItems(appItems, "schedule");
+        int activeAnnouncements = countModuleItems(appItems, "announcement");
+        int openLostFound = lostFoundReports.isEmpty()
+                ? countModuleItems(appItems, "lost")
+                : countMatching(lostFoundReports, document -> {
+                    String status = field(document.fields, "status");
+                    return status.isBlank() || "open".equals(status) || "pending".equals(status);
+                });
+
+        return new AppDataStore.AdminOverview(
+                users.size(),
+                approvedBusinesses,
+                pendingBusinesses,
+                activeOperators,
+                activeRoutes,
+                bookings.size(),
+                activeEvents,
+                openLostFound,
+                activeAnnouncements,
+                true,
+                "");
+    }
+
     public UserProfile loadUserProfile(String uid, String idToken) throws IOException, InterruptedException {
+        if (!notBlank(uid)) {
+            throw new MalformedProfileException("Firebase authentication succeeded but did not return a UID.");
+        }
         HttpRequest request = authorizedBuilder(documentUri("users", uid), idToken)
                 .timeout(Duration.ofSeconds(8))
                 .GET()
@@ -112,18 +155,35 @@ public final class FirestoreGateway {
         if (response.statusCode() == 404) {
             return null;
         }
+        if (response.statusCode() == 401 || response.statusCode() == 403) {
+            throw new PermissionDeniedException("Firestore permission denied while reading users/" + uid + ".");
+        }
         if (response.statusCode() >= 400) {
             throw new IOException("Firestore profile read failed: " + response.statusCode());
         }
-        List<Document> documents = parseDocuments(response.body());
-        String fields = documents.isEmpty() ? extractFieldsObject(response.body()) : documents.get(0).fields;
+        String body = response.body();
+        String profileUid = valueOr(uid, field(body, "uid")).trim();
+        String name = field(body, "name").trim();
+        String email = field(body, "email").trim();
+        String mobile = field(body, "mobile").trim();
+        String role = field(body, "role").trim();
+        String status = field(body, "status").trim();
+        if (!notBlank(role) && !notBlank(status)) {
+            throw new MalformedProfileException("Firestore profile at users/" + uid + " is missing role and status.");
+        }
+        if (!notBlank(role)) {
+            throw new MalformedProfileException("Firestore profile at users/" + uid + " is missing role.");
+        }
+        if (!notBlank(status)) {
+            throw new MalformedProfileException("Firestore profile at users/" + uid + " is missing status.");
+        }
         return new UserProfile(
-                valueOr(uid, field(fields, "uid")),
-                field(fields, "name"),
-                field(fields, "email"),
-                field(fields, "mobile"),
-                field(fields, "role"),
-                field(fields, "status"));
+                profileUid,
+                name,
+                email,
+                mobile,
+                role,
+                status);
     }
 
     public void saveUserProfile(UserProfile profile, String idToken) throws IOException, InterruptedException {
@@ -165,8 +225,8 @@ public final class FirestoreGateway {
                 fieldJson("mobile", account.mobile),
                 fieldJson("email", account.email),
                 fieldJson("serviceType", account.serviceType),
-                fieldJson("status", "pending"),
-                boolFieldJson("approved", false),
+                fieldJson("status", "active"),
+                boolFieldJson("approved", true),
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())));
         sendAuthorizedPatch(documentUri("transportOperators", uid), json, idToken);
     }
@@ -236,6 +296,19 @@ public final class FirestoreGateway {
             throw new IOException("Firestore read failed: " + response.statusCode());
         }
         return response.body();
+    }
+
+    private List<Document> loadCollectionDocuments(String collection, String idToken)
+            throws IOException, InterruptedException {
+        try {
+            return parseDocuments(get(collectionUrl(collection), idToken));
+        } catch (IOException exception) {
+            String message = exception.getMessage() == null ? "" : exception.getMessage();
+            if (message.contains("404")) {
+                return List.of();
+            }
+            throw exception;
+        }
     }
 
     private void patch(String url, String json) {
@@ -364,10 +437,57 @@ public final class FirestoreGateway {
         return notBlank(value) && !value.contains("/") && value.length() >= 8;
     }
 
+    private int countModuleItems(List<Document> documents, String module) {
+        return countMatching(documents, document -> module.equals(field(document.fields, "module")));
+    }
+
+    private int countMatching(List<Document> documents, java.util.function.Predicate<Document> predicate) {
+        int count = 0;
+        for (Document document : documents) {
+            if (predicate.test(document)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     private String extractFieldsObject(String json) {
-        Matcher matcher = Pattern.compile("\"fields\"\\s*:\\s*\\{(.*)\\}\\s*(?:,\\s*\"createTime\"|,\\s*\"updateTime\"|\\})",
-                Pattern.DOTALL).matcher(json == null ? "" : json);
-        return matcher.find() ? matcher.group(1) : "";
+        String source = json == null ? "" : json;
+        Matcher matcher = Pattern.compile("\"fields\"\\s*:\\s*\\{", Pattern.DOTALL).matcher(source);
+        if (!matcher.find()) {
+            return "";
+        }
+        int start = matcher.end();
+        int depth = 1;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int index = start; index < source.length(); index++) {
+            char current = source.charAt(index);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (current == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (current == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) {
+                continue;
+            }
+            if (current == '{') {
+                depth++;
+            } else if (current == '}') {
+                depth--;
+                if (depth == 0) {
+                    return source.substring(start, index);
+                }
+            }
+        }
+        return "";
     }
 
     private String valueOr(String fallback, String value) {
@@ -394,5 +514,17 @@ public final class FirestoreGateway {
     }
 
     public record UserProfile(String uid, String name, String email, String mobile, String role, String status) {
+    }
+
+    public static class PermissionDeniedException extends IOException {
+        public PermissionDeniedException(String message) {
+            super(message);
+        }
+    }
+
+    public static class MalformedProfileException extends IOException {
+        public MalformedProfileException(String message) {
+            super(message);
+        }
     }
 }

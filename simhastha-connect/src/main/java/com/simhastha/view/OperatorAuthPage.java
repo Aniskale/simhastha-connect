@@ -109,7 +109,7 @@ public class OperatorAuthPage {
             if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Operator Email and Password.");
             } else if (AuthService.isFirebaseEnabled()) {
-                runAuth(loginButton, AuthService.login(userId, userPassword, "transport_operator"));
+                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
             } else if (!registeredOperators.containsKey(userId)) {
                 showInfo("Login Failed", "Operator account not found. Please register first.");
             } else if (!registeredOperators.get(userId).password.equals(userPassword)) {
@@ -122,7 +122,8 @@ public class OperatorAuthPage {
         });
 
         Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
-        replaceNode(createFormCard("Transport Operator Login", tabs, emailMobile, password, loginButton, forgotButton));
+        replaceNode(createFormCard("Transport Operator Login", tabs, emailMobile, AppUi.passwordFieldWithToggle(password),
+                loginButton, forgotButton));
     }
 
     private void showRegisterForm() {
@@ -168,19 +169,19 @@ public class OperatorAuthPage {
                             .whenComplete((result, error) -> Platform.runLater(() -> {
                                 registerButton.setDisable(false);
                                 registerButton.setText("REGISTER OPERATOR");
-                                showInfo(error == null ? "Operator Registered" : "Registration Failed",
-                                        result == null ? "Registration failed." : result.message());
+                                if (error != null || result == null || !result.success()) {
+                                    showInfo("Registration Failed",
+                                            result == null ? "Registration failed." : result.message());
+                                    return;
+                                }
+                                showInfo("Operator Registered", "Transport operator account is active. You can login now.");
                                 showLoginForm();
                             }));
                 } else {
                     registeredOperators.put(account.email.toLowerCase(), account);
                     registeredOperators.put(account.mobile.toLowerCase(), account);
-                    AppDataStore.requestApproval("Transport Operator Registration",
-                            account.organizationName,
-                            account.serviceType + " | " + account.contactPerson + " | " + account.mobile,
-                            "transport");
                     showInfo("Operator Registered",
-                            "Request sent to Admin Dashboard. After approval, this operator appears in the user Transport page.");
+                            "Transport operator account is active. You can login now.");
                     showLoginForm();
                 }
             }
@@ -190,7 +191,7 @@ public class OperatorAuthPage {
                 organization, contactPerson,
                 mobile, email,
                 serviceType,
-                password, confirmPassword);
+                AppUi.passwordFieldWithToggle(password), AppUi.passwordFieldWithToggle(confirmPassword));
         replaceNode(createFormCard("Register Transport Operator", tabs, fields, registerButton));
     }
 
@@ -287,22 +288,8 @@ public class OperatorAuthPage {
                 return;
             }
             Stage stage = (Stage) button.getScene().getWindow();
-            openDashboardFor(stage, result.user());
+            AppNavigator.openDashboardFor(stage, result.user(), this::showInfo);
         }));
-    }
-
-    private void openDashboardFor(Stage stage, AppSession.User user) {
-        switch (user.role()) {
-            case "admin" -> stage.setScene(new AdminDashboardPage().createScene(stage));
-            case "business" -> stage.setScene(new BusinessOwnerDashboardPage(
-                    new BusinessAuthPage.BusinessAccount(user.displayName(), user.displayName(), "Business", "",
-                            user.email(), "", "")).createScene(stage));
-            case "transport_operator" -> stage.setScene(new OperatorDashboardPage(
-                    new OperatorAccount(user.displayName(), user.displayName(), "", user.email(), "Transport", ""))
-                    .createScene(stage));
-            case "user" -> stage.setScene(new DashboardPage().createScene(stage));
-            default -> showInfo("Login Failed", "Account role is not valid.");
-        }
     }
 
     private ImageView createImage(String path, double width, double height) {
