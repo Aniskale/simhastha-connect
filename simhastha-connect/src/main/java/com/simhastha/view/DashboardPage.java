@@ -3,6 +3,7 @@ package com.simhastha.view;
 import java.awt.Desktop;
 import java.net.URL;
 import java.net.URI;
+import java.util.List;
 
 import javafx.animation.Animation;
 import javafx.animation.Interpolator;
@@ -280,11 +281,16 @@ public class DashboardPage {
     }
 
     private VBox liveUpdatesPanel() {
-        VBox rows = new VBox(8,
-                dataRow("announcement", "Traffic Advisory for Main Routes", "Use marked shuttle points near Nashik Road and CBS."),
-                dataRow("schedule", "Simhastha Bathing Dates", "Official dates and special notices will be highlighted here."),
-                dataRow("transport", "Additional Bus Services", "Extra movement support planned on high crowd days."),
-                dataRow("emergency", "Weather / Crowd Notice", "Follow official help booths and police barricades."));
+        VBox rows = new VBox(8);
+        List<AppDataStore.ServiceItem> updates = AppDataStore.hasRemoteItems("announcement")
+                ? AppDataStore.items("announcement")
+                : List.of();
+        if (updates.isEmpty()) {
+            rows.getChildren().add(dataRow("announcement", "No live updates right now",
+                    "Official updates from Admin will appear here."));
+        } else {
+            updates.stream().limit(4).forEach(item -> rows.getChildren().add(dataRow(item.module, item.title, item.detail)));
+        }
         VBox panel = new VBox(12, sectionTitle("Live Updates"), rows);
         panel.getStyleClass().add("pilgrim-panel");
         panel.setMinHeight(190);
@@ -309,10 +315,13 @@ public class DashboardPage {
     }
 
     private VBox transportPage() {
+        Node officialRoutes = AppDataStore.items("transport").isEmpty()
+                ? infoPanel("Government Transport", "Official route information, bus schedules and public crowd movement guidance remain free.")
+                : adminControlledGrid("transport", "Open Route");
         return pageShell("Transport Services", "Bus, train, flight and last-mile Kumbh movement planner.",
                 transportJourneyPlanner(),
                 transportQuickStatus(),
-                infoPanel("Government Transport", "Official route information, bus schedules and public crowd movement guidance remain free."),
+                officialRoutes,
                 twoColumnGrid(
                         richCard("transport", "Ozar Airport Arrival Plan",
                                 "Ozar Airport to Nashik Road / CBS connector guidance. Public information only.", "Free Info"),
@@ -323,6 +332,10 @@ public class DashboardPage {
     }
 
     private VBox packagesPage() {
+        if (!AppDataStore.items("packages").isEmpty()) {
+            return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
+                    adminControlledGrid("packages", "Pay Securely"));
+        }
         return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
                 twoColumnGrid(
                         paidCard("packages", "Divine Nashik Package",
@@ -742,6 +755,10 @@ public class DashboardPage {
     }
 
     private VBox pujaPage() {
+        if (!AppDataStore.items("puja").isEmpty()) {
+            return pageShell("Puja Services", "Traditional puja support, verified counters and darshan guidance.",
+                    adminControlledGrid("puja", "View Details"));
+        }
         return pageShell("Puja Services", "Traditional puja support, verified counters and darshan guidance.",
                 twoColumnGrid(
                         paidCard("puja", "Ramkund Rudrabhishek Help Desk", "Pandit Booking\nReceipt Guidance\nPuja Slot Assistance", "Pay Securely", "puja-rudrabhishek", 1, 1),
@@ -750,6 +767,10 @@ public class DashboardPage {
     }
 
     private VBox ghatsPage() {
+        if (!AppDataStore.items("ghat").isEmpty()) {
+            return pageShell("Ghats & Snan", "Ramkund, Godavari and Trimbakeshwar snan information.",
+                    crowdStatus(), adminControlledGrid("ghat", "Official Update"));
+        }
         return pageShell("Ghats & Snan", "Ramkund, Godavari and Trimbakeshwar snan information.",
                 crowdStatus(),
                 twoColumnGrid(
@@ -760,6 +781,11 @@ public class DashboardPage {
     }
 
     private VBox emergencyPage() {
+        if (!AppDataStore.items("emergency").isEmpty()) {
+            return pageShell("Emergency & Medical", "Important emergency numbers and safety support.",
+                    infoPanel("Emergency Safety Tips", "Stay calm\nFollow police instructions\nUse official help booths\nKeep ID with you\nAvoid overcrowded routes"),
+                    adminControlledGrid("emergency", "Verified"));
+        }
         return pageShell("Emergency & Medical", "Important emergency numbers and safety support.",
                 infoPanel("Emergency Safety Tips", "Stay calm\nFollow police instructions\nUse official help booths\nKeep ID with you\nAvoid overcrowded routes"),
                 twoColumnGrid(
@@ -774,6 +800,11 @@ public class DashboardPage {
     }
 
     private VBox stayPage() {
+        if (!AppDataStore.items("stay").isEmpty()) {
+            return pageShell("Stay & Accommodation", "Hotels, dharamshalas and camp information.",
+                    filterRow("Area", "Type", "Budget"),
+                    adminControlledGrid("stay", "View Details"));
+        }
         return pageShell("Stay & Accommodation", "Hotels, dharamshalas and camp information.",
                 filterRow("Area", "Type", "Budget"),
                 twoColumnGrid(
@@ -800,6 +831,11 @@ public class DashboardPage {
     }
 
     private VBox schedulePage() {
+        if (!AppDataStore.items("schedule").isEmpty()) {
+            return pageShell("KUMBH ALL DAY SCHEDULE", "Daily movement, snan, seva and security schedule.",
+                    filterRow("Select Date", "Select Location", "Filter by Category", "Download Schedule"),
+                    adminControlledGrid("schedule", "Official Update"));
+        }
         HBox body = new HBox(14, scheduleTable(),
                 new VBox(10,
                         infoPanel("Today Highlights", "Morning snan guidance\nEvening aarti crowd movement\nNight patrol after 10 PM"),
@@ -815,6 +851,10 @@ public class DashboardPage {
         HBox categories = new HBox(8,
                 badge("Food & Prasadam"), badge("Accommodation"), badge("Puja Items"), badge("Medical Stores"),
                 badge("Local Guides"), badge("Lockers"), badge("Charging Points"));
+        if (!AppDataStore.items("business").isEmpty()) {
+            return pageShell("Approved Businesses & Local Services", "Verified local services for pilgrims.",
+                    categories, adminControlledGrid("business", "View Details"));
+        }
         return pageShell("Approved Businesses & Local Services", "Verified local services for pilgrims.",
                 categories,
                 twoColumnGrid(
@@ -841,6 +881,10 @@ public class DashboardPage {
     }
 
     private VBox announcementPage() {
+        if (!AppDataStore.items("announcement").isEmpty()) {
+            return pageShell("Announcements & Official Notices", "Pinned alerts, route changes and schedule updates.",
+                    adminControlledGrid("announcement", "Official"));
+        }
         return pageShell("Announcements & Official Notices", "Pinned alerts, route changes and schedule updates.",
                 twoColumnGrid(
                         notice("Important", "09:00 AM", "Ramkund Crowd Level Updated", "Use alternate entry if volunteer teams advise."),
@@ -867,6 +911,55 @@ public class DashboardPage {
             rows.getChildren().add(dataRow(module, item.title, item.detail));
         }
         return pageShell(AppDataStore.displayName(module), "Official information and pilgrim support.", rows);
+    }
+
+    private GridPane adminControlledGrid(String module, String action) {
+        List<Node> cards = new java.util.ArrayList<>();
+        for (AppDataStore.ServiceItem item : AppDataStore.items(module)) {
+            cards.add("business".equals(module) ? publicBusinessCard(item) : richCard(module, item.title, item.detail, action));
+        }
+        if (cards.isEmpty()) {
+            cards.add(infoPanel("No official records", "Admin-published information will appear here."));
+        }
+        return twoColumnGrid(cards.toArray(new Node[0]));
+    }
+
+    private VBox publicBusinessCard(AppDataStore.ServiceItem item) {
+        Button details = new Button("View Details  >");
+        details.getStyleClass().add("pilgrim-small-action");
+        details.setOnAction(event -> showInfo(item.title, item.detail));
+        Button book = new Button("Book Now  >");
+        book.getStyleClass().add("pilgrim-small-action");
+        book.setOnAction(event -> createBusinessBooking(book, item));
+        VBox card = new VBox(8, new HBox(10, moduleIcon("business", "pilgrim-card-icon"), badge("Approved")),
+                strong(item.title), paragraph(item.detail), new HBox(8, details, book));
+        card.getStyleClass().add("pilgrim-rich-card");
+        return card;
+    }
+
+    private void createBusinessBooking(Button button, AppDataStore.ServiceItem item) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            showInfo("Login required", "Please login before creating a booking.");
+            return;
+        }
+        button.setDisable(true);
+        try {
+            String bookingId = "BKG-BUSINESS-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+            AppDataStore.addBooking(new AppDataStore.BookingRecord(bookingId, user.uid(), "BUSINESS", item.id,
+                    item.id, item.title, displayName(user), java.time.LocalDate.now().plusDays(1).toString(),
+                    "", 1, 1, 0, "INR", "PENDING", "NOT_REQUIRED", "", ""));
+            showInfo("Booking request saved", "Your request was sent to the business owner.");
+        } finally {
+            button.setDisable(false);
+        }
+    }
+
+    private String displayName(AppSession.User user) {
+        if (user.displayName() != null && !user.displayName().isBlank()) {
+            return user.displayName();
+        }
+        return user.email() == null || user.email().isBlank() ? "Simhastha pilgrim" : user.email();
     }
 
     private VBox pageShell(String title, String subtitle, Node... sections) {

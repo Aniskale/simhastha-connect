@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -103,13 +104,378 @@ public final class FirestoreGateway {
         return approvals;
     }
 
+    public List<AppDataStore.UserRecord> loadUsers(String idToken) throws IOException, InterruptedException {
+        List<AppDataStore.UserRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("users", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.UserRecord(
+                    valueOr(document.id, field(fields, "uid")),
+                    firstNonBlank(field(fields, "name"), field(fields, "displayName")),
+                    field(fields, "email"),
+                    field(fields, "mobile"),
+                    field(fields, "role"),
+                    field(fields, "status"),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.BusinessRecord> loadBusinesses(String idToken) throws IOException, InterruptedException {
+        List<AppDataStore.BusinessRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("businesses", idToken)) {
+            String fields = document.fields;
+            String ownerId = ownerIdFromBusinessDocument(document);
+            String approved = boolField(fields, "approved");
+            records.add(new AppDataStore.BusinessRecord(
+                    document.id,
+                    ownerId,
+                    field(fields, "businessName"),
+                    field(fields, "ownerName"),
+                    field(fields, "category"),
+                    field(fields, "description"),
+                    field(fields, "location"),
+                    field(fields, "mobile"),
+                    field(fields, "email"),
+                    firstNonBlank(field(fields, "operatingHours"), operatingHours(fields)),
+                    field(fields, "priceRange"),
+                    field(fields, "status"),
+                    "true".equalsIgnoreCase(approved),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.TransportOperatorRecord> loadTransportOperators(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.TransportOperatorRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("transportOperators", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.TransportOperatorRecord(
+                    document.id,
+                    firstNonBlank(field(fields, "ownerId"), document.id),
+                    field(fields, "organizationName"),
+                    field(fields, "contactPerson"),
+                    field(fields, "mobile"),
+                    field(fields, "email"),
+                    field(fields, "serviceType"),
+                    field(fields, "status"),
+                    numberField(fields, "vehicleCount"),
+                    numberField(fields, "routesSubmitted"),
+                    numberField(fields, "activeRoutes"),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.BookingRecord> loadBookings(String idToken) throws IOException, InterruptedException {
+        List<AppDataStore.BookingRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("bookings", idToken)) {
+            records.add(bookingFrom(document));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.BookingRecord> loadBookingsForField(String fieldName, String value, String idToken)
+            throws IOException, InterruptedException {
+        if (!notBlank(value)) {
+            return List.of();
+        }
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"bookings\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"" + escape(fieldName) + "\"},"
+                + "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + escape(value) + "\"}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())),
+                query, idToken);
+        List<AppDataStore.BookingRecord> result = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            result.add(bookingFrom(document));
+        }
+        return result;
+    }
+
+    public List<AppDataStore.RouteRecord> loadTransportRoutes(String idToken) throws IOException, InterruptedException {
+        List<AppDataStore.RouteRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("transportRoutes", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.RouteRecord(
+                    document.id,
+                    field(fields, "routeName"),
+                    field(fields, "from"),
+                    field(fields, "to"),
+                    firstNonBlank(field(fields, "via"), field(fields, "stops")),
+                    field(fields, "mode"),
+                    field(fields, "startTime"),
+                    field(fields, "endTime"),
+                    field(fields, "fare"),
+                    field(fields, "duration"),
+                    firstNonBlank(field(fields, "operatorId"), field(fields, "ownerId")),
+                    "true".equalsIgnoreCase(boolField(fields, "official")),
+                    field(fields, "mapUrl"),
+                    field(fields, "liveSourceUrl"),
+                    "true".equalsIgnoreCase(boolField(fields, "published")),
+                    !"false".equalsIgnoreCase(boolField(fields, "active")),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.ServiceItem> loadPublicModuleItems(String idToken) throws IOException, InterruptedException {
+        List<AppDataStore.ServiceItem> items = new ArrayList<>();
+        loadPublicCollection(items, "transportRoutes", "transport", "routeName", "Transport");
+        loadPublicCollection(items, "businesses", "business", "businessName", "Business");
+        loadPublicCollection(items, "kumbhPackages", "packages", "packageName", "Kumbh Package");
+        loadPublicCollection(items, "pujaServices", "puja", "pujaName", "Puja");
+        loadPublicCollection(items, "ghats", "ghat", "ghatName", "Ghat");
+        loadPublicCollection(items, "stays", "stay", "property", "Stay");
+        loadPublicCollection(items, "events", "schedule", "eventName", "Schedule");
+        loadPublicCollection(items, "announcements", "announcement", "title", "Announcement");
+        loadPublicCollection(items, "liveUpdates", "announcement", "title", "Live Update");
+        loadPublicCollection(items, "emergencyContacts", "emergency", "name", "Emergency");
+        return items;
+    }
+
+    public List<AppDataStore.ServiceItem> loadAdminOperationalItems(String idToken) {
+        List<AppDataStore.ServiceItem> items = new ArrayList<>();
+        loadAdminCollection(items, "kumbhPackages", "packages", "packageName", "Kumbh Package", idToken);
+        loadAdminCollection(items, "pujaServices", "puja", "pujaName", "Puja", idToken);
+        loadAdminCollection(items, "ghats", "ghat", "ghatName", "Ghat", idToken);
+        loadAdminCollection(items, "stays", "stay", "property", "Stay", idToken);
+        loadAdminCollection(items, "events", "schedule", "eventName", "Schedule", idToken);
+        loadAdminCollection(items, "announcements", "announcement", "title", "Announcement", idToken);
+        loadAdminCollection(items, "liveUpdates", "announcement", "title", "Live Update", idToken);
+        loadAdminCollection(items, "emergencyContacts", "emergency", "name", "Emergency", idToken);
+        return items;
+    }
+
+    private void loadAdminCollection(List<AppDataStore.ServiceItem> target, String collection, String module,
+            String titleField, String fallbackCategory, String idToken) {
+        for (Document document : loadOptionalCollectionDocuments(collection, idToken)) {
+            String fields = document.fields;
+            String title = firstNonBlank(field(fields, titleField), field(fields, "title"), field(fields, "businessName"));
+            if (notBlank(title)) {
+                target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory));
+            }
+        }
+    }
+
+    public List<AppDataStore.LostFoundCaseRecord> loadLostFoundCases(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.LostFoundCaseRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("lostFoundReports", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.LostFoundCaseRecord(
+                    document.id,
+                    firstNonBlank(field(fields, "type"), field(fields, "reportType")),
+                    firstNonBlank(field(fields, "name"), field(fields, "itemName")),
+                    field(fields, "age"),
+                    field(fields, "gender"),
+                    field(fields, "clothing"),
+                    field(fields, "identificationMarks"),
+                    firstNonBlank(field(fields, "lastSeenLocation"), field(fields, "location")),
+                    firstNonBlank(field(fields, "lastSeenDateTime"), field(fields, "lastSeenAt")),
+                    field(fields, "reporterName"),
+                    field(fields, "relation"),
+                    firstNonBlank(field(fields, "contact"), field(fields, "mobile")),
+                    firstNonBlank(field(fields, "status"), "open"),
+                    firstNonBlank(field(fields, "priority"), "normal"),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
+    private void loadPublicCollection(List<AppDataStore.ServiceItem> target, String collection, String module,
+            String titleField, String fallbackCategory) throws IOException, InterruptedException {
+        List<Document> documents;
+        try {
+            documents = loadCollectionDocuments(collection, "");
+        } catch (IOException exception) {
+            return;
+        }
+        for (Document document : documents) {
+            String fields = document.fields;
+            String status = field(fields, "status").toLowerCase(Locale.ROOT);
+            String published = boolField(fields, "published");
+            String approved = boolField(fields, "approved");
+            String active = boolField(fields, "active");
+            String verified = boolField(fields, "verified");
+            String expiresAt = firstNonBlank(field(fields, "expiresAt"), field(fields, "expiryTime"));
+            if ("false".equals(published) || "false".equals(active) || "rejected".equals(status)
+                    || "suspended".equals(status) || "disabled".equals(status) || "closed".equals(status)) {
+                continue;
+            }
+            if (isExpired(expiresAt)) {
+                continue;
+            }
+            if (!"true".equals(published) && !"true".equals(approved) && !"true".equals(verified)
+                    && !"approved".equals(status) && !"active".equals(status)) {
+                continue;
+            }
+            String title = firstNonBlank(field(fields, titleField), field(fields, "title"), field(fields, "businessName"));
+            if (!notBlank(title)) {
+                continue;
+            }
+            target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory));
+        }
+    }
+
+    private AppDataStore.BookingRecord bookingFrom(Document document) {
+        String fields = document.fields;
+        return new AppDataStore.BookingRecord(
+                valueOr(document.id, field(fields, "bookingId")),
+                field(fields, "userId"),
+                firstNonBlank(field(fields, "moduleType"), field(fields, "serviceType")),
+                firstNonBlank(field(fields, "catalogItemId"), field(fields, "itemId")),
+                field(fields, "businessId"),
+                firstNonBlank(field(fields, "title"), field(fields, "businessName"), field(fields, "serviceName")),
+                firstNonBlank(field(fields, "customerName"), field(fields, "userName")),
+                firstNonBlank(field(fields, "bookingDate"), field(fields, "dateText")),
+                field(fields, "location"),
+                parseInt(firstNonBlank(numberField(fields, "quantity"), numberField(fields, "quantityOrGuests")), 1),
+                parseInt(numberField(fields, "nights"), 1),
+                parseLong(firstNonBlank(numberField(fields, "amountPaise"), numberField(fields, "amount")), 0),
+                firstNonBlank(field(fields, "currency"), "INR"),
+                firstNonBlank(field(fields, "bookingStatus"), "PENDING"),
+                firstNonBlank(field(fields, "paymentStatus"), "UNPAID"),
+                field(fields, "internalPaymentId"),
+                field(fields, "razorpayPaymentId"));
+    }
+
+    public void updateApprovalRequestStatus(String requestId, String status, String idToken)
+            throws IOException, InterruptedException {
+        String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
+        String json = fieldsJson(
+                fieldJson("status", status),
+                fieldJson("reviewedAt", String.valueOf(System.currentTimeMillis())),
+                fieldJson("reviewedBy", adminUid));
+        sendAuthorizedPatch(URI.create(documentUrl("approvalRequests", requestId)
+                        + "&updateMask.fieldPaths=status&updateMask.fieldPaths=reviewedAt&updateMask.fieldPaths=reviewedBy"),
+                json, idToken);
+    }
+
+    public void saveOperationalItem(String module, AppDataStore.ServiceItem item, String idToken)
+            throws IOException, InterruptedException {
+        String collection = collectionForModule(module);
+        String titleField = titleFieldForModule(module);
+        String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
+        List<String> fields = new ArrayList<>();
+        fields.add(fieldJson(titleField, item.title));
+        fields.add(fieldJson("title", item.title));
+        fields.add(fieldJson("description", item.detail));
+        fields.add(fieldJson("category", item.category));
+        fields.add(fieldJson("status", "active"));
+        fields.add(boolFieldJson("published", true));
+        fields.add(boolFieldJson("active", true));
+        fields.add(boolFieldJson("verified", true));
+        fields.add(fieldJson("createdAt", String.valueOf(System.currentTimeMillis())));
+        fields.add(fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        fields.add(fieldJson("updatedBy", adminUid));
+        fields.add(fieldJson("publishedAt", String.valueOf(System.currentTimeMillis())));
+        fields.add(fieldJson("publishedBy", adminUid));
+        fields.addAll(moduleFields(module, item.detail));
+        String json = fieldsJson(fields.toArray(new String[0]));
+        sendAuthorizedPatch(documentUri(collection, item.id), json, idToken);
+        saveItem(module, item, idToken);
+    }
+
+    private List<String> moduleFields(String module, String detail) {
+        List<String> fields = new ArrayList<>();
+        switch (module) {
+            case "packages" -> {
+                fields.add(fieldJson("packageType", detailValue(detail, "Package Type")));
+                fields.add(fieldJson("sourceCity", detailValue(detail, "Source City")));
+                fields.add(fieldJson("destination", detailValue(detail, "Destination")));
+                fields.add(fieldJson("duration", detailValue(detail, "Duration")));
+                fields.add(fieldJson("startDate", detailValue(detail, "Start Date")));
+                fields.add(fieldJson("endDate", detailValue(detail, "End Date")));
+                fields.add(fieldJson("price", detailValue(detail, "Price")));
+                fields.add(fieldJson("capacity", detailValue(detail, "Seats / Capacity")));
+                fields.add(fieldJson("availableSeats", detailValue(detail, "Seats / Capacity")));
+                fields.add(fieldJson("hotelStay", detailValue(detail, "Hotel / Stay")));
+                fields.add(fieldJson("itinerary", detailValue(detail, "Itinerary")));
+                fields.add(fieldJson("highlights", detailValue(detail, "Highlights")));
+            }
+            case "puja" -> {
+                fields.add(fieldJson("templeGhat", detailValue(detail, "Temple / Ghat")));
+                fields.add(fieldJson("pujaType", detailValue(detail, "Puja Type")));
+                fields.add(fieldJson("price", detailValue(detail, "Price")));
+                fields.add(fieldJson("availableSlots", detailValue(detail, "Available Slots")));
+                fields.add(fieldJson("provider", detailValue(detail, "Pandit / Provider")));
+                fields.add(fieldJson("verificationStatus", detailValue(detail, "Verification Status")));
+                fields.add(fieldJson("bookingStatus", detailValue(detail, "Booking Status")));
+            }
+            case "ghat" -> {
+                fields.add(fieldJson("location", detailValue(detail, "Location")));
+                fields.add(fieldJson("mapUrl", detailValue(detail, "Map URL")));
+                fields.add(fieldJson("snanDate", detailValue(detail, "Snan Date")));
+                fields.add(fieldJson("snanTime", detailValue(detail, "Snan Time")));
+                fields.add(fieldJson("crowdLevel", detailValue(detail, "Crowd Level")));
+                fields.add(fieldJson("safetyStatus", detailValue(detail, "Safety Status")));
+                fields.add(fieldJson("entryStatus", detailValue(detail, "Entry Status")));
+                fields.add(fieldJson("exitStatus", detailValue(detail, "Exit Status")));
+                fields.add(fieldJson("medicalSupport", detailValue(detail, "Medical Support")));
+                fields.add(fieldJson("policeSecurity", detailValue(detail, "Police / Security")));
+                fields.add(fieldJson("facilities", detailValue(detail, "Facilities")));
+                fields.add(fieldJson("instructions", detailValue(detail, "Instructions")));
+            }
+            case "stay" -> {
+                fields.add(fieldJson("type", detailValue(detail, "Type")));
+                fields.add(fieldJson("owner", detailValue(detail, "Owner")));
+                fields.add(fieldJson("location", detailValue(detail, "Location")));
+                fields.add(fieldJson("roomsUnits", detailValue(detail, "Rooms / Units")));
+                fields.add(fieldJson("available", detailValue(detail, "Available")));
+                fields.add(fieldJson("price", detailValue(detail, "Price")));
+            }
+            case "schedule" -> {
+                fields.add(fieldJson("eventType", detailValue(detail, "Type")));
+                fields.add(fieldJson("date", detailValue(detail, "Date")));
+                fields.add(fieldJson("start", detailValue(detail, "Start")));
+                fields.add(fieldJson("end", detailValue(detail, "End")));
+                fields.add(fieldJson("location", detailValue(detail, "Location")));
+            }
+            case "announcement" -> {
+                fields.add(fieldJson("message", detailValue(detail, "Message")));
+                fields.add(fieldJson("priority", detailValue(detail, "Priority")));
+                fields.add(fieldJson("location", detailValue(detail, "Location optional")));
+                fields.add(fieldJson("startAt", detailValue(detail, "Start Time")));
+                fields.add(fieldJson("expiresAt", detailValue(detail, "Expiry Time")));
+            }
+            case "emergency" -> {
+                fields.add(fieldJson("type", detailValue(detail, "Type")));
+                fields.add(fieldJson("phone", detailValue(detail, "Phone")));
+                fields.add(fieldJson("location", detailValue(detail, "Location")));
+                fields.add(fieldJson("mapLink", detailValue(detail, "Map Link")));
+                fields.add(fieldJson("availability", detailValue(detail, "Availability")));
+                fields.add(fieldJson("priority", detailValue(detail, "Priority")));
+            }
+            default -> {
+            }
+        }
+        return fields;
+    }
+
+    private String detailValue(String detail, String label) {
+        String prefix = label + ": ";
+        for (String part : (detail == null ? "" : detail).split("\\|")) {
+            String clean = part.trim();
+            if (clean.startsWith(prefix)) {
+                return clean.substring(prefix.length()).trim();
+            }
+        }
+        return "";
+    }
+
     public AppDataStore.AdminOverview loadAdminOverview(String idToken) throws IOException, InterruptedException {
         List<Document> users = loadCollectionDocuments("users", idToken);
-        List<Document> businesses = loadCollectionDocuments("businesses", idToken);
-        List<Document> operators = loadCollectionDocuments("transportOperators", idToken);
-        List<Document> appItems = loadCollectionDocuments("appItems", idToken);
-        List<Document> bookings = loadCollectionDocuments("bookings", idToken);
-        List<Document> lostFoundReports = loadCollectionDocuments("lostFoundReports", idToken);
+        List<Document> businesses = loadOptionalCollectionDocuments("businesses", idToken);
+        List<Document> operators = loadOptionalCollectionDocuments("transportOperators", idToken);
+        List<Document> appItems = loadOptionalCollectionDocuments("appItems", idToken);
+        List<Document> routes = loadOptionalCollectionDocuments("transportRoutes", idToken);
+        List<Document> bookings = loadOptionalCollectionDocuments("bookings", idToken);
+        List<Document> lostFoundReports = loadOptionalCollectionDocuments("lostFoundReports", idToken);
 
         int approvedBusinesses = countMatching(businesses, document ->
                 "approved".equals(field(document.fields, "status")) || "true".equals(boolField(document.fields, "approved")));
@@ -119,7 +485,9 @@ public final class FirestoreGateway {
                 !"rejected".equals(field(document.fields, "status"))
                         && !"disabled".equals(field(document.fields, "status"))
                         && !"suspended".equals(field(document.fields, "status")));
-        int activeRoutes = countModuleItems(appItems, "transport");
+        int activeRoutes = Math.max(countModuleItems(appItems, "transport"),
+                countMatching(routes, document -> "true".equals(boolField(document.fields, "published"))
+                        && !"false".equals(boolField(document.fields, "active"))));
         int activeEvents = countModuleItems(appItems, "schedule");
         int activeAnnouncements = countModuleItems(appItems, "announcement");
         int openLostFound = lostFoundReports.isEmpty()
@@ -210,9 +578,12 @@ public final class FirestoreGateway {
                 fieldJson("email", account.email),
                 fieldJson("location", account.location),
                 fieldJson("description", account.category + " service for Simhastha pilgrims"),
+                fieldJson("operatingHours", "Not provided"),
+                fieldJson("priceRange", "Not provided"),
                 fieldJson("status", "pending"),
                 boolFieldJson("approved", false),
-                fieldJson("createdAt", String.valueOf(System.currentTimeMillis())));
+                fieldJson("createdAt", String.valueOf(System.currentTimeMillis())),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
         sendAuthorizedPatch(documentUri("businesses", uid), json, idToken);
     }
 
@@ -300,12 +671,123 @@ public final class FirestoreGateway {
 
     public void updateDocumentStatus(String collection, String documentId, String status, boolean approved,
             String idToken) throws IOException, InterruptedException {
+        String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
         String json = fieldsJson(
                 fieldJson("status", status),
                 boolFieldJson("approved", approved),
-                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())),
+                fieldJson(approved ? "approvedAt" : "reviewedAt", String.valueOf(System.currentTimeMillis())),
+                fieldJson(approved ? "approvedBy" : "reviewedBy", adminUid));
         sendAuthorizedPatch(URI.create(documentUrl(collection, documentId)
-                        + "&updateMask.fieldPaths=status&updateMask.fieldPaths=approved&updateMask.fieldPaths=updatedAt"),
+                        + "&updateMask.fieldPaths=status&updateMask.fieldPaths=approved&updateMask.fieldPaths=updatedAt"
+                        + "&updateMask.fieldPaths=" + (approved ? "approvedAt" : "reviewedAt")
+                        + "&updateMask.fieldPaths=" + (approved ? "approvedBy" : "reviewedBy")),
+                json, idToken);
+    }
+
+    public void updateBookingStatus(String bookingId, String bookingStatus, String paymentStatus, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("bookingStatus", bookingStatus),
+                fieldJson("paymentStatus", paymentStatus),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("bookings", bookingId)
+                        + "&updateMask.fieldPaths=bookingStatus&updateMask.fieldPaths=paymentStatus&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void saveBooking(AppDataStore.BookingRecord booking, String businessOwnerId, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("bookingId", booking.bookingId),
+                fieldJson("userId", booking.userId),
+                fieldJson("moduleType", booking.moduleType),
+                fieldJson("catalogItemId", booking.catalogItemId),
+                fieldJson("businessId", booking.businessId),
+                fieldJson("businessOwnerId", businessOwnerId),
+                fieldJson("title", booking.title),
+                fieldJson("customerName", booking.customerName),
+                fieldJson("bookingDate", booking.dateText),
+                fieldJson("location", booking.location),
+                numberFieldJson("quantity", booking.quantity),
+                numberFieldJson("nights", booking.nights),
+                numberFieldJson("amountPaise", booking.amountPaise),
+                fieldJson("currency", booking.currency),
+                fieldJson("bookingStatus", booking.bookingStatus),
+                fieldJson("paymentStatus", booking.paymentStatus),
+                fieldJson("internalPaymentId", booking.internalPaymentId),
+                fieldJson("razorpayPaymentId", booking.razorpayPaymentId),
+                fieldJson("createdAt", booking.createdAt),
+                fieldJson("updatedAt", booking.updatedAt));
+        sendAuthorizedPatch(documentUri("bookings", booking.bookingId), json, idToken);
+    }
+
+    public void saveTransportRoute(AppDataStore.RouteRecord route, String idToken)
+            throws IOException, InterruptedException {
+        String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("routeName", route.routeName),
+                fieldJson("from", route.from),
+                fieldJson("to", route.to),
+                fieldJson("via", route.via),
+                fieldJson("mode", route.mode),
+                fieldJson("startTime", route.startTime),
+                fieldJson("endTime", route.endTime),
+                fieldJson("fare", route.fare),
+                fieldJson("duration", route.duration),
+                fieldJson("operatorId", route.operatorId),
+                boolFieldJson("official", route.official),
+                fieldJson("mapUrl", route.mapUrl),
+                fieldJson("liveSourceUrl", route.liveSourceUrl),
+                boolFieldJson("published", route.published),
+                boolFieldJson("active", route.active),
+                fieldJson("status", route.active ? "active" : "disabled"),
+                fieldJson("createdAt", valueOr(now, route.createdAt)),
+                fieldJson("updatedAt", now),
+                fieldJson("updatedBy", adminUid));
+        sendAuthorizedPatch(documentUri("transportRoutes", route.routeId), json, idToken);
+    }
+
+    public void updateRouteFlags(String routeId, boolean published, boolean active, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(
+                boolFieldJson("published", published),
+                boolFieldJson("active", active),
+                fieldJson("status", active ? "active" : "disabled"),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("transportRoutes", routeId)
+                        + "&updateMask.fieldPaths=published&updateMask.fieldPaths=active"
+                        + "&updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void updateOperationalItemFlags(String module, String documentId, boolean published, boolean active,
+            String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(
+                boolFieldJson("published", published),
+                boolFieldJson("active", active),
+                fieldJson("status", active ? "active" : "disabled"),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl(collectionForModule(module), documentId)
+                        + "&updateMask.fieldPaths=published&updateMask.fieldPaths=active"
+                        + "&updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void updateLostFoundStatus(String caseId, String status, String note, String idToken)
+            throws IOException, InterruptedException {
+        String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("status", status),
+                fieldJson("adminNote", note),
+                fieldJson("foundAt", ("found".equals(status) || "reunited".equals(status)) ? now : ""),
+                fieldJson("updatedAt", now),
+                fieldJson("updatedBy", adminUid));
+        sendAuthorizedPatch(URI.create(documentUrl("lostFoundReports", caseId)
+                        + "&updateMask.fieldPaths=status&updateMask.fieldPaths=adminNote"
+                        + "&updateMask.fieldPaths=foundAt&updateMask.fieldPaths=updatedAt&updateMask.fieldPaths=updatedBy"),
                 json, idToken);
     }
 
@@ -469,6 +951,10 @@ public final class FirestoreGateway {
         return "\"" + escape(name) + "\":{\"booleanValue\":" + value + "}";
     }
 
+    private String numberFieldJson(String name, long value) {
+        return "\"" + escape(name) + "\":{\"integerValue\":\"" + value + "\"}";
+    }
+
     private List<Document> parseDocuments(String json) {
         List<Document> documents = new ArrayList<>();
         Matcher matcher = DOCUMENT_PATTERN.matcher(json == null ? "" : json);
@@ -494,6 +980,112 @@ public final class FirestoreGateway {
                 + "\"\\s*:\\s*\\{\\s*\"booleanValue\"\\s*:\\s*(true|false)\\s*\\}", Pattern.DOTALL)
                 .matcher(fieldsJson == null ? "" : fieldsJson);
         return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private String numberField(String fieldsJson, String name) {
+        Matcher matcher = Pattern.compile("\"" + Pattern.quote(name)
+                + "\"\\s*:\\s*\\{\\s*\"(?:integerValue|doubleValue)\"\\s*:\\s*\"?(.*?)\"?\\s*\\}", Pattern.DOTALL)
+                .matcher(fieldsJson == null ? "" : fieldsJson);
+        return matcher.find() ? matcher.group(1) : "";
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (notBlank(value)) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private int parseInt(String value, int fallback) {
+        try {
+            return Integer.parseInt(value);
+        } catch (Exception exception) {
+            return fallback;
+        }
+    }
+
+    private List<Document> loadOptionalCollectionDocuments(String collection, String idToken) {
+        try {
+            return loadCollectionDocuments(collection, idToken);
+        } catch (Exception exception) {
+            return List.of();
+        }
+    }
+
+    private long parseLong(String value, long fallback) {
+        try {
+            return Long.parseLong(value);
+        } catch (Exception exception) {
+            return fallback;
+        }
+    }
+
+    private boolean isExpired(String value) {
+        if (!notBlank(value)) {
+            return false;
+        }
+        try {
+            return Long.parseLong(value.trim()) < System.currentTimeMillis();
+        } catch (Exception exception) {
+            return false;
+        }
+    }
+
+    private String operatingHours(String fields) {
+        String open = field(fields, "openingTime");
+        String close = field(fields, "closingTime");
+        if (notBlank(open) || notBlank(close)) {
+            return valueOr("Open", open) + " - " + valueOr("Close", close);
+        }
+        return "";
+    }
+
+    private String publicDetail(String fields) {
+        return java.util.stream.Stream.of(
+                field(fields, "description"),
+                field(fields, "location"),
+                field(fields, "date"),
+                field(fields, "time"),
+                field(fields, "price"),
+                field(fields, "fare"),
+                field(fields, "crowdLevel"),
+                field(fields, "safetyStatus"),
+                field(fields, "message"),
+                field(fields, "phone"))
+                .filter(this::notBlank)
+                .distinct()
+                .reduce((left, right) -> left + " | " + right)
+                .orElse("Official update");
+    }
+
+    private String collectionForModule(String module) {
+        return switch (module) {
+            case "transport" -> "transportRoutes";
+            case "packages" -> "kumbhPackages";
+            case "puja" -> "pujaServices";
+            case "ghat" -> "ghats";
+            case "stay" -> "stays";
+            case "schedule" -> "events";
+            case "announcement" -> "announcements";
+            case "emergency" -> "emergencyContacts";
+            case "lost" -> "lostFoundReports";
+            default -> "appItems";
+        };
+    }
+
+    private String titleFieldForModule(String module) {
+        return switch (module) {
+            case "transport" -> "routeName";
+            case "packages" -> "packageName";
+            case "puja" -> "pujaName";
+            case "ghat" -> "ghatName";
+            case "stay" -> "property";
+            case "schedule" -> "eventName";
+            case "emergency" -> "name";
+            default -> "title";
+        };
     }
 
     private String ownerIdFromBusinessDocument(Document document) {

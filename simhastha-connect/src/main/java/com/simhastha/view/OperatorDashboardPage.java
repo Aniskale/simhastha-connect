@@ -13,6 +13,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+import java.util.UUID;
 
 public class OperatorDashboardPage {
 
@@ -142,13 +143,25 @@ public class OperatorDashboardPage {
         addButton.setOnAction(event -> {
             String value = scheduleInput.getText().trim();
             if (!value.isEmpty()) {
+                addButton.setDisable(true);
                 account.schedules.add(value);
-                AppDataStore.requestApproval("Transport Schedule",
-                        account.organizationName + " - " + value,
-                        account.serviceType + " | Contact: " + account.mobile,
-                        "transport");
+                AppSession.User user = AppSession.currentUser();
+                try {
+                    AppDataStore.saveRoute(new AppDataStore.RouteRecord(
+                            "route-" + UUID.randomUUID().toString().substring(0, 8),
+                            account.organizationName + " - " + value,
+                            "", "", value, account.serviceType, "", "", "", "",
+                            user == null ? account.email : user.uid(), false, "", "",
+                            false, true, "", ""));
+                } catch (AppDataStore.ApprovalUpdateException exception) {
+                    AppDataStore.requestApproval("Transport Schedule",
+                            account.organizationName + " - " + value,
+                            account.serviceType + " | Contact: " + account.mobile,
+                            "transport");
+                }
                 scheduleInput.clear();
                 refreshSchedules();
+                addButton.setDisable(false);
             }
         });
 

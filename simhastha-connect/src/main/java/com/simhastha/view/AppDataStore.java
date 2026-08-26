@@ -1,13 +1,16 @@
 package com.simhastha.view;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 public final class AppDataStore {
 
     private static final List<ServiceItem> transport = new ArrayList<>();
+    private static final List<ServiceItem> packages = new ArrayList<>();
     private static final List<ServiceItem> puja = new ArrayList<>();
     private static final List<ServiceItem> ghats = new ArrayList<>();
     private static final List<ServiceItem> emergency = new ArrayList<>();
@@ -20,6 +23,12 @@ public final class AppDataStore {
     private static final List<ApprovalRequest> pendingApprovals = new ArrayList<>();
     private static final List<BookingRecord> bookings = new ArrayList<>();
     private static final List<TicketRecord> tickets = new ArrayList<>();
+    private static final List<UserRecord> users = new ArrayList<>();
+    private static final List<BusinessRecord> businesses = new ArrayList<>();
+    private static final List<TransportOperatorRecord> transportOperators = new ArrayList<>();
+    private static final List<LostFoundCaseRecord> lostFoundCases = new ArrayList<>();
+    private static final List<RouteRecord> transportRoutes = new ArrayList<>();
+    private static final Set<String> remoteModules = new HashSet<>();
     private static final FirestoreGateway firestore = new FirestoreGateway(FirebaseConfig.load());
     private static AdminOverview adminOverview = AdminOverview.empty();
 
@@ -101,6 +110,7 @@ public final class AppDataStore {
     public static List<ServiceItem> items(String module) {
         return switch (module) {
             case "transport" -> transport;
+            case "packages" -> packages;
             case "puja" -> puja;
             case "ghat" -> ghats;
             case "emergency" -> emergency;
@@ -122,6 +132,37 @@ public final class AppDataStore {
         return bookings;
     }
 
+    public static List<UserRecord> users() {
+        return users;
+    }
+
+    public static List<BusinessRecord> businesses() {
+        return businesses;
+    }
+
+    public static BusinessRecord businessForOwner(String ownerId) {
+        return businesses.stream()
+                .filter(business -> business.ownerId.equals(ownerId) || business.businessId.equals(ownerId))
+                .findFirst()
+                .orElse(null);
+    }
+
+    public static List<TransportOperatorRecord> transportOperators() {
+        return transportOperators;
+    }
+
+    public static List<LostFoundCaseRecord> lostFoundCases() {
+        return lostFoundCases;
+    }
+
+    public static List<RouteRecord> transportRoutes() {
+        return transportRoutes;
+    }
+
+    public static boolean hasRemoteItems(String module) {
+        return remoteModules.contains(module);
+    }
+
     public static List<BookingRecord> bookingsForUser(String userId) {
         return bookings.stream()
                 .filter(booking -> booking.userId.equals(userId))
@@ -136,6 +177,7 @@ public final class AppDataStore {
 
     public static BookingRecord addBooking(BookingRecord booking) {
         bookings.add(booking);
+        saveBookingIfPossible(booking);
         return booking;
     }
 
@@ -145,6 +187,11 @@ public final class AppDataStore {
                 booking.bookingStatus = bookingStatus;
                 booking.paymentStatus = paymentStatus;
                 booking.updatedAt = String.valueOf(System.currentTimeMillis());
+                try {
+                    firestore.updateBookingStatus(bookingId, bookingStatus, paymentStatus, currentToken());
+                } catch (Exception ignored) {
+                    // The existing payment backend remains authoritative when client writes are not allowed.
+                }
                 return;
             }
         }
@@ -171,9 +218,14 @@ public final class AppDataStore {
 
     public static void addItem(String module, String title, String detail) {
         ServiceItem item = new ServiceItem(module, title, detail, displayName(module));
+        saveOperationalItem(module, item);
+    }
+
+    public static void saveOperationalItem(String module, ServiceItem item) {
+        items(module).removeIf(existing -> existing.id.equals(item.id));
         items(module).add(item);
         try {
-            firestore.saveItem(module, item, currentToken());
+            firestore.saveOperationalItem(module, item, currentToken());
         } catch (Exception ignored) {
             firestore.saveItem(module, item);
         }
@@ -203,13 +255,13 @@ public final class AppDataStore {
             } else if ("transport".equals(request.targetModule)) {
                 firestore.updateDocumentStatus("transportOperators", request.ownerId, "approved", true, currentToken());
             }
+            firestore.updateApprovalRequestStatus(request.id, "approved", currentToken());
         } catch (Exception exception) {
             throw new ApprovalUpdateException("Approval could not be saved to Firestore. The request is still pending.", exception);
         }
 
         addItem(request.targetModule, request.title, request.detail);
         pendingApprovals.remove(request);
-        firestore.deleteApproval(request, currentToken());
     }
 
     public static void reject(ApprovalRequest request) throws ApprovalUpdateException {
@@ -221,12 +273,95 @@ public final class AppDataStore {
             } else if ("transport".equals(request.targetModule)) {
                 firestore.updateDocumentStatus("transportOperators", request.ownerId, "rejected", false, currentToken());
             }
+            firestore.updateApprovalRequestStatus(request.id, "rejected", currentToken());
         } catch (Exception exception) {
             throw new ApprovalUpdateException("Rejection could not be saved to Firestore. The request is still pending.", exception);
         }
 
         pendingApprovals.remove(request);
-        firestore.deleteApproval(request, currentToken());
+    }
+
+    public static void suspendUser(String uid) throws ApprovalUpdateException {
+        try {
+            firestore.updateUserStatus(uid, "suspended", currentToken());
+            users.replaceAll(user -> user.uid.equals(uid) ? user.withStatus("suspended") : user);
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("User status could not be updated in Firestore.", exception);
+        }
+    }
+
+    public static void reactivateUser(String uid) throws ApprovalUpdateException {
+        try {
+            firestore.updateUserStatus(uid, "active", currentToken());
+            users.replaceAll(user -> user.uid.equals(uid) ? user.withStatus("active") : user);
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("User status could not be updated in Firestore.", exception);
+        }
+    }
+
+    public static void updateBusinessStatus(String businessId, String status, boolean approved) throws ApprovalUpdateException {
+        try {
+            firestore.updateDocumentStatus("businesses", businessId, status, approved, currentToken());
+            businesses.replaceAll(business -> business.businessId.equals(businessId)
+                    ? business.withStatus(status, approved)
+                    : business);
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Business status could not be updated in Firestore.", exception);
+        }
+    }
+
+    public static void updateTransportOperatorStatus(String operatorId, String status, boolean approved)
+            throws ApprovalUpdateException {
+        try {
+            firestore.updateDocumentStatus("transportOperators", operatorId, status, approved, currentToken());
+            transportOperators.replaceAll(operator -> operator.operatorId.equals(operatorId)
+                    ? operator.withStatus(status)
+                    : operator);
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Transport operator status could not be updated in Firestore.", exception);
+        }
+    }
+
+    public static void saveRoute(RouteRecord route) throws ApprovalUpdateException {
+        try {
+            firestore.saveTransportRoute(route, currentToken());
+            transportRoutes.removeIf(existing -> existing.routeId.equals(route.routeId));
+            transportRoutes.add(route);
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Route could not be saved to Firestore.", exception);
+        }
+    }
+
+    public static void updateRouteFlags(String routeId, boolean published, boolean active) throws ApprovalUpdateException {
+        try {
+            firestore.updateRouteFlags(routeId, published, active, currentToken());
+            transportRoutes.replaceAll(route -> route.routeId.equals(routeId)
+                    ? route.withFlags(published, active)
+                    : route);
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Route status could not be updated in Firestore.", exception);
+        }
+    }
+
+    public static void updateOperationalItemFlags(String module, ServiceItem item, boolean published, boolean active)
+            throws ApprovalUpdateException {
+        try {
+            firestore.updateOperationalItemFlags(module, item.id, published, active, currentToken());
+            if (!active || !published) {
+                items(module).removeIf(existing -> existing.id.equals(item.id));
+            }
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Operational item status could not be updated in Firestore.", exception);
+        }
+    }
+
+    public static void updateLostFoundStatus(String caseId, String status) throws ApprovalUpdateException {
+        try {
+            firestore.updateLostFoundStatus(caseId, status, "Updated from Admin Control Center", currentToken());
+            lostFoundCases.replaceAll(item -> item.caseId.equals(caseId) ? item.withStatus(status) : item);
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Lost & Found case could not be updated in Firestore.", exception);
+        }
     }
 
     private static void requireOwnerId(ApprovalRequest request) throws ApprovalUpdateException {
@@ -263,6 +398,7 @@ public final class AppDataStore {
     public static String displayName(String module) {
         return switch (module) {
             case "transport" -> "Transport";
+            case "packages" -> "Kumbh Packages";
             case "puja" -> "Puja Services";
             case "ghat" -> "Ghats & Snan";
             case "emergency" -> "Emergency";
@@ -335,6 +471,216 @@ public final class AppDataStore {
 
         public ApprovalUpdateException(String message, Throwable cause) {
             super(message, cause);
+        }
+    }
+
+    public static final class UserRecord {
+        public final String uid;
+        public final String name;
+        public final String email;
+        public final String mobile;
+        public final String role;
+        public final String status;
+        public final String createdAt;
+        public final String updatedAt;
+
+        public UserRecord(String uid, String name, String email, String mobile, String role, String status,
+                String createdAt, String updatedAt) {
+            this.uid = clean(uid);
+            this.name = clean(name);
+            this.email = clean(email);
+            this.mobile = clean(mobile);
+            this.role = clean(role);
+            this.status = clean(status);
+            this.createdAt = clean(createdAt);
+            this.updatedAt = clean(updatedAt);
+        }
+
+        public UserRecord withStatus(String status) {
+            return new UserRecord(uid, name, email, mobile, role, status, createdAt,
+                    String.valueOf(System.currentTimeMillis()));
+        }
+    }
+
+    public static final class BusinessRecord {
+        public final String businessId;
+        public final String ownerId;
+        public final String businessName;
+        public final String ownerName;
+        public final String category;
+        public final String description;
+        public final String location;
+        public final String mobile;
+        public final String email;
+        public final String operatingHours;
+        public final String priceRange;
+        public final String status;
+        public final boolean approved;
+        public final String createdAt;
+        public final String updatedAt;
+
+        public BusinessRecord(String businessId, String ownerId, String businessName, String ownerName, String category,
+                String description, String location, String mobile, String email, String operatingHours,
+                String priceRange, String status, boolean approved, String createdAt, String updatedAt) {
+            this.businessId = clean(businessId);
+            this.ownerId = clean(ownerId);
+            this.businessName = clean(businessName);
+            this.ownerName = clean(ownerName);
+            this.category = clean(category);
+            this.description = clean(description);
+            this.location = clean(location);
+            this.mobile = clean(mobile);
+            this.email = clean(email);
+            this.operatingHours = clean(operatingHours);
+            this.priceRange = clean(priceRange);
+            this.status = clean(status).isBlank() ? "pending" : clean(status);
+            this.approved = approved;
+            this.createdAt = clean(createdAt);
+            this.updatedAt = clean(updatedAt);
+        }
+
+        public BusinessRecord withStatus(String status, boolean approved) {
+            return new BusinessRecord(businessId, ownerId, businessName, ownerName, category, description, location,
+                    mobile, email, operatingHours, priceRange, status, approved, createdAt,
+                    String.valueOf(System.currentTimeMillis()));
+        }
+    }
+
+    public static final class TransportOperatorRecord {
+        public final String operatorId;
+        public final String ownerId;
+        public final String organizationName;
+        public final String contactPerson;
+        public final String mobile;
+        public final String email;
+        public final String serviceType;
+        public final String status;
+        public final String vehicleCount;
+        public final String routesSubmitted;
+        public final String activeRoutes;
+        public final String createdAt;
+        public final String updatedAt;
+
+        public TransportOperatorRecord(String operatorId, String ownerId, String organizationName,
+                String contactPerson, String mobile, String email, String serviceType, String status,
+                String vehicleCount, String routesSubmitted, String activeRoutes, String createdAt, String updatedAt) {
+            this.operatorId = clean(operatorId);
+            this.ownerId = clean(ownerId);
+            this.organizationName = clean(organizationName);
+            this.contactPerson = clean(contactPerson);
+            this.mobile = clean(mobile);
+            this.email = clean(email);
+            this.serviceType = clean(serviceType);
+            this.status = clean(status).isBlank() ? "active" : clean(status);
+            this.vehicleCount = clean(vehicleCount);
+            this.routesSubmitted = clean(routesSubmitted);
+            this.activeRoutes = clean(activeRoutes);
+            this.createdAt = clean(createdAt);
+            this.updatedAt = clean(updatedAt);
+        }
+
+        public TransportOperatorRecord withStatus(String status) {
+            return new TransportOperatorRecord(operatorId, ownerId, organizationName, contactPerson, mobile, email,
+                    serviceType, status, vehicleCount, routesSubmitted, activeRoutes, createdAt,
+                    String.valueOf(System.currentTimeMillis()));
+        }
+    }
+
+    public static final class LostFoundCaseRecord {
+        public final String caseId;
+        public final String type;
+        public final String name;
+        public final String age;
+        public final String gender;
+        public final String clothing;
+        public final String identificationMarks;
+        public final String lastSeenLocation;
+        public final String lastSeenDateTime;
+        public final String reporterName;
+        public final String relation;
+        public final String contact;
+        public final String status;
+        public final String priority;
+        public final String createdAt;
+        public final String updatedAt;
+
+        public LostFoundCaseRecord(String caseId, String type, String name, String age, String gender,
+                String clothing, String identificationMarks, String lastSeenLocation, String lastSeenDateTime,
+                String reporterName, String relation, String contact, String status, String priority,
+                String createdAt, String updatedAt) {
+            this.caseId = clean(caseId);
+            this.type = clean(type);
+            this.name = clean(name);
+            this.age = clean(age);
+            this.gender = clean(gender);
+            this.clothing = clean(clothing);
+            this.identificationMarks = clean(identificationMarks);
+            this.lastSeenLocation = clean(lastSeenLocation);
+            this.lastSeenDateTime = clean(lastSeenDateTime);
+            this.reporterName = clean(reporterName);
+            this.relation = clean(relation);
+            this.contact = clean(contact);
+            this.status = clean(status).isBlank() ? "open" : clean(status);
+            this.priority = clean(priority).isBlank() ? "normal" : clean(priority);
+            this.createdAt = clean(createdAt);
+            this.updatedAt = clean(updatedAt);
+        }
+
+        public LostFoundCaseRecord withStatus(String status) {
+            return new LostFoundCaseRecord(caseId, type, name, age, gender, clothing, identificationMarks,
+                    lastSeenLocation, lastSeenDateTime, reporterName, relation, contact, status, priority,
+                    createdAt, String.valueOf(System.currentTimeMillis()));
+        }
+    }
+
+    public static final class RouteRecord {
+        public final String routeId;
+        public final String routeName;
+        public final String from;
+        public final String to;
+        public final String via;
+        public final String mode;
+        public final String startTime;
+        public final String endTime;
+        public final String fare;
+        public final String duration;
+        public final String operatorId;
+        public final boolean official;
+        public final String mapUrl;
+        public final String liveSourceUrl;
+        public final boolean published;
+        public final boolean active;
+        public final String createdAt;
+        public final String updatedAt;
+
+        public RouteRecord(String routeId, String routeName, String from, String to, String via, String mode,
+                String startTime, String endTime, String fare, String duration, String operatorId, boolean official,
+                String mapUrl, String liveSourceUrl, boolean published, boolean active, String createdAt,
+                String updatedAt) {
+            this.routeId = clean(routeId).isBlank() ? randomId("route") : clean(routeId);
+            this.routeName = clean(routeName);
+            this.from = clean(from);
+            this.to = clean(to);
+            this.via = clean(via);
+            this.mode = clean(mode);
+            this.startTime = clean(startTime);
+            this.endTime = clean(endTime);
+            this.fare = clean(fare);
+            this.duration = clean(duration);
+            this.operatorId = clean(operatorId);
+            this.official = official;
+            this.mapUrl = clean(mapUrl);
+            this.liveSourceUrl = clean(liveSourceUrl);
+            this.published = published;
+            this.active = active;
+            this.createdAt = clean(createdAt);
+            this.updatedAt = clean(updatedAt);
+        }
+
+        public RouteRecord withFlags(boolean published, boolean active) {
+            return new RouteRecord(routeId, routeName, from, to, via, mode, startTime, endTime, fare, duration,
+                    operatorId, official, mapUrl, liveSourceUrl, published, active, createdAt,
+                    String.valueOf(System.currentTimeMillis()));
         }
     }
 
@@ -453,11 +799,78 @@ public final class AppDataStore {
         }
         try {
             List<ServiceItem> remoteItems = firestore.loadItems(idToken);
+            List<ServiceItem> publicItems = firestore.loadPublicModuleItems(idToken);
             if (!remoteItems.isEmpty()) {
                 clearModuleItems();
                 for (ServiceItem item : remoteItems) {
                     items(item.module).add(item);
+                    remoteModules.add(item.module);
                 }
+            }
+            for (ServiceItem item : publicItems) {
+                addUniqueItem(item);
+                remoteModules.add(item.module);
+            }
+            for (ServiceItem item : firestore.loadAdminOperationalItems(idToken)) {
+                addUniqueItem(item);
+                remoteModules.add(item.module);
+            }
+
+            try {
+                users.clear();
+                users.addAll(firestore.loadUsers(idToken));
+            } catch (Exception ignored) {
+                // Keep the last known user snapshot if user listing is temporarily unavailable.
+            }
+            try {
+                businesses.clear();
+                businesses.addAll(firestore.loadBusinesses(idToken));
+            } catch (Exception ignored) {
+                // Business registry is optional for general dashboard startup.
+            }
+            for (BusinessRecord businessRecord : businesses) {
+                if (businessRecord.approved
+                        && ("approved".equalsIgnoreCase(businessRecord.status)
+                                || "active".equalsIgnoreCase(businessRecord.status))) {
+                    addUniqueItem(new ServiceItem(businessRecord.businessId, "business",
+                            businessRecord.businessName,
+                            businessRecord.category + " | " + businessRecord.location + " | "
+                                    + businessRecord.description,
+                            "Business"));
+                }
+            }
+            try {
+                transportOperators.clear();
+                transportOperators.addAll(firestore.loadTransportOperators(idToken));
+            } catch (Exception ignored) {
+                // Operators are loaded when permitted; startup should continue without them.
+            }
+            try {
+                bookings.clear();
+                AppSession.User current = AppSession.currentUser();
+                if (current != null && "admin".equals(current.role())) {
+                    bookings.addAll(firestore.loadBookings(idToken));
+                } else if (current != null && "user".equals(current.role())) {
+                    bookings.addAll(firestore.loadBookingsForField("userId", current.uid(), idToken));
+                } else if (current != null && "business".equals(current.role())) {
+                    bookings.addAll(firestore.loadBookingsForField("businessOwnerId", current.uid(), idToken));
+                } else if (current != null && "transport_operator".equals(current.role())) {
+                    bookings.addAll(firestore.loadBookingsForField("transportOwnerId", current.uid(), idToken));
+                }
+            } catch (Exception ignored) {
+                // Booking collection access can vary by role.
+            }
+            try {
+                lostFoundCases.clear();
+                lostFoundCases.addAll(firestore.loadLostFoundCases(idToken));
+            } catch (Exception ignored) {
+                // Lost/found is sensitive and can be unavailable for non-admin sessions.
+            }
+            try {
+                transportRoutes.clear();
+                transportRoutes.addAll(firestore.loadTransportRoutes(idToken));
+            } catch (Exception ignored) {
+                // Route management continues with any cached routes.
             }
 
             pendingApprovals.clear();
@@ -487,6 +900,7 @@ public final class AppDataStore {
 
     private static void clearModuleItems() {
         transport.clear();
+        packages.clear();
         puja.clear();
         ghats.clear();
         emergency.clear();
@@ -496,6 +910,36 @@ public final class AppDataStore {
         business.clear();
         announcements.clear();
         about.clear();
+        remoteModules.clear();
+    }
+
+    private static void addUniqueItem(ServiceItem item) {
+        List<ServiceItem> target = items(item.module);
+        boolean exists = target.stream().anyMatch(existing -> existing.id.equals(item.id)
+                || existing.title.equalsIgnoreCase(item.title));
+        if (!exists) {
+            target.add(item);
+        }
+    }
+
+    private static void saveBookingIfPossible(BookingRecord booking) {
+        try {
+            firestore.saveBooking(booking, businessOwnerIdFor(booking.businessId), currentToken());
+        } catch (Exception ignored) {
+            // Local cache remains usable if rules/backend own this write path.
+        }
+    }
+
+    private static String businessOwnerIdFor(String businessId) {
+        if (businessId == null || businessId.isBlank()) {
+            return "";
+        }
+        return businesses.stream()
+                .filter(businessRecord -> businessId.equals(businessRecord.businessId))
+                .map(businessRecord -> businessRecord.ownerId)
+                .filter(ownerId -> ownerId != null && !ownerId.isBlank())
+                .findFirst()
+                .orElse("");
     }
 
     private static String randomId(String prefix) {
@@ -511,6 +955,7 @@ public final class AppDataStore {
     private static String moduleKey(String category) {
         return switch (category) {
             case "Transport" -> "transport";
+            case "Kumbh Packages" -> "packages";
             case "Puja" -> "puja";
             case "Ghat" -> "ghat";
             case "Emergency" -> "emergency";
@@ -527,5 +972,9 @@ public final class AppDataStore {
     private static String currentToken() {
         AppSession.User user = AppSession.currentUser();
         return user == null ? "" : user.idToken();
+    }
+
+    private static String clean(String value) {
+        return value == null ? "" : value.trim();
     }
 }
