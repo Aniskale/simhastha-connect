@@ -1,5 +1,21 @@
 package com.simhastha.view;
 
+import com.simhastha.dao.ApprovalDao;
+import com.simhastha.dao.BookingDao;
+import com.simhastha.dao.BusinessDao;
+import com.simhastha.dao.OperationalDataDao;
+import com.simhastha.dao.OperatorDao;
+import com.simhastha.dao.UserDao;
+import com.simhastha.dao.implementation.FirestoreApprovalDao;
+import com.simhastha.dao.implementation.FirestoreBookingDao;
+import com.simhastha.dao.implementation.FirestoreBusinessDao;
+import com.simhastha.dao.implementation.FirestoreOperationalDataDao;
+import com.simhastha.dao.implementation.FirestoreOperatorDao;
+import com.simhastha.dao.implementation.FirestoreUserDao;
+import com.simhastha.gateway.firebase.FirebaseConfig;
+import com.simhastha.gateway.firebase.FirestoreGateway;
+import com.simhastha.util.AppSession;
+
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -30,6 +46,12 @@ public final class AppDataStore {
     private static final List<RouteRecord> transportRoutes = new ArrayList<>();
     private static final Set<String> remoteModules = new HashSet<>();
     private static final FirestoreGateway firestore = new FirestoreGateway(FirebaseConfig.load());
+    private static final UserDao userDao = new FirestoreUserDao(firestore);
+    private static final BusinessDao businessDao = new FirestoreBusinessDao(firestore);
+    private static final OperatorDao operatorDao = new FirestoreOperatorDao(firestore);
+    private static final ApprovalDao approvalDao = new FirestoreApprovalDao(firestore);
+    private static final BookingDao bookingDao = new FirestoreBookingDao(firestore);
+    private static final OperationalDataDao operationalDataDao = new FirestoreOperationalDataDao(firestore);
     private static AdminOverview adminOverview = AdminOverview.empty();
 
     static {
@@ -188,7 +210,7 @@ public final class AppDataStore {
                 booking.paymentStatus = paymentStatus;
                 booking.updatedAt = String.valueOf(System.currentTimeMillis());
                 try {
-                    firestore.updateBookingStatus(bookingId, bookingStatus, paymentStatus, currentToken());
+                    bookingDao.updateStatus(bookingId, bookingStatus, paymentStatus, currentToken());
                 } catch (Exception ignored) {
                     // The existing payment backend remains authoritative when client writes are not allowed.
                 }
@@ -225,37 +247,37 @@ public final class AppDataStore {
         items(module).removeIf(existing -> existing.id.equals(item.id));
         items(module).add(item);
         try {
-            firestore.saveOperationalItem(module, item, currentToken());
+            operationalDataDao.saveOperationalItem(module, item, currentToken());
         } catch (Exception ignored) {
-            firestore.saveItem(module, item);
+            operationalDataDao.saveItem(module, item);
         }
     }
 
     public static void removeItem(String module, ServiceItem item) {
         items(module).remove(item);
-        firestore.deleteItem(item, currentToken());
+        operationalDataDao.deleteItem(item, currentToken());
     }
 
     public static void requestApproval(String type, String title, String detail, String targetModule) {
         ApprovalRequest request = new ApprovalRequest(type, title, detail, targetModule);
         pendingApprovals.add(request);
         try {
-            firestore.saveApproval(request, currentToken());
+            approvalDao.save(request, currentToken());
         } catch (Exception ignored) {
-            firestore.saveApproval(request);
+            approvalDao.save(request);
         }
     }
 
     public static void approve(ApprovalRequest request) throws ApprovalUpdateException {
         requireOwnerId(request);
         try {
-            firestore.updateUserStatus(request.ownerId, "approved", currentToken());
+            userDao.updateStatus(request.ownerId, "approved", currentToken());
             if ("business".equals(request.targetModule)) {
-                firestore.updateDocumentStatus("businesses", request.ownerId, "approved", true, currentToken());
+                businessDao.updateStatus(request.ownerId, "approved", true, currentToken());
             } else if ("transport".equals(request.targetModule)) {
-                firestore.updateDocumentStatus("transportOperators", request.ownerId, "approved", true, currentToken());
+                operatorDao.updateStatus(request.ownerId, "approved", true, currentToken());
             }
-            firestore.updateApprovalRequestStatus(request.id, "approved", currentToken());
+            approvalDao.updateStatus(request.id, "approved", currentToken());
         } catch (Exception exception) {
             throw new ApprovalUpdateException("Approval could not be saved to Firestore. The request is still pending.", exception);
         }
@@ -267,13 +289,13 @@ public final class AppDataStore {
     public static void reject(ApprovalRequest request) throws ApprovalUpdateException {
         requireOwnerId(request);
         try {
-            firestore.updateUserStatus(request.ownerId, "rejected", currentToken());
+            userDao.updateStatus(request.ownerId, "rejected", currentToken());
             if ("business".equals(request.targetModule)) {
-                firestore.updateDocumentStatus("businesses", request.ownerId, "rejected", false, currentToken());
+                businessDao.updateStatus(request.ownerId, "rejected", false, currentToken());
             } else if ("transport".equals(request.targetModule)) {
-                firestore.updateDocumentStatus("transportOperators", request.ownerId, "rejected", false, currentToken());
+                operatorDao.updateStatus(request.ownerId, "rejected", false, currentToken());
             }
-            firestore.updateApprovalRequestStatus(request.id, "rejected", currentToken());
+            approvalDao.updateStatus(request.id, "rejected", currentToken());
         } catch (Exception exception) {
             throw new ApprovalUpdateException("Rejection could not be saved to Firestore. The request is still pending.", exception);
         }
@@ -283,7 +305,7 @@ public final class AppDataStore {
 
     public static void suspendUser(String uid) throws ApprovalUpdateException {
         try {
-            firestore.updateUserStatus(uid, "suspended", currentToken());
+            userDao.updateStatus(uid, "suspended", currentToken());
             users.replaceAll(user -> user.uid.equals(uid) ? user.withStatus("suspended") : user);
         } catch (Exception exception) {
             throw new ApprovalUpdateException("User status could not be updated in Firestore.", exception);
@@ -292,7 +314,7 @@ public final class AppDataStore {
 
     public static void reactivateUser(String uid) throws ApprovalUpdateException {
         try {
-            firestore.updateUserStatus(uid, "active", currentToken());
+            userDao.updateStatus(uid, "active", currentToken());
             users.replaceAll(user -> user.uid.equals(uid) ? user.withStatus("active") : user);
         } catch (Exception exception) {
             throw new ApprovalUpdateException("User status could not be updated in Firestore.", exception);
@@ -301,7 +323,7 @@ public final class AppDataStore {
 
     public static void updateBusinessStatus(String businessId, String status, boolean approved) throws ApprovalUpdateException {
         try {
-            firestore.updateDocumentStatus("businesses", businessId, status, approved, currentToken());
+            businessDao.updateStatus(businessId, status, approved, currentToken());
             businesses.replaceAll(business -> business.businessId.equals(businessId)
                     ? business.withStatus(status, approved)
                     : business);
@@ -313,7 +335,7 @@ public final class AppDataStore {
     public static void updateTransportOperatorStatus(String operatorId, String status, boolean approved)
             throws ApprovalUpdateException {
         try {
-            firestore.updateDocumentStatus("transportOperators", operatorId, status, approved, currentToken());
+            operatorDao.updateStatus(operatorId, status, approved, currentToken());
             transportOperators.replaceAll(operator -> operator.operatorId.equals(operatorId)
                     ? operator.withStatus(status)
                     : operator);
@@ -324,7 +346,7 @@ public final class AppDataStore {
 
     public static void saveRoute(RouteRecord route) throws ApprovalUpdateException {
         try {
-            firestore.saveTransportRoute(route, currentToken());
+            operationalDataDao.saveRoute(route, currentToken());
             transportRoutes.removeIf(existing -> existing.routeId.equals(route.routeId));
             transportRoutes.add(route);
         } catch (Exception exception) {
@@ -334,7 +356,7 @@ public final class AppDataStore {
 
     public static void updateRouteFlags(String routeId, boolean published, boolean active) throws ApprovalUpdateException {
         try {
-            firestore.updateRouteFlags(routeId, published, active, currentToken());
+            operationalDataDao.updateRouteFlags(routeId, published, active, currentToken());
             transportRoutes.replaceAll(route -> route.routeId.equals(routeId)
                     ? route.withFlags(published, active)
                     : route);
@@ -346,7 +368,7 @@ public final class AppDataStore {
     public static void updateOperationalItemFlags(String module, ServiceItem item, boolean published, boolean active)
             throws ApprovalUpdateException {
         try {
-            firestore.updateOperationalItemFlags(module, item.id, published, active, currentToken());
+            operationalDataDao.updateOperationalItemFlags(module, item.id, published, active, currentToken());
             if (!active || !published) {
                 items(module).removeIf(existing -> existing.id.equals(item.id));
             }
@@ -357,7 +379,7 @@ public final class AppDataStore {
 
     public static void updateLostFoundStatus(String caseId, String status) throws ApprovalUpdateException {
         try {
-            firestore.updateLostFoundStatus(caseId, status, "Updated from Admin Control Center", currentToken());
+            operationalDataDao.updateLostFoundStatus(caseId, status, "Updated from Admin Control Center", currentToken());
             lostFoundCases.replaceAll(item -> item.caseId.equals(caseId) ? item.withStatus(status) : item);
         } catch (Exception exception) {
             throw new ApprovalUpdateException("Lost & Found case could not be updated in Firestore.", exception);
@@ -384,7 +406,7 @@ public final class AppDataStore {
             return adminOverview;
         }
         try {
-            adminOverview = firestore.loadAdminOverview(idToken);
+            adminOverview = operationalDataDao.loadAdminOverview(idToken);
         } catch (Exception exception) {
             adminOverview = AdminOverview.empty("Firebase is unavailable or permission was denied.");
         }
@@ -798,8 +820,8 @@ public final class AppDataStore {
             return;
         }
         try {
-            List<ServiceItem> remoteItems = firestore.loadItems(idToken);
-            List<ServiceItem> publicItems = firestore.loadPublicModuleItems(idToken);
+            List<ServiceItem> remoteItems = operationalDataDao.loadItems(idToken);
+            List<ServiceItem> publicItems = operationalDataDao.loadPublicModuleItems(idToken);
             if (!remoteItems.isEmpty()) {
                 clearModuleItems();
                 for (ServiceItem item : remoteItems) {
@@ -811,20 +833,20 @@ public final class AppDataStore {
                 addUniqueItem(item);
                 remoteModules.add(item.module);
             }
-            for (ServiceItem item : firestore.loadAdminOperationalItems(idToken)) {
+            for (ServiceItem item : operationalDataDao.loadAdminOperationalItems(idToken)) {
                 addUniqueItem(item);
                 remoteModules.add(item.module);
             }
 
             try {
                 users.clear();
-                users.addAll(firestore.loadUsers(idToken));
+                users.addAll(userDao.findAll(idToken));
             } catch (Exception ignored) {
                 // Keep the last known user snapshot if user listing is temporarily unavailable.
             }
             try {
                 businesses.clear();
-                businesses.addAll(firestore.loadBusinesses(idToken));
+                businesses.addAll(businessDao.findAll(idToken));
             } catch (Exception ignored) {
                 // Business registry is optional for general dashboard startup.
             }
@@ -841,7 +863,7 @@ public final class AppDataStore {
             }
             try {
                 transportOperators.clear();
-                transportOperators.addAll(firestore.loadTransportOperators(idToken));
+                transportOperators.addAll(operatorDao.findAll(idToken));
             } catch (Exception ignored) {
                 // Operators are loaded when permitted; startup should continue without them.
             }
@@ -849,33 +871,33 @@ public final class AppDataStore {
                 bookings.clear();
                 AppSession.User current = AppSession.currentUser();
                 if (current != null && "admin".equals(current.role())) {
-                    bookings.addAll(firestore.loadBookings(idToken));
+                    bookings.addAll(bookingDao.findAll(idToken));
                 } else if (current != null && "user".equals(current.role())) {
-                    bookings.addAll(firestore.loadBookingsForField("userId", current.uid(), idToken));
+                    bookings.addAll(bookingDao.findByField("userId", current.uid(), idToken));
                 } else if (current != null && "business".equals(current.role())) {
-                    bookings.addAll(firestore.loadBookingsForField("businessOwnerId", current.uid(), idToken));
+                    bookings.addAll(bookingDao.findByField("businessOwnerId", current.uid(), idToken));
                 } else if (current != null && "transport_operator".equals(current.role())) {
-                    bookings.addAll(firestore.loadBookingsForField("transportOwnerId", current.uid(), idToken));
+                    bookings.addAll(bookingDao.findByField("transportOwnerId", current.uid(), idToken));
                 }
             } catch (Exception ignored) {
                 // Booking collection access can vary by role.
             }
             try {
                 lostFoundCases.clear();
-                lostFoundCases.addAll(firestore.loadLostFoundCases(idToken));
+                lostFoundCases.addAll(operationalDataDao.loadLostFoundCases(idToken));
             } catch (Exception ignored) {
                 // Lost/found is sensitive and can be unavailable for non-admin sessions.
             }
             try {
                 transportRoutes.clear();
-                transportRoutes.addAll(firestore.loadTransportRoutes(idToken));
+                transportRoutes.addAll(operationalDataDao.loadTransportRoutes(idToken));
             } catch (Exception ignored) {
                 // Route management continues with any cached routes.
             }
 
             pendingApprovals.clear();
-            addUniqueApprovals(firestore.loadPendingBusinessApprovals(idToken), true);
-            addUniqueApprovals(firestore.loadApprovals(idToken), false);
+            addUniqueApprovals(approvalDao.findPendingBusinessApprovals(idToken), true);
+            addUniqueApprovals(approvalDao.findAll(idToken), false);
         } catch (Exception ignored) {
             // Keep local seed data if Firebase is offline or rules are not ready yet.
         }
@@ -924,7 +946,7 @@ public final class AppDataStore {
 
     private static void saveBookingIfPossible(BookingRecord booking) {
         try {
-            firestore.saveBooking(booking, businessOwnerIdFor(booking.businessId), currentToken());
+            bookingDao.save(booking, businessOwnerIdFor(booking.businessId), currentToken());
         } catch (Exception ignored) {
             // Local cache remains usable if rules/backend own this write path.
         }

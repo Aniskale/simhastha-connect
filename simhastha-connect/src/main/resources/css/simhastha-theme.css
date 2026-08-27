@@ -3357,6 +3357,180 @@
     -fx-padding: 9px 22px;
 }
 
+.marketplace-hero,
+.marketplace-image-placeholder {
+    -fx-background-radius: 12px;
+    -fx-border-radius: 12px;
+}
+
+.marketplace-hero {
+    -fx-background-color: #48100f;
+    -fx-border-color: rgba(244, 178, 68, 0.44);
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.20), 18, 0.18, 0, 5);
+}
+
+.marketplace-hero-image {
+    -fx-opacity: 0.58;
+}
+
+.marketplace-hero-title {
+    -fx-text-fill: #fff8ec;
+    -fx-font-family: "Georgia", "Cambria", serif;
+    -fx-font-size: 31px;
+    -fx-font-weight: bold;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.72), 9, 0.22, 0, 2);
+}
+
+.marketplace-hero-subtitle {
+    -fx-text-fill: #fff0cf;
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+}
+
+.marketplace-search-row,
+.marketplace-trust-strip,
+.marketplace-category-row {
+    -fx-background-color: #fff8ec;
+    -fx-background-radius: 12px;
+    -fx-border-color: #e7c891;
+    -fx-border-radius: 12px;
+    -fx-padding: 12px;
+    -fx-effect: dropshadow(gaussian, rgba(94, 47, 11, 0.10), 12, 0.12, 0, 3);
+}
+
+.marketplace-search-field {
+    -fx-background-color: #ffffff;
+    -fx-background-radius: 10px;
+    -fx-border-color: rgba(91, 20, 20, 0.14);
+    -fx-border-radius: 10px;
+    -fx-font-size: 15px;
+    -fx-min-height: 48px;
+    -fx-padding: 10px 14px;
+}
+
+.marketplace-secondary-button,
+.marketplace-chip,
+.marketplace-chip-active,
+.marketplace-primary-action,
+.marketplace-secondary-action {
+    -fx-background-radius: 9px;
+    -fx-border-radius: 9px;
+    -fx-font-weight: bold;
+    -fx-cursor: hand;
+}
+
+.marketplace-secondary-button {
+    -fx-background-color: rgba(233, 136, 19, 0.10);
+    -fx-border-color: rgba(233, 136, 19, 0.28);
+    -fx-text-fill: #8f3b06;
+    -fx-min-height: 42px;
+    -fx-padding: 9px 14px;
+}
+
+.marketplace-trust-icon {
+    -fx-text-fill: #b86406;
+    -fx-font-size: 17px;
+}
+
+.marketplace-trust-text {
+    -fx-text-fill: #5b1414;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.marketplace-chip,
+.marketplace-chip-active {
+    -fx-font-size: 12px;
+    -fx-padding: 8px 13px;
+}
+
+.marketplace-chip {
+    -fx-background-color: #fffdf7;
+    -fx-border-color: rgba(184, 100, 6, 0.20);
+    -fx-text-fill: #6f3412;
+}
+
+.marketplace-chip-active {
+    -fx-background-color: linear-gradient(to right, #7f1111, #c46a10);
+    -fx-border-color: transparent;
+    -fx-text-fill: #fff8ec;
+}
+
+.marketplace-grid {
+    -fx-padding: 2px 0 8px 0;
+}
+
+.marketplace-card {
+    -fx-background-color: #fff8ec;
+    -fx-background-radius: 12px;
+    -fx-border-color: #e7c891;
+    -fx-border-radius: 12px;
+    -fx-padding: 12px;
+    -fx-effect: dropshadow(gaussian, rgba(94, 47, 11, 0.12), 14, 0.14, 0, 4);
+}
+
+.marketplace-card:hover {
+    -fx-border-color: rgba(233, 136, 19, 0.62);
+}
+
+.marketplace-image-placeholder {
+    -fx-background-color:
+        radial-gradient(center 50% 35%, radius 80%, rgba(244, 178, 68, 0.30), transparent),
+        linear-gradient(to bottom right, #fff2d6, #f0d7a7);
+    -fx-border-color: rgba(184, 100, 6, 0.18);
+    -fx-min-height: 92px;
+}
+
+.marketplace-image-icon {
+    -fx-text-fill: #7f1111;
+    -fx-font-size: 34px;
+}
+
+.marketplace-card-title {
+    -fx-text-fill: #5b1414;
+    -fx-font-family: "Georgia", "Cambria", serif;
+    -fx-font-size: 18px;
+    -fx-font-weight: bold;
+}
+
+.marketplace-card-detail {
+    -fx-text-fill: #51301b;
+    -fx-font-size: 12px;
+    -fx-line-spacing: 2px;
+}
+
+.marketplace-price {
+    -fx-text-fill: #8f3b06;
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
+}
+
+.marketplace-primary-action {
+    -fx-background-color: linear-gradient(to right, #7f1111, #b94b12);
+    -fx-text-fill: #fff8ec;
+    -fx-padding: 8px 14px;
+}
+
+.marketplace-secondary-action {
+    -fx-background-color: rgba(233, 136, 19, 0.10);
+    -fx-border-color: rgba(233, 136, 19, 0.28);
+    -fx-text-fill: #8f3b06;
+    -fx-padding: 8px 12px;
+}
+
+.marketplace-state-title {
+    -fx-text-fill: #76563b;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+
+.marketplace-detail-title {
+    -fx-text-fill: #5b1414;
+    -fx-font-family: "Georgia", "Cambria", serif;
+    -fx-font-size: 28px;
+    -fx-font-weight: bold;
+}
+
 .journey-planner {
     -fx-background-color: rgba(255, 255, 255, 0.96);
     -fx-background-radius: 14px;
@@ -3789,6 +3963,56 @@
 .theme-dark .pilgrim-badge,
 .theme-dark .pilgrim-small-gold {
     -fx-text-fill: #f5c86b;
+}
+
+.theme-dark .marketplace-search-row,
+.theme-dark .marketplace-trust-strip,
+.theme-dark .marketplace-category-row,
+.theme-dark .marketplace-card {
+    -fx-background-color: rgba(9, 18, 30, 0.90);
+    -fx-border-color: rgba(229, 180, 76, 0.28);
+}
+
+.theme-dark .marketplace-search-field {
+    -fx-background-color: rgba(255, 242, 214, 0.09);
+    -fx-border-color: rgba(229, 180, 76, 0.28);
+    -fx-text-fill: #fff8de;
+    -fx-prompt-text-fill: #c9aa85;
+}
+
+.theme-dark .marketplace-card-title,
+.theme-dark .marketplace-detail-title,
+.theme-dark .marketplace-trust-text {
+    -fx-text-fill: #fff4d6;
+}
+
+.theme-dark .marketplace-card-detail,
+.theme-dark .marketplace-state-title {
+    -fx-text-fill: #dcc8a4;
+}
+
+.theme-dark .marketplace-price,
+.theme-dark .marketplace-trust-icon,
+.theme-dark .marketplace-image-icon {
+    -fx-text-fill: #f5c86b;
+}
+
+.theme-dark .marketplace-chip {
+    -fx-background-color: rgba(255, 242, 214, 0.06);
+    -fx-border-color: rgba(229, 180, 76, 0.24);
+    -fx-text-fill: #dcc8a4;
+}
+
+.theme-dark .marketplace-chip-active {
+    -fx-background-color: linear-gradient(to right, #8f2d18, #d77b25);
+    -fx-text-fill: #fff8de;
+}
+
+.theme-dark .marketplace-image-placeholder {
+    -fx-background-color:
+        radial-gradient(center 50% 35%, radius 80%, rgba(229, 180, 76, 0.18), transparent),
+        linear-gradient(to bottom right, #152033, #24170f);
+    -fx-border-color: rgba(229, 180, 76, 0.24);
 }
 
 /* Central payment foundation */

@@ -1,5 +1,10 @@
 package com.simhastha.view;
 
+import com.simhastha.controller.BusinessDashboardController;
+import com.simhastha.gateway.firebase.FirestoreGateway;
+import com.simhastha.util.AppSession;
+import com.simhastha.util.NavigationUtil;
+
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -35,7 +40,7 @@ import javafx.stage.Stage;
 public class BusinessOwnerDashboardPage {
     private static final List<Item> LOCAL_ITEMS = new ArrayList<>();
     private final BusinessAuthPage.BusinessAccount fallbackAccount;
-    private final FirestoreGateway firestore = new FirestoreGateway(FirebaseConfig.load());
+    private final BusinessDashboardController controller = new BusinessDashboardController();
     private final Map<String, Button> navigation = new java.util.LinkedHashMap<>();
     private final List<Item> items = new ArrayList<>();
     private BorderPane root;
@@ -55,12 +60,13 @@ public class BusinessOwnerDashboardPage {
         String ownerId = user != null && user.uid() != null && !user.uid().isBlank() ? user.uid() : fallbackAccount.email;
         business = new Business(ownerId, ownerId, fallbackAccount.businessName, fallbackAccount.ownerName, fallbackAccount.category, "ACTIVE", "", "");
         items.clear();
-        if (user != null && firestore.isEnabled()) {
+        if (user != null && controller.isFirebaseEnabled()) {
             try {
-                FirestoreGateway.BusinessProfile profile = firestore.loadBusinessForOwner(user.uid(), user.idToken());
+                FirestoreGateway.BusinessProfile profile = controller.findBusinessForOwner(user.uid(), user.idToken())
+                        .orElse(null);
                 if (profile == null || !user.uid().equals(profile.ownerId())) { business = null; return; }
                 business = new Business(profile.businessId(), profile.ownerId(), profile.businessName(), profile.ownerName(), profile.category(), profile.status(), profile.approved(), profile.description());
-                for (FirestoreGateway.BusinessInventoryItem value : firestore.loadBusinessItems(business.businessId, business.ownerId, user.idToken())) items.add(Item.from(value));
+                for (FirestoreGateway.BusinessInventoryItem value : controller.findInventory(business.businessId, business.ownerId, user.idToken())) items.add(Item.from(value));
             } catch (Exception exception) { loadMessage = "Business details could not be refreshed. Please try again later."; }
         } else {
             for (Item item : LOCAL_ITEMS) if (item.businessId.equals(ownerId) && item.ownerId.equals(ownerId)) items.add(item);
@@ -122,14 +128,14 @@ public class BusinessOwnerDashboardPage {
         dialog.setResultConverter(button->{ if(button.getButtonData()!=javafx.scene.control.ButtonBar.ButtonData.OK_DONE)return null; if(name.getText().trim().isEmpty()||!validNumbers(price.getText(),capacity.getText(),total.getText(),available.getText(),stock.getText())||number(available.getText())>number(total.getText())){ show("Validation","Enter a name, non-negative values, and available units not greater than total units."); return null;} return new ButtonTypeResult(name.getText().trim(),itemType.getText().trim(),price.getText().trim(),capacity.getText().trim(),total.getText().trim(),available.getText().trim(),stock.getText().trim(),facilities.getText().trim(),description.getText().trim(),availability.isSelected()); });
         dialog.showAndWait().ifPresent(result->{ Item item=existing==null?new Item(UUID.randomUUID().toString(),business.businessId,business.ownerId,type(),result.itemType(),result.name(),result.description(),result.price(),result.capacity(),result.total(),result.available(),result.stock(),result.facilities(),result.availableFlag()?"Available":"Unavailable",true):existing; if(existing!=null){item.name=result.name();item.itemType=result.itemType();item.description=result.description();item.price=result.price();item.capacity=result.capacity();item.totalUnits=result.total();item.availableUnits=result.available();item.stock=result.stock();item.facilities=result.facilities();item.availability=result.availableFlag()?"Available":"Unavailable";} if(existing==null){items.add(item);LOCAL_ITEMS.add(item);} save(item); showServices(); });
     }
-    private void save(Item item) { if(!owns(item))return; AppSession.User user=AppSession.currentUser(); if(user!=null&&firestore.isEnabled())try{firestore.saveBusinessItem(item.toGateway(),user.idToken());}catch(Exception e){loadMessage="Changes are available in this session but could not be saved online.";} }
+    private void save(Item item) { if(!owns(item))return; AppSession.User user=AppSession.currentUser(); if(user!=null&&controller.isFirebaseEnabled())try{controller.saveInventoryItem(item.toGateway(),user.idToken());}catch(Exception e){loadMessage="Changes are available in this session but could not be saved online.";} }
     private TextField field(String value,String prompt){TextField f=AppUi.textField(prompt);f.setText(value);return f;} private boolean validNumbers(String... values){for(String value:values)if(number(value)<0)return false;return true;} private long number(String v){try{return Long.parseLong(v.trim());}catch(Exception e){return -1;}} private void show(String title,String message){Alert a=new Alert(Alert.AlertType.INFORMATION,message);a.setTitle(title);a.setHeaderText(null);a.showAndWait();}
     private HBox booking(AppDataStore.BookingRecord b, boolean actions){VBox text=new VBox(2,label(text(b.customerName,"Customer"),"business-row-title"),label(text(b.title,"Service")+" • "+text(b.dateText,"Date not available")+" • Qty: "+b.quantity+" • ₹"+(b.amountPaise/100),"business-row-detail"),label("Payment: "+text(b.paymentStatus,"Unknown")+" • Status: "+text(b.bookingStatus,"Pending"),"business-row-detail")); HBox row=new HBox(10,AppUi.symbolIcon("\uE8A7","business-row-icon"),text,spacer(),statusBadge(text(b.bookingStatus,b.paymentStatus))); if(actions&&canManage()&&ownsBooking(b)){ if("PENDING".equalsIgnoreCase(b.bookingStatus)){Button accept=action("Accept",b,"CONFIRMED");Button reject=action("Reject",b,"REJECTED");row.getChildren().addAll(accept,reject);} else if("CONFIRMED".equalsIgnoreCase(b.bookingStatus)){row.getChildren().add(action("Mark Completed",b,"COMPLETED"));} } row.setAlignment(Pos.CENTER_LEFT);row.getStyleClass().add("business-data-row");return row;}
     private Button action(String title, AppDataStore.BookingRecord booking, String status){Button button=new Button(title);button.getStyleClass().add("business-text-action");button.setOnAction(e->{if(!canManage()||!ownsBooking(booking)||!allowed(booking.bookingStatus,status))return; AppDataStore.updateBookingStatus(booking.bookingId,status,booking.paymentStatus); showBookings();});return button;}
     private boolean ownsBooking(AppDataStore.BookingRecord booking){return business!=null&&business.businessId.equals(booking.businessId)&&business.ownerId.equals(currentOwnerId());}
     private boolean allowed(String from,String to){return ("PENDING".equalsIgnoreCase(from)&&("CONFIRMED".equals(to)||"REJECTED".equals(to)))||("CONFIRMED".equalsIgnoreCase(from)&&"COMPLETED".equals(to));}
     private String currentOwnerId(){AppSession.User user=AppSession.currentUser();return user!=null&&user.uid()!=null&&!user.uid().isBlank()?user.uid():fallbackAccount.email;}
-    private List<AppDataStore.BookingRecord> bookings(){ if(business==null)return List.of(); AppSession.User user=AppSession.currentUser(); if(user!=null&&firestore.isEnabled())try{return firestore.loadBookingsForField("businessId", business.businessId, user.idToken()).stream().filter(this::ownsBooking).toList();}catch(Exception ignored){} return AppDataStore.bookingsForBusiness(business.businessId);} private boolean pending(AppDataStore.BookingRecord b){return "PENDING".equalsIgnoreCase(b.bookingStatus)||"PENDING".equalsIgnoreCase(b.paymentStatus);}
+    private List<AppDataStore.BookingRecord> bookings(){ if(business==null)return List.of(); AppSession.User user=AppSession.currentUser(); if(user!=null&&controller.isFirebaseEnabled())try{return controller.findBookingsForBusiness(business.businessId, user.idToken()).stream().filter(this::ownsBooking).toList();}catch(Exception ignored){} return AppDataStore.bookingsForBusiness(business.businessId);} private boolean pending(AppDataStore.BookingRecord b){return "PENDING".equalsIgnoreCase(b.bookingStatus)||"PENDING".equalsIgnoreCase(b.paymentStatus);}
     private String type(){return category(business==null?fallbackAccount.category:business.category).name();} private Type category(String value){String c=text(value,"").toLowerCase(Locale.ROOT);if(c.contains("tent")||c.contains("camp"))return Type.TENT;if(c.contains("hotel"))return Type.HOTEL;if(c.contains("stay")||c.contains("lodge")||c.contains("dharamshala")||c.contains("accommodation"))return Type.STAY;if(c.contains("puja")||c.contains("pandit"))return Type.PUJA;if(c.contains("food")||c.contains("restaurant")||c.contains("snack"))return Type.FOOD;if(c.contains("shop")||c.contains("retail")||c.contains("store")||c.contains("pharmacy"))return Type.RETAIL;if(c.contains("travel")||c.contains("tour")||c.contains("guide")||c.contains("package"))return Type.TRAVEL;if(c.contains("parking"))return Type.PARKING;if(c.contains("toilet")||c.contains("sanitation"))return Type.TOILET;return Type.SERVICES;}
     private String inventoryLabel(){ Type value=category(business==null?fallbackAccount.category:business.category); if(value==Type.TENT)return "My Tents"; if(value==Type.HOTEL||value==Type.STAY)return "My Rooms / Stay"; if(value==Type.PUJA)return "My Puja Services"; if(value==Type.FOOD)return "My Menu"; if(value==Type.RETAIL)return "My Products"; if(value==Type.TRAVEL)return "My Packages"; if(value==Type.PARKING)return "My Parking Slots"; if(value==Type.TOILET)return "My Facilities"; return "My Services"; }
     private String managementTitle(){return "Manage "+inventoryLabel().replace("My ","");}

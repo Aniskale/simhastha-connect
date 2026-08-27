@@ -1,5 +1,9 @@
 package com.simhastha.view;
 
+import com.simhastha.controller.AdminAuthController;
+import com.simhastha.util.AppNavigator;
+import com.simhastha.util.NavigationUtil;
+
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -15,6 +19,8 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 public class AdminAuthPage {
+
+    private final AdminAuthController controller = new AdminAuthController();
 
     public Scene createScene(Stage stage) {
         BorderPane page = new BorderPane();
@@ -61,7 +67,7 @@ public class AdminAuthPage {
     private void runAdminLogin(Stage stage, Button button, String email, String password) {
         button.setDisable(true);
         button.setText("PLEASE WAIT...");
-        AuthService.login(email, password, "admin").whenComplete((result, error) -> Platform.runLater(() -> {
+        controller.login(email, password).whenComplete((result, error) -> Platform.runLater(() -> {
             button.setDisable(false);
             button.setText("LOGIN AS ADMIN");
             if (error != null || result == null || !result.success()) {

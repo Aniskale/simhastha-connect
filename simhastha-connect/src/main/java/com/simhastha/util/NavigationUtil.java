@@ -1,4 +1,4 @@
-package com.simhastha.view;
+package com.simhastha.util;
 
 import javafx.scene.Parent;
 import javafx.scene.Scene;

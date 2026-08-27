@@ -1,5 +1,10 @@
 package com.simhastha.view;
 
+import com.simhastha.controller.OperatorAuthController;
+import com.simhastha.service.AuthService;
+import com.simhastha.util.AppNavigator;
+import com.simhastha.util.NavigationUtil;
+
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -29,6 +34,7 @@ import javafx.stage.Stage;
 
 public class OperatorAuthPage {
 
+    private final OperatorAuthController controller = new OperatorAuthController();
     private static final Map<String, OperatorAccount> registeredOperators = new HashMap<>();
 
     private VBox formSlot;
@@ -108,8 +114,8 @@ public class OperatorAuthPage {
 
             if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Operator Email and Password.");
-            } else if (AuthService.isFirebaseEnabled()) {
-                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
+            } else if (controller.isFirebaseEnabled()) {
+                runAuth(loginButton, controller.login(userId, userPassword));
             } else if (!registeredOperators.containsKey(userId)) {
                 showInfo("Login Failed", "Operator account not found. Please register first.");
             } else if (!registeredOperators.get(userId).password.equals(userPassword)) {
@@ -162,10 +168,10 @@ public class OperatorAuthPage {
                         email.getText().trim(),
                         serviceType.getValue(),
                         password.getText().trim());
-                if (AuthService.isFirebaseEnabled()) {
+                if (controller.isFirebaseEnabled()) {
                     registerButton.setDisable(true);
                     registerButton.setText("SUBMITTING...");
-                    AuthService.registerOperator(account, password.getText().trim())
+                    controller.registerOperator(account, password.getText().trim())
                             .whenComplete((result, error) -> Platform.runLater(() -> {
                                 registerButton.setDisable(false);
                                 registerButton.setText("REGISTER OPERATOR");
@@ -269,7 +275,7 @@ public class OperatorAuthPage {
             showInfo("Forgot Password", "Please enter your email first.");
             return;
         }
-        AuthService.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
+        controller.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
     }
 
     private void replaceNode(javafx.scene.Node node) {

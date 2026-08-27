@@ -1,5 +1,10 @@
 package com.simhastha.view;
 
+import com.simhastha.controller.UserAuthController;
+import com.simhastha.service.AuthService;
+import com.simhastha.util.AppNavigator;
+import com.simhastha.util.NavigationUtil;
+
 import java.net.URL;
 
 import javafx.application.Platform;
@@ -23,6 +28,7 @@ import javafx.stage.Stage;
 
 public class UserAuthPage {
 
+    private final UserAuthController controller = new UserAuthController();
     private VBox formSlot;
     private Stage currentStage;
 
@@ -86,7 +92,7 @@ public class UserAuthPage {
                 showInfo("Validation", "Please enter email and password.");
                 return;
             }
-            runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
+            runAuth(loginButton, controller.login(userId, userPassword));
         });
 
         Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
@@ -116,7 +122,7 @@ public class UserAuthPage {
             } else {
                 createButton.setDisable(true);
                 createButton.setText("CREATING...");
-                AuthService.registerUser(fullName.getText().trim(), mobile.getText().trim(), email.getText().trim(),
+                controller.registerUser(fullName.getText().trim(), mobile.getText().trim(), email.getText().trim(),
                         password.getText().trim()).whenComplete((result, error) -> Platform.runLater(() -> {
                             createButton.setDisable(false);
                             createButton.setText("CREATE ACCOUNT");
@@ -248,7 +254,7 @@ public class UserAuthPage {
             showInfo("Forgot Password", "Please enter your email first.");
             return;
         }
-        AuthService.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
+        controller.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
     }
 
     private void replaceForm(VBox form) {

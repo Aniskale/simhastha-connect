@@ -1,4 +1,6 @@
-package com.simhastha.view;
+package com.simhastha.service;
+
+import com.simhastha.view.AppDataStore;
 
 import java.security.SecureRandom;
 import java.util.HexFormat;

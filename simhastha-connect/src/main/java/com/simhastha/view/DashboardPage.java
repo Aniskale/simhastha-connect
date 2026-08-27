@@ -1,10 +1,18 @@
 package com.simhastha.view;
 
+import com.simhastha.controller.BusinessMarketplaceController;
+import com.simhastha.model.PublicBusinessItem;
+import com.simhastha.model.PublicBusinessListing;
+import com.simhastha.util.AppSession;
+import com.simhastha.util.NavigationUtil;
+
 import java.awt.Desktop;
 import java.net.URL;
 import java.net.URI;
 import java.util.List;
+import java.util.Locale;
 
+import javafx.application.Platform;
 import javafx.animation.Animation;
 import javafx.animation.Interpolator;
 import javafx.animation.TranslateTransition;
@@ -23,6 +31,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
@@ -39,8 +48,14 @@ public class DashboardPage {
 
     private BorderPane root;
     private final AppPaymentCoordinator paymentCoordinator = new AppPaymentCoordinator();
+    private final BusinessMarketplaceController businessMarketplaceController = new BusinessMarketplaceController();
     private final java.util.Map<String, Button> navButtons = new java.util.LinkedHashMap<>();
     private static final java.util.Map<String, Place> TRANSPORT_PLACES = createTransportPlaces();
+    private List<PublicBusinessListing> marketplaceBusinesses = List.of();
+    private FlowPane marketplaceGrid;
+    private Label marketplaceStatus;
+    private TextField marketplaceSearch;
+    private String selectedMarketplaceCategory = "All";
 
     public Scene createScene(Stage stage) {
         root = new BorderPane();
@@ -848,22 +863,247 @@ public class DashboardPage {
     }
 
     private VBox businessPage() {
-        HBox categories = new HBox(8,
-                badge("Food & Prasadam"), badge("Accommodation"), badge("Puja Items"), badge("Medical Stores"),
-                badge("Local Guides"), badge("Lockers"), badge("Charging Points"));
-        if (!AppDataStore.items("business").isEmpty()) {
-            return pageShell("Approved Businesses & Local Services", "Verified local services for pilgrims.",
-                    categories, adminControlledGrid("business", "View Details"));
-        }
-        return pageShell("Approved Businesses & Local Services", "Verified local services for pilgrims.",
+        selectedMarketplaceCategory = "All";
+        marketplaceBusinesses = List.of();
+
+        marketplaceSearch = AppUi.textField("Search hotels, tents, parking, food, puja services...");
+        marketplaceSearch.getStyleClass().add("marketplace-search-field");
+        marketplaceSearch.textProperty().addListener((observable, oldValue, newValue) -> renderMarketplaceResults());
+
+        Button nearMe = new Button("Near Me");
+        nearMe.getStyleClass().add("marketplace-secondary-button");
+        nearMe.setOnAction(event -> showInfo("Location", "Nearby matching will use stored business area/address information until live location is connected."));
+
+        Button refresh = new Button("Refresh");
+        refresh.getStyleClass().add("marketplace-secondary-button");
+        refresh.setOnAction(event -> loadMarketplaceBusinesses());
+
+        HBox search = new HBox(10, marketplaceSearch, nearMe, refresh);
+        search.getStyleClass().add("marketplace-search-row");
+        search.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(marketplaceSearch, Priority.ALWAYS);
+
+        FlowPane categories = marketplaceCategories();
+        marketplaceStatus = label("Loading verified businesses...", "marketplace-state-title");
+        marketplaceGrid = new FlowPane(14, 14);
+        marketplaceGrid.getStyleClass().add("marketplace-grid");
+
+        VBox body = new VBox(16,
+                marketplaceHero(),
+                search,
+                trustStrip(),
                 categories,
-                twoColumnGrid(
-                        richCard("business", "Verified Food & Prasadam Zone", "Food & Prasadam\nInformation-only listing\nNo forced online payment", "Contact"),
-                        paidCard("business", "Paid Parking Reservation", "Approved private parking near Ramkund approach road", "Pay Securely", "business-paid-parking", 1, 1),
-                        paidCard("business", "Tent Booking Advance", "Approved paid tent booking advance for festival camp stay", "Pay Advance", "business-tent-advance", 1, 1),
-                        paidCard("business", "Local Guide Inquiry", "Pay at location after service confirmation", "Request", "business-guide-pay-location", 1, 1),
-                        businessCard("Medical Store Cluster", "Medical Stores", "CBS and Ramkund route"),
-                        businessCard("Puja Items Market", "Puja Items", "Temple approach zone")));
+                new VBox(8, sectionTitle("Verified Businesses"), marketplaceStatus, marketplaceGrid));
+        loadMarketplaceBusinesses();
+        return pageShell("Business", "Approved local services for pilgrims.", body);
+    }
+
+    private StackPane marketplaceHero() {
+        ImageView image = createImage("/images/ramkund_sunrise.jpg", 980, 190, 0.58, 0.44);
+        image.getStyleClass().add("marketplace-hero-image");
+        VBox copy = new VBox(7,
+                label("Trusted Services for Your Simhastha Journey", "marketplace-hero-title"),
+                label("Find verified stays, food, parking, puja services, shops and essential services around Nashik Simhastha.",
+                        "marketplace-hero-subtitle"));
+        copy.setPadding(new Insets(24));
+        StackPane.setAlignment(copy, Pos.CENTER_LEFT);
+        StackPane hero = new StackPane(image, copy);
+        hero.getStyleClass().add("marketplace-hero");
+        hero.setMinHeight(190);
+        return hero;
+    }
+
+    private HBox trustStrip() {
+        HBox row = new HBox(10,
+                trustBadge("Administration Approved", "\uE73E"),
+                trustBadge("Verified Businesses", "\uE8FB"),
+                trustBadge("Secure Payments", "\uE72E"),
+                trustBadge("24/7 Support", "\uE95E"));
+        row.getStyleClass().add("marketplace-trust-strip");
+        return row;
+    }
+
+    private HBox trustBadge(String text, String icon) {
+        HBox badge = new HBox(7, AppUi.symbolIcon(icon, "marketplace-trust-icon"), label(text, "marketplace-trust-text"));
+        badge.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(badge, Priority.ALWAYS);
+        return badge;
+    }
+
+    private FlowPane marketplaceCategories() {
+        FlowPane pane = new FlowPane(8, 8);
+        pane.getStyleClass().add("marketplace-category-row");
+        for (String category : List.of("All", "Stay", "Hotels", "Tents", "Parking", "Food & Prasadam",
+                "Restaurants", "Puja Services", "Puja Items", "Clothes", "Medical Stores", "Toilets",
+                "Lockers", "Charging Points", "Local Guides", "Shops", "Essentials", "More")) {
+            Button chip = new Button(category);
+            chip.getStyleClass().add(category.equals(selectedMarketplaceCategory)
+                    ? "marketplace-chip-active"
+                    : "marketplace-chip");
+            chip.setOnAction(event -> {
+                selectedMarketplaceCategory = category;
+                pane.getChildren().forEach(node -> node.getStyleClass().setAll("marketplace-chip"));
+                chip.getStyleClass().setAll("marketplace-chip-active");
+                renderMarketplaceResults();
+            });
+            pane.getChildren().add(chip);
+        }
+        return pane;
+    }
+
+    private void loadMarketplaceBusinesses() {
+        if (marketplaceStatus != null) {
+            marketplaceStatus.setText("Loading verified businesses...");
+        }
+        if (marketplaceGrid != null) {
+            marketplaceGrid.getChildren().clear();
+        }
+        AppSession.User user = AppSession.currentUser();
+        String token = user == null ? "" : user.idToken();
+        businessMarketplaceController.loadApprovedBusinesses(token).whenComplete((businesses, throwable) ->
+                Platform.runLater(() -> {
+                    if (throwable != null) {
+                        marketplaceBusinesses = List.of();
+                        marketplaceStatus.setText("Businesses could not be loaded. Please try again.");
+                        Button retry = new Button("Retry");
+                        retry.getStyleClass().add("marketplace-secondary-button");
+                        retry.setOnAction(event -> loadMarketplaceBusinesses());
+                        marketplaceGrid.getChildren().setAll(retry);
+                        return;
+                    }
+                    marketplaceBusinesses = businesses == null ? List.of() : businesses;
+                    renderMarketplaceResults();
+                }));
+    }
+
+    private void renderMarketplaceResults() {
+        if (marketplaceGrid == null || marketplaceStatus == null || marketplaceSearch == null) {
+            return;
+        }
+        String query = marketplaceSearch.getText();
+        List<PublicBusinessListing> filtered = businessMarketplaceController.filter(
+                marketplaceBusinesses, query, selectedMarketplaceCategory);
+        marketplaceGrid.getChildren().clear();
+        if (filtered.isEmpty()) {
+            String activeQuery = query == null ? "" : query.trim();
+            String message = marketplaceBusinesses.isEmpty()
+                    ? "No verified businesses available yet."
+                    : !activeQuery.isBlank()
+                            ? "No businesses match your search."
+                            : "No verified businesses found in this category.";
+            marketplaceStatus.setText(message);
+            Button clear = new Button("Clear Filters");
+            clear.getStyleClass().add("marketplace-secondary-button");
+            clear.setOnAction(event -> {
+                marketplaceSearch.clear();
+                selectedMarketplaceCategory = "All";
+                showModulePage("business");
+            });
+            marketplaceGrid.getChildren().add(clear);
+            return;
+        }
+        marketplaceStatus.setText("Showing administration approved businesses.");
+        filtered.forEach(business -> marketplaceGrid.getChildren().add(marketplaceCard(business)));
+    }
+
+    private VBox marketplaceCard(PublicBusinessListing business) {
+        StackPane image = new StackPane(AppUi.symbolIcon(categoryGlyph(business.displayCategory()), "marketplace-image-icon"));
+        image.getStyleClass().add("marketplace-image-placeholder");
+
+        VBox text = new VBox(7,
+                new HBox(8, badge("Approved"), badge(business.displayCategory())),
+                label(business.name(), "marketplace-card-title"));
+        addIfPresent(text, business.location(), "marketplace-card-detail", "\uE707 ");
+        addIfPresent(text, business.description(), "marketplace-card-detail", "");
+        addIfPresent(text, priceText(business), "marketplace-price", "");
+        addIfPresent(text, availabilityText(business), "marketplace-card-detail", "");
+        addIfPresent(text, business.operatingHours(), "marketplace-card-detail", "\uE787 ");
+
+        Button details = new Button("View Details");
+        details.getStyleClass().add("marketplace-primary-action");
+        details.setOnAction(event -> openBusinessDetails(business));
+
+        Button directions = new Button("Directions");
+        directions.getStyleClass().add("marketplace-secondary-action");
+        directions.setDisable(business.location() == null || business.location().isBlank());
+        directions.setOnAction(event -> openBusinessDirections(business));
+
+        HBox actions = new HBox(8, details, directions);
+        VBox card = new VBox(10, image, text, createSpacer(), actions);
+        card.getStyleClass().add("marketplace-card");
+        card.setPrefWidth(292);
+        card.setMinHeight(310);
+        return card;
+    }
+
+    private void addIfPresent(VBox box, String value, String styleClass, String prefix) {
+        if (value != null && !value.isBlank()) {
+            box.getChildren().add(label(prefix + value, styleClass));
+        }
+    }
+
+    private String priceText(PublicBusinessListing business) {
+        if (business.priceRange() != null && !business.priceRange().isBlank()) {
+            return business.priceRange();
+        }
+        return business.items().stream()
+                .map(PublicBusinessItem::price)
+                .filter(price -> price != null && !price.isBlank() && !"0".equals(price.trim()))
+                .findFirst()
+                .map(price -> "Starts at \u20B9" + price.trim())
+                .orElse("");
+    }
+
+    private String availabilityText(PublicBusinessListing business) {
+        return business.items().stream()
+                .filter(item -> item.availability() != null && !item.availability().isBlank())
+                .findFirst()
+                .map(item -> {
+                    String units = availabilityUnits(item);
+                    return units.isBlank() ? item.availability() : units + " available";
+                })
+                .orElse("");
+    }
+
+    private String availabilityUnits(PublicBusinessItem item) {
+        if (item.availableUnits() != null && !item.availableUnits().isBlank()
+                && item.totalUnits() != null && !item.totalUnits().isBlank()
+                && !"0".equals(item.totalUnits().trim())) {
+            return item.availableUnits().trim() + " of " + item.totalUnits().trim();
+        }
+        if (item.stock() != null && !item.stock().isBlank() && !"0".equals(item.stock().trim())) {
+            return item.stock().trim();
+        }
+        return "";
+    }
+
+    private void openBusinessDetails(PublicBusinessListing business) {
+        BusinessDetailsPage detailsPage = new BusinessDetailsPage(business.businessId(), business,
+                () -> showModulePage("business"));
+        root.setCenter(scroll(detailsPage.createContent()));
+    }
+
+    private void openBusinessDirections(PublicBusinessListing business) {
+        if (business.location() == null || business.location().isBlank()) {
+            showInfo("Directions", "Location details are not available for this business yet.");
+            return;
+        }
+        openUrl("https://www.openstreetmap.org/search?query=" + encodeUrl(business.location()));
+    }
+
+    private String encodeUrl(String value) {
+        return java.net.URLEncoder.encode(value == null ? "" : value, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private String categoryGlyph(String category) {
+        String value = category == null ? "" : category.toLowerCase(Locale.ROOT);
+        if (value.contains("hotel") || value.contains("stay") || value.contains("tent")) return "\uE809";
+        if (value.contains("food") || value.contains("restaurant")) return "\uEC27";
+        if (value.contains("parking")) return "\uE804";
+        if (value.contains("puja")) return "\uEC29";
+        if (value.contains("medical")) return "\uE95E";
+        if (value.contains("guide")) return "\uE77B";
+        return "\uE719";
     }
 
     private VBox myBookingsPage() {

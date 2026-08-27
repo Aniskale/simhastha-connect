@@ -1,4 +1,9 @@
-package com.simhastha.view;
+package com.simhastha.gateway.firebase;
+
+import com.simhastha.util.AppSession;
+import com.simhastha.view.AppDataStore;
+import com.simhastha.view.BusinessAuthPage;
+import com.simhastha.view.OperatorAuthPage;
 
 import java.io.IOException;
 import java.net.URI;

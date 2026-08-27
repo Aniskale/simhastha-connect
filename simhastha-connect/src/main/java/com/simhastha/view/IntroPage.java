@@ -1,5 +1,7 @@
 package com.simhastha.view;
 
+import com.simhastha.util.NavigationUtil;
+
 import java.net.URL;
 
 import javafx.animation.FadeTransition;

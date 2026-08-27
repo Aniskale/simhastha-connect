@@ -1,5 +1,7 @@
 package com.simhastha.view;
 
+import com.simhastha.util.NavigationUtil;
+
 import java.net.URL;
 import java.time.LocalDate;
 import java.time.LocalTime;

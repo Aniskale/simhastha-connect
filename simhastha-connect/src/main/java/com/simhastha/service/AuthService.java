@@ -1,4 +1,21 @@
-package com.simhastha.view;
+package com.simhastha.service;
+
+import com.simhastha.dao.ApprovalDao;
+import com.simhastha.dao.BusinessDao;
+import com.simhastha.dao.OperatorDao;
+import com.simhastha.dao.UserDao;
+import com.simhastha.dao.implementation.FirestoreApprovalDao;
+import com.simhastha.dao.implementation.FirestoreBusinessDao;
+import com.simhastha.dao.implementation.FirestoreOperatorDao;
+import com.simhastha.dao.implementation.FirestoreUserDao;
+import com.simhastha.gateway.firebase.FirebaseAuthGateway;
+import com.simhastha.gateway.firebase.FirebaseConfig;
+import com.simhastha.gateway.firebase.FirestoreGateway;
+import com.simhastha.model.UserProfile;
+import com.simhastha.util.AppSession;
+import com.simhastha.view.AppDataStore;
+import com.simhastha.view.BusinessAuthPage;
+import com.simhastha.view.OperatorAuthPage;
 
 import java.util.concurrent.CompletableFuture;
 
@@ -7,6 +24,10 @@ public final class AuthService {
     private static final FirebaseConfig CONFIG = FirebaseConfig.load();
     private static final FirebaseAuthGateway AUTH = new FirebaseAuthGateway(CONFIG);
     private static final FirestoreGateway FIRESTORE = new FirestoreGateway(CONFIG);
+    private static final UserDao USER_DAO = new FirestoreUserDao(FIRESTORE);
+    private static final BusinessDao BUSINESS_DAO = new FirestoreBusinessDao(FIRESTORE);
+    private static final OperatorDao OPERATOR_DAO = new FirestoreOperatorDao(FIRESTORE);
+    private static final ApprovalDao APPROVAL_DAO = new FirestoreApprovalDao(FIRESTORE);
     private static final java.util.Set<String> VALID_ROLES = java.util.Set.of(
             "user", "business", "transport_operator", "admin");
 
@@ -31,7 +52,7 @@ public final class AuthService {
                     return AuthOutcome.failure("Firebase authentication succeeded, but no authenticated UID was returned.");
                 }
 
-                FirestoreGateway.UserProfile profile = FIRESTORE.loadUserProfile(auth.uid, auth.idToken);
+                UserProfile profile = USER_DAO.findProfile(auth.uid, auth.idToken).orElse(null);
                 if (profile == null) {
                     return AuthOutcome.failure("No Firestore profile was found at users/" + auth.uid + ". Please contact admin.");
                 }
@@ -92,9 +113,9 @@ public final class AuthService {
                     return AuthOutcome.failure(auth.errorMessage);
                 }
 
-                FirestoreGateway.UserProfile profile = new FirestoreGateway.UserProfile(
+                UserProfile profile = new UserProfile(
                         auth.uid, name, auth.email, mobile, "user", "active");
-                FIRESTORE.saveUserProfile(profile, auth.idToken);
+                USER_DAO.saveProfile(profile, auth.idToken);
                 AppSession.set(new AppSession.User(auth.uid, auth.email, "user", auth.idToken, name, "active"));
                 AppDataStore.refreshFirebaseData(auth.idToken);
                 return AuthOutcome.success(AppSession.currentUser());
@@ -116,11 +137,11 @@ public final class AuthService {
                     return AuthOutcome.failure(auth.errorMessage);
                 }
 
-                FirestoreGateway.UserProfile profile = new FirestoreGateway.UserProfile(
+                UserProfile profile = new UserProfile(
                         auth.uid, account.ownerName, auth.email, account.mobile, "business", "pending");
-                FIRESTORE.saveUserProfile(profile, auth.idToken);
-                FIRESTORE.saveBusinessProfile(auth.uid, account, auth.idToken);
-                FIRESTORE.saveApproval(new AppDataStore.ApprovalRequest(
+                USER_DAO.saveProfile(profile, auth.idToken);
+                BUSINESS_DAO.saveRegistration(auth.uid, account, auth.idToken);
+                APPROVAL_DAO.save(new AppDataStore.ApprovalRequest(
                         "Business Registration",
                         account.businessName,
                         account.category + " | " + account.location + " | " + account.mobile,
@@ -145,10 +166,10 @@ public final class AuthService {
                     return AuthOutcome.failure(auth.errorMessage);
                 }
 
-                FirestoreGateway.UserProfile profile = new FirestoreGateway.UserProfile(
+                UserProfile profile = new UserProfile(
                         auth.uid, account.contactPerson, auth.email, account.mobile, "transport_operator", "active");
-                FIRESTORE.saveUserProfile(profile, auth.idToken);
-                FIRESTORE.saveTransportOperatorProfile(auth.uid, account, auth.idToken);
+                USER_DAO.saveProfile(profile, auth.idToken);
+                OPERATOR_DAO.saveRegistration(auth.uid, account, auth.idToken);
                 AppSession.set(new AppSession.User(auth.uid, auth.email, "transport_operator", auth.idToken,
                         account.contactPerson, "active"));
                 AppDataStore.refreshFirebaseData(auth.idToken);
@@ -184,10 +205,10 @@ public final class AuthService {
                     return AuthOutcome.failure(auth.errorMessage);
                 }
 
-                FirestoreGateway.UserProfile profile = FIRESTORE.loadUserProfile(auth.uid, auth.idToken);
+                UserProfile profile = USER_DAO.findProfile(auth.uid, auth.idToken).orElse(null);
                 if (profile == null || profile.role().isBlank()) {
-                    profile = new FirestoreGateway.UserProfile(auth.uid, auth.email, auth.email, "", "user", "active");
-                    FIRESTORE.saveUserProfile(profile, auth.idToken);
+                    profile = new UserProfile(auth.uid, auth.email, auth.email, "", "user", "active");
+                    USER_DAO.saveProfile(profile, auth.idToken);
                 }
 
                 AppSession.User user = new AppSession.User(

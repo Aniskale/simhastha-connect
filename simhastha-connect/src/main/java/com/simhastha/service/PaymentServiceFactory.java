@@ -1,4 +1,4 @@
-package com.simhastha.view;
+package com.simhastha.service;
 
 import com.simhastha.payment.PaymentConfig;
 import com.simhastha.payment.PaymentService;

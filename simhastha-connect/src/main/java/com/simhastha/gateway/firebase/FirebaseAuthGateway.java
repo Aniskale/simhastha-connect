@@ -1,4 +1,4 @@
-package com.simhastha.view;
+package com.simhastha.gateway.firebase;
 
 import java.io.IOException;
 import java.net.URI;

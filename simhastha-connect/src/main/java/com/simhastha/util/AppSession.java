@@ -1,4 +1,4 @@
-package com.simhastha.view;
+package com.simhastha.util;
 
 public final class AppSession {
 

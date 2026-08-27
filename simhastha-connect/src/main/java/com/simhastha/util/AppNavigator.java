@@ -1,4 +1,11 @@
-package com.simhastha.view;
+package com.simhastha.util;
+
+import com.simhastha.view.AdminDashboardPage;
+import com.simhastha.view.BusinessAuthPage;
+import com.simhastha.view.BusinessOwnerDashboardPage;
+import com.simhastha.view.DashboardPage;
+import com.simhastha.view.OperatorAuthPage;
+import com.simhastha.view.OperatorDashboardPage;
 
 import java.util.function.BiConsumer;
 
