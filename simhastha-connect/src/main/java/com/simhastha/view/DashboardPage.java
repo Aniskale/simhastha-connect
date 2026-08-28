@@ -2,12 +2,15 @@ package com.simhastha.view;
 
 import java.awt.Desktop;
 import java.net.URL;
+import java.util.List;
 import java.net.URI;
 import java.util.List;
 
 import javafx.animation.Animation;
 import javafx.animation.Interpolator;
 import javafx.animation.TranslateTransition;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.geometry.Rectangle2D;
@@ -16,8 +19,10 @@ import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.DateCell;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListCell;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
@@ -34,13 +39,23 @@ import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import javafx.stage.Stage;
 import javafx.util.Duration;
+import javafx.util.StringConverter;
 
 public class DashboardPage {
 
     private BorderPane root;
     private final AppPaymentCoordinator paymentCoordinator = new AppPaymentCoordinator();
     private final java.util.Map<String, Button> navButtons = new java.util.LinkedHashMap<>();
+    private LocationOption selectedFromLocation;
+    private LocationOption selectedToLocation;
     private static final java.util.Map<String, Place> TRANSPORT_PLACES = createTransportPlaces();
+    private static final java.util.List<LocationOption> INDIA_LOCATION_OPTIONS = loadIndiaLocationOptions();
+    private static final int LOCATION_SEARCH_LIMIT = 30;
+    private static final java.util.concurrent.ExecutorService LOCATION_SEARCH_EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "simhastha-location-search");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public Scene createScene(Stage stage) {
         root = new BorderPane();
@@ -315,20 +330,1224 @@ public class DashboardPage {
     }
 
     private VBox transportPage() {
-        Node officialRoutes = AppDataStore.items("transport").isEmpty()
-                ? infoPanel("Government Transport", "Official route information, bus schedules and public crowd movement guidance remain free.")
-                : adminControlledGrid("transport", "Open Route");
-        return pageShell("Transport Services", "Bus, train, flight and last-mile Kumbh movement planner.",
-                transportJourneyPlanner(),
-                transportQuickStatus(),
-                officialRoutes,
-                twoColumnGrid(
-                        richCard("transport", "Ozar Airport Arrival Plan",
-                                "Ozar Airport to Nashik Road / CBS connector guidance. Public information only.", "Free Info"),
-                        paidCard("transport", "Private Cab Reservation",
-                                "Optional paid private cab booking for approved service providers.", "Book Cab",
-                                "transport-private-cab", 1, 1)),
-                transportSolutionsGrid());
+        HBox modes = new HBox(14,
+                transportModeCard("🚌", "BUS", "Bus travel to Nashik", "Explore Bus", this::showBusOptions),
+                transportModeCard("🚆", "TRAIN", "Train travel to Nashik", "Explore Train", this::showTrainSearch),
+                transportModeCard("✈", "AIRPLANE", "Flight travel to Nashik", "Explore Flights", this::showFlightSearch));
+        modes.setAlignment(Pos.CENTER);
+        return pageShell("Transport", "Choose the best travel mode for your journey to Nashik Kumbh.",
+                transportOfficialSources(), modes, transportTrustStrip());
+    }
+
+    private VBox transportModeCard(String icon, String title, String detail, String action, Runnable onAction) {
+        ImageView image = createImage(transportCardImage(title), 390, 154, 0.5, 0.5);
+        javafx.scene.shape.Rectangle imageClip = new javafx.scene.shape.Rectangle(390, 154);
+        imageClip.setArcWidth(20);
+        imageClip.setArcHeight(20);
+        image.setClip(imageClip);
+        StackPane visual = new StackPane(image);
+        Button button = new Button(action);
+        button.getStyleClass().add("transport-primary-button");
+        button.setOnAction(event -> onAction.run());
+        VBox card = new VBox(12, visual, strong(title), paragraph(detail), transportCardFeatures(title), button);
+        card.getStyleClass().add("transport-mode-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private String transportCardImage(String title) {
+        return switch (title) {
+            case "BUS" -> "/images/transport-bus-reference.png";
+            case "TRAIN" -> "/images/transport-train-reference.png";
+            default -> "/images/transport-airplane-reference.png";
+        };
+    }
+
+    private HBox transportCardFeatures(String title) {
+        return switch (title) {
+            case "BUS" -> new HBox(7, transportFeature("All India Cities"), transportFeature("Official Sources"), transportFeature("Safe & Reliable"));
+            case "TRAIN" -> new HBox(7, transportFeature("All India Stations"), transportFeature("IRCTC & Partners"), transportFeature("Secure Booking"));
+            default -> new HBox(7, transportFeature("All India Airports"), transportFeature("Official Websites"), transportFeature("Best Options"));
+        };
+    }
+
+    private Label transportFeature(String text) {
+        return label(text, "transport-feature-chip");
+    }
+
+    private VBox transportOfficialSources() {
+        HBox row = new HBox(16, AppUi.symbolIcon("\uE8A5", "transport-source-icon"),
+                new VBox(4, strong("Plan with official sources"),
+                        muted("Use official travel websites for availability, fares and booking.\nLocal Kumbh transport guidance is also available.")));
+        row.setAlignment(Pos.CENTER_LEFT);
+        VBox panel = new VBox(row);
+        panel.getStyleClass().add("transport-sources-panel");
+        return panel;
+    }
+
+    private HBox transportTrustStrip() {
+        HBox strip = new HBox(18,
+                transportTrustItem("Trusted & Secure", "All bookings redirect to official and trusted platforms."),
+                transportTrustItem("Provider Updates", "Check current availability and travel information directly."),
+                transportTrustItem("Local Guidance", "Find Kumbh local transport, routes and facilities."),
+                transportTrustItem("24/7 Support", "We are here to help you plan your journey."));
+        strip.getStyleClass().add("transport-trust-strip");
+        return strip;
+    }
+
+    private HBox transportTrustItem(String title, String detail) {
+        VBox copy = new VBox(3, strong(title), muted(detail));
+        HBox item = new HBox(10, AppUi.symbolIcon("\uE8A5", "transport-trust-icon"), copy);
+        item.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(item, Priority.ALWAYS);
+        return item;
+    }
+
+    private void showBusOptions() {
+        HBox options = new HBox(16,
+                busJourneyCard("Outside Nashik Journey", "Travel to Nashik Kumbh from any city in India.",
+                        "/images/bus-intercity-reference.png", false, "Plan Journey", this::showOutsideNashikJourney,
+                        "Search buses from your city to Nashik", "Compare multiple travel providers",
+                        "Book on official and trusted websites", "Comfortable and safe bus travel"),
+                busJourneyCard("Nashik Local /\nKumbh Transport", "Explore local buses and transport options around Nashik Kumbh.",
+                        "/images/bus-local-reference.png", true, "Find Local Transport", this::showLocalTransport,
+                        "Routes connecting major Kumbh locations", "Railway stations, bus stands, ghats & more",
+                        "Local transport guidance & route info", "Nashik CitiLink - City Bus Service"));
+        options.setAlignment(Pos.CENTER);
+        VBox content = new VBox(12, transportPageHeader("Bus Transport",
+                "Choose the best bus travel option for your journey to Nashik Kumbh"), busTransportHero(), busBackButton(), options,
+                busTravelTip());
+        content.getStyleClass().add("pilgrim-dashboard-main");
+        content.setPadding(new Insets(12, 22, 28, 22));
+        root.setCenter(scroll(content));
+    }
+
+    private HBox transportPageHeader(String titleText, String subtitleText) {
+        VBox title = new VBox(2, label(titleText, "bus-page-title"), muted(subtitleText));
+        HBox header = new HBox(10, title, createSpacer(), AppUi.createThemeToggle(),
+                roundButton("\uE7F4", "Notifications"), roundButton("\uE77B", "Profile"));
+        header.setAlignment(Pos.CENTER_LEFT);
+        return header;
+    }
+
+    private StackPane busTransportHero() {
+        ImageView image = createImage("/images/welcome-light.png", 1100, 150, 0.54, 0.48);
+        image.getStyleClass().add("bus-transport-hero-image");
+        Label bus = new Label("\uD83D\uDE8C");
+        bus.getStyleClass().add("bus-hero-icon");
+        VBox text = new VBox(7, label("BUS TRANSPORT", "bus-hero-title"), label("Plan your journey to Nashik Kumbh", "bus-hero-subtitle"),
+                label("|| \u0964 \u0913\u0902 \u0928\u092E\u0903 \u0936\u093F\u0935\u093E\u092F \u0964 ||", "bus-hero-mantra"));
+        HBox copy = new HBox(22, bus, text);
+        copy.setAlignment(Pos.CENTER_LEFT);
+        copy.setPadding(new Insets(18, 38, 18, 38));
+        StackPane.setAlignment(copy, Pos.CENTER_LEFT);
+        StackPane hero = new StackPane(image, copy);
+        hero.getStyleClass().add("bus-transport-hero");
+        return hero;
+    }
+
+    private Button busBackButton() {
+        Button back = new Button("\u2190  Back");
+        back.getStyleClass().add("bus-back-button");
+        back.setOnAction(event -> showModulePage("transport"));
+        return back;
+    }
+
+    private VBox busJourneyCard(String title, String subtitle, String imagePath, boolean local, String action, Runnable onAction,
+            String... points) {
+        ImageView image = createImage(imagePath, 185, 205, 0.5, 0.5);
+        image.getStyleClass().add("bus-journey-image");
+        VBox details = new VBox(12, strong(title), paragraph(subtitle), busFeatureList(local, points));
+        if (local) {
+            details.getChildren().add(citiLinkPanel());
+        }
+        HBox main = new HBox(16, image, details);
+        main.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(details, Priority.ALWAYS);
+        Button button = new Button(action + "  \u2192");
+        button.getStyleClass().add(local ? "bus-local-action" : "bus-intercity-action");
+        button.setMaxWidth(Double.MAX_VALUE);
+        button.setOnAction(event -> onAction.run());
+        VBox card = new VBox(14, main, button);
+        card.getStyleClass().addAll("bus-journey-card", local ? "bus-local-card" : "bus-intercity-card");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private VBox busFeatureList(boolean local, String... points) {
+        VBox list = new VBox(8);
+        for (String point : points) {
+            Label feature = new Label((local ? "●  " : "●  ") + point);
+            feature.getStyleClass().add(local ? "bus-local-feature" : "bus-intercity-feature");
+            list.getChildren().add(feature);
+        }
+        return list;
+    }
+
+    private HBox citiLinkPanel() {
+        Button routes = new Button("View Routes  \u2197");
+        routes.getStyleClass().add("citilink-routes-button");
+        routes.setOnAction(event -> openUrl("https://citilinc.nmc.gov.in/"));
+        HBox panel = new HBox(10, new VBox(2, smallGold("NASHIK CITILINK"), muted("Nashik CitiLink - City Bus Service")), createSpacer(), routes);
+        panel.getStyleClass().add("citilink-panel");
+        panel.setAlignment(Pos.CENTER_LEFT);
+        return panel;
+    }
+
+    private HBox busTravelTip() {
+        VBox copy = new VBox(5, new HBox(10, AppUi.symbolIcon("\uE946", "bus-tip-icon"), strong("Travel Tip")),
+                muted("Visitors arriving from outside Nashik can first search intercity buses to Nashik.\nAfter reaching Nashik, use Local / Kumbh Transport to find nearby routes and important destinations."));
+        ImageView art = createImage("/images/bus-tip-reference.png", 180, 78, 0.5, 0.5);
+        HBox tip = new HBox(18, copy, createSpacer(), art);
+        tip.getStyleClass().add("bus-travel-tip");
+        tip.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return tip;
+    }
+
+    private VBox transportChoiceCard(String title, String detail, String action, Runnable onAction) {
+        Button button = new Button(action);
+        button.getStyleClass().add("transport-primary-button");
+        button.setOnAction(event -> onAction.run());
+        VBox card = new VBox(8, new HBox(10, moduleIcon("transport", "pilgrim-card-icon"), badge("BUS")),
+                strong(title), paragraph(detail), button);
+        card.getStyleClass().add("transport-choice-card");
+        return card;
+    }
+
+    private void showTransportLanding() {
+        showModulePage("transport");
+    }
+
+    private Button transportBackButton(String text, Runnable action) {
+        Button back = new Button("\u2190  " + text);
+        back.getStyleClass().add("transport-detail-back-button");
+        back.setOnAction(event -> action.run());
+        return back;
+    }
+
+    private VBox outsideJourneyWelcome() {
+        VBox copy = new VBox(5, smallGold("INTERCITY BUS"), strong("Travel smart to Nashik Kumbh"),
+                muted("Choose your starting city, journey date and travel preference. We will guide you to trusted official booking websites."));
+        Label icon = new Label("\uD83D\uDE8C");
+        icon.getStyleClass().add("outside-journey-icon");
+        HBox banner = new HBox(16, icon, copy, createSpacer(),
+                badge("Official providers only"));
+        banner.setAlignment(Pos.CENTER_LEFT);
+        VBox panel = new VBox(banner);
+        panel.getStyleClass().add("outside-journey-welcome");
+        return panel;
+    }
+
+    private StackPane outsideJourneyHero() {
+        ImageView image = createImage("/images/transport-bus-reference.png", 1100, 130, 0.5, 0.5);
+        image.getStyleClass().add("outside-journey-hero-image");
+        VBox text = new VBox(4, smallGold("INTERCITY BUS PLANNER"), label("Travel to Nashik with confidence", "outside-journey-hero-title"),
+                muted("Search your city, select a date and continue through trusted official providers."));
+        text.setPadding(new Insets(18, 28, 18, 28));
+        StackPane.setAlignment(text, Pos.CENTER_LEFT);
+        StackPane hero = new StackPane(image, text);
+        hero.getStyleClass().add("outside-journey-hero");
+        return hero;
+    }
+
+    private HBox outsideJourneyBenefits() {
+        HBox benefits = new HBox(12,
+                journeyBenefit("\uE707", "India-wide routes", "Search from hundreds of cities"),
+                journeyBenefit("\uE787", "Plan ahead", "Pick the date that suits you"),
+                journeyBenefit("\uE8A5", "Trusted websites", "Book with official providers"));
+        benefits.getStyleClass().add("outside-journey-benefits");
+        return benefits;
+    }
+
+    private HBox journeyBenefit(String icon, String title, String detail) {
+        HBox item = new HBox(10, AppUi.symbolIcon(icon, "outside-benefit-icon"), new VBox(2, strong(title), muted(detail)));
+        item.getStyleClass().add("outside-benefit-item");
+        item.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(item, Priority.ALWAYS);
+        return item;
+    }
+
+    private void showOutsideNashikJourney() {
+        showOutsideNashikJourney(null);
+    }
+
+    private void showOutsideNashikJourney(JourneySearchState savedSearch) {
+        if (savedSearch != null) {
+            selectedFromLocation = savedSearch.from();
+            selectedToLocation = savedSearch.to();
+        }
+        ObjectProperty<LocationOption> selectedFromLocationProperty = new SimpleObjectProperty<>(selectedFromLocation);
+        ObjectProperty<LocationOption> selectedToLocationProperty = new SimpleObjectProperty<>(selectedToLocation);
+        selectedFromLocationProperty.addListener((observable, oldLocation, newLocation) -> selectedFromLocation = newLocation);
+        selectedToLocationProperty.addListener((observable, oldLocation, newLocation) -> selectedToLocation = newLocation);
+        ComboBox<LocationOption> from = locationCombo("Search city, village, taluka or district", selectedFromLocationProperty);
+        ComboBox<LocationOption> to = locationCombo("Search city, village, taluka or district", selectedToLocationProperty);
+        DatePicker date = transportDatePicker();
+        ComboBox<Integer> passengers = passengerCombo();
+        ComboBox<String> preference = cityCombo("Choose preference", "Cheapest", "Fastest", "Less Walking", "Less Changes", "Family Friendly");
+        preference.setValue("Cheapest");
+        if (selectedFromLocation != null) {
+            setSelectedLocation(from, selectedFromLocation, selectedFromLocationProperty);
+        }
+        if (selectedToLocation != null) {
+            setSelectedLocation(to, selectedToLocation, selectedToLocationProperty);
+        }
+        if (savedSearch != null) {
+            date.setValue(savedSearch.date());
+            passengers.setValue(savedSearch.passengers());
+        }
+
+        Button plan = new Button("Search");
+        plan.getStyleClass().add("transport-primary-button");
+        plan.setOnAction(event -> {
+            LocationOption selectedFrom = selectedFromLocation;
+            LocationOption selectedTo = selectedToLocation;
+            if (!validSelectedJourney(selectedFrom, selectedTo, date.getValue(), passengers.getValue())) {
+                return;
+            }
+            showAvailableBuses(new JourneySearchState(selectedFrom, selectedTo, date.getValue(), passengers.getValue()));
+        });
+
+        Button swapCities = new Button("\uE8AB");
+        swapCities.getStyleClass().add("outside-swap-button");
+        swapCities.setAccessibleText("Swap From and To cities");
+        swapCities.setOnAction(event -> {
+            LocationOption oldFrom = selectedFromLocation;
+            LocationOption oldTo = selectedToLocation;
+            setSelectedLocation(from, oldTo, selectedFromLocationProperty);
+            setSelectedLocation(to, oldFrom, selectedToLocationProperty);
+        });
+        VBox form = outsideJourneySearchForm(from, swapCities, to, date, passengers, plan);
+        root.setCenter(scroll(pageShell("Outside Nashik Journey", "Compare travel modes for your journey to Nashik Kumbh.",
+                transportBackButton("Back to Bus Transport", this::showBusOptions), outsideJourneyHero(), outsideJourneyWelcome(), form,
+                outsideJourneyBenefits())));
+    }
+
+    private void showTravelModeResults(String from, String to, java.time.LocalDate date, Integer passengers, String preference) {
+        Button bus = new Button("SEARCH BUS");
+        bus.getStyleClass().add("transport-primary-button");
+        bus.setOnAction(event -> showBusSearch(from, to, date, passengers));
+        VBox busCard = new VBox(9, AppUi.symbolIcon("\uE806", "transport-mode-icon"), strong("BUS"),
+                paragraph("Search official bus travel websites for " + from + " to " + to + "."), bus);
+        busCard.getStyleClass().add("transport-mode-card");
+        HBox.setHgrow(busCard, Priority.ALWAYS);
+        HBox choices = new HBox(14, busCard,
+                unavailableTravelCard("TRAIN", "Train journey planning will be added in a later part."),
+                unavailableTravelCard("AIRPLANE", "Flight journey planning will be added in a later part."));
+        root.setCenter(scroll(pageShell("Journey Options", "Preference: " + preference + "  •  " + passengers + " passenger(s)  •  " + date,
+                transportBackButton("Back to Journey Planner", this::showOutsideNashikJourney), choices)));
+    }
+
+    private VBox unavailableTravelCard(String title, String detail) {
+        VBox card = new VBox(9, strong(title), paragraph(detail), badge("Coming soon"));
+        card.getStyleClass().add("transport-mode-card");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private void showAvailableBuses(JourneySearchState search) {
+        java.util.List<BusOption> buses = createBusOptions(search);
+        VBox busList = new VBox(12);
+        String[] activeFilter = { "All" };
+
+        ComboBox<String> sort = new ComboBox<>();
+        sort.getItems().addAll("Departure Time", "Arrival Time", "Price Low to High", "Price High to Low");
+        sort.setValue("Departure Time");
+        sort.getStyleClass().add("journey-combo");
+        sort.setMaxWidth(230);
+
+        HBox filters = new HBox(8);
+        for (String filter : new String[] { "All", "AC", "Non-AC", "Sleeper", "Seater" }) {
+            Button button = new Button(filter);
+            button.getStyleClass().addAll("bus-filter-button", "All".equals(filter) ? "bus-filter-active" : "bus-filter-inactive");
+            button.setOnAction(event -> {
+                activeFilter[0] = filter;
+                filters.getChildren().forEach(node -> node.getStyleClass().remove("bus-filter-active"));
+                filters.getChildren().forEach(node -> {
+                    if (!node.getStyleClass().contains("bus-filter-inactive")) {
+                        node.getStyleClass().add("bus-filter-inactive");
+                    }
+                });
+                button.getStyleClass().remove("bus-filter-inactive");
+                button.getStyleClass().add("bus-filter-active");
+                renderBusCards(busList, buses, activeFilter[0], sort.getValue(), search);
+            });
+            filters.getChildren().add(button);
+        }
+
+        sort.setOnAction(event -> renderBusCards(busList, buses, activeFilter[0], sort.getValue(), search));
+        renderBusCards(busList, buses, activeFilter[0], sort.getValue(), search);
+
+        HBox controls = new HBox(12, filters, createSpacer(), new VBox(5, muted("Sort by"), sort));
+        controls.getStyleClass().add("available-bus-controls");
+        controls.setAlignment(Pos.CENTER_LEFT);
+
+        VBox page = pageShell("Available Buses", "Choose a trusted provider and complete booking on the official website.",
+                transportBackButton("Back to Search", () -> showOutsideNashikJourney(search)),
+                journeySummaryCard(search), controls, busList);
+        root.setCenter(scroll(page));
+    }
+
+    private VBox journeySummaryCard(JourneySearchState search) {
+        Label route = label(search.from().displayName() + "  \u2192  " + search.to().displayName(), "available-route-title");
+        Label detail = muted(formatJourneyDate(search.date()) + "  |  " + search.passengers() + (search.passengers() == 1 ? " Passenger" : " Passengers"));
+        VBox summary = new VBox(7, smallGold("SELECTED JOURNEY"), route, detail);
+        summary.getStyleClass().add("available-journey-summary");
+        return summary;
+    }
+
+    private void renderBusCards(VBox container, java.util.List<BusOption> buses, String filter, String sort, JourneySearchState search) {
+        java.util.stream.Stream<BusOption> stream = buses.stream().filter(bus -> matchesBusFilter(bus, filter));
+        java.util.Comparator<BusOption> comparator = switch (sort == null ? "Departure Time" : sort) {
+            case "Arrival Time" -> java.util.Comparator.comparing(BusOption::arrivalTime);
+            case "Price Low to High" -> java.util.Comparator.comparingInt(BusOption::price);
+            case "Price High to Low" -> java.util.Comparator.comparingInt(BusOption::price).reversed();
+            default -> java.util.Comparator.comparing(BusOption::departureTime);
+        };
+        List<VBox> cards = stream.sorted(comparator).map(bus -> availableBusCard(bus, search)).toList();
+        if (cards.isEmpty()) {
+            container.getChildren().setAll(infoPanel("No buses found", "Try another filter or sorting option for this route."));
+        } else {
+            container.getChildren().setAll(cards);
+        }
+    }
+
+    private boolean matchesBusFilter(BusOption bus, String filter) {
+        if (filter == null || "All".equals(filter)) {
+            return true;
+        }
+        return bus.busType().toLowerCase().contains(filter.toLowerCase());
+    }
+
+    private VBox availableBusCard(BusOption bus, JourneySearchState search) {
+        Label operator = smallGold(bus.provider());
+        Label name = label(bus.busName(), "available-bus-name");
+        Label timing = label(bus.displayDepartureTime() + "  \u2192  " + bus.displayArrivalTime(), "available-bus-time");
+        Label duration = muted("Duration: " + bus.duration());
+        Label type = badge(bus.busType());
+        Label seats = muted("Available Seats: " + bus.availableSeats());
+        Label price = label("Rs. " + bus.price(), "available-bus-price");
+
+        Button viewSeats = new Button("VIEW SEATS");
+        viewSeats.getStyleClass().add("bus-secondary-button");
+        viewSeats.setOnAction(event -> showInfo("Seat selection", "Seat selection is completed on the official booking website."));
+
+        Button book = new Button("BOOK NOW");
+        book.getStyleClass().add("transport-primary-button");
+        book.setOnAction(event -> {
+            openTravelWebsite(bus.bookingUrl());
+            showInfo("External booking", "Complete seat selection, passenger details and payment on the trusted provider website. Simhastha Connect does not collect payment details.");
+        });
+
+        HBox actions = new HBox(10, viewSeats, book);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+        VBox left = new VBox(7, operator, name, timing, duration, type);
+        HBox right = new HBox(18, new VBox(5, seats, price), actions);
+        right.setAlignment(Pos.CENTER_RIGHT);
+        HBox.setHgrow(left, Priority.ALWAYS);
+        HBox cardRow = new HBox(18, left, createSpacer(), right);
+        cardRow.setAlignment(Pos.CENTER_LEFT);
+
+        VBox card = new VBox(10, cardRow, muted(search.from().name() + " to " + search.to().name() + " | Live fares and seats are confirmed on provider website."));
+        card.getStyleClass().add("available-bus-card");
+        return card;
+    }
+
+    private java.util.List<BusOption> createBusOptions(JourneySearchState search) {
+        String routeKey = search.from().displayName() + "|" + search.to().displayName() + "|" + search.date();
+        int seed = Math.abs(routeKey.hashCode());
+        String[] providers = { "redBus Partner", "MSRTC / Official Operator", "AbhiBus Partner", "MakeMyTrip Partner", "Orange Travels", "Shivshahi Connect" };
+        String[] names = { "Kumbh Express", "Nashik Darshan", "Simhastha Rider", "Godavari Link", "Pilgrim Comfort", "Maharashtra Highway" };
+        String[] types = { "AC Seater", "Non-AC Seater", "AC Sleeper", "Non-AC Sleeper", "AC Seater/Sleeper" };
+        String[] urls = { "https://www.redbus.in/", "https://msrtc.maharashtra.gov.in/", "https://www.abhibus.com/",
+                "https://www.makemytrip.com/bus-tickets/", "https://www.orangetravels.in/", "https://www.redbus.in/" };
+        java.util.List<BusOption> buses = new java.util.ArrayList<>();
+        for (int index = 0; index < 6; index++) {
+            int minutes = 360 + ((seed / (index + 3)) % 620) + (index * 35);
+            java.time.LocalTime departure = java.time.LocalTime.of((minutes / 60) % 24, minutes % 60);
+            int durationMinutes = 210 + ((seed / (index + 5)) % 190);
+            java.time.LocalTime arrival = departure.plusMinutes(durationMinutes);
+            int price = 320 + ((seed / (index + 7)) % 680);
+            int seats = 6 + ((seed / (index + 9)) % 31);
+            buses.add(new BusOption(providers[index], names[index], departure, arrival, formatDuration(durationMinutes),
+                    types[(seed + index) % types.length], seats, price, urls[index]));
+        }
+        return buses;
+    }
+
+    private String formatDuration(int totalMinutes) {
+        return (totalMinutes / 60) + "h " + (totalMinutes % 60) + "m";
+    }
+
+    private void showBusSearch(String initialFrom, String initialTo, java.time.LocalDate initialDate, Integer initialPassengers) {
+        ComboBox<String> from = cityCombo("Search city or taluka", allIndianCities());
+        from.setValue(initialFrom);
+        ComboBox<String> to = cityCombo("Search city or taluka", allIndianCities());
+        to.setValue(initialTo == null || initialTo.isBlank() ? "Nashik" : initialTo);
+        DatePicker date = transportDatePicker();
+        date.setValue(initialDate);
+        ComboBox<Integer> passengers = passengerCombo();
+        passengers.setValue(initialPassengers == null ? 1 : initialPassengers);
+        VBox results = new VBox(12);
+        Button search = new Button("SEARCH");
+        search.getStyleClass().add("transport-primary-button");
+        search.setOnAction(event -> {
+            String source = selectedValue(from);
+            String destination = selectedValue(to);
+            if (validJourney(source, destination, date.getValue(), passengers.getValue())) {
+                results.getChildren().setAll(officialBusWebsites(source, destination, date.getValue()));
+            }
+        });
+        VBox form = transportForm("Bus Search", journeyInput("FROM", from, "\uE707"), journeyInput("TO", to, "\uE707"),
+                journeyInput("DATE", date, "\uE787"), journeyInput("PASSENGERS", passengers, "\uE716"), search);
+        root.setCenter(scroll(pageShell("Bus Journey", "Search official travel providers. Booking and availability are handled on each provider's website.",
+                transportBackButton("Back to Journey Options", () -> showTravelModeResults(initialFrom, initialTo, initialDate, initialPassengers, "Cheapest")),
+                form, results)));
+    }
+
+    private VBox officialBusWebsites(String from, String to, java.time.LocalDate date) {
+        VBox cards = new VBox(10, sectionTitle("Official Travel Websites"));
+        HBox sites = new HBox(12,
+                travelWebsiteCard("🚌", "redBus", "Search bus routes and availability on redBus.", "https://www.redbus.in/", date),
+                travelWebsiteCard("🚌", "AbhiBus", "Check schedules and booking options on AbhiBus.", "https://www.abhibus.com/", date),
+                travelWebsiteCard("🚌", "MSRTC", "Maharashtra State Road Transport official website.", "https://msrtc.maharashtra.gov.in/", date),
+                travelWebsiteCard("🚌", "MakeMyTrip", "Search bus travel options on MakeMyTrip.", "https://www.makemytrip.com/bus-tickets/", date));
+        cards.getChildren().addAll(sites, dateEntryNote(date), muted("Live availability, timings, fares and seat information are provided by the respective travel provider."));
+        return cards;
+    }
+
+    private VBox officialWebsiteCard(String name, String url) {
+        Button open = new Button("OPEN WEBSITE");
+        open.getStyleClass().add("transport-primary-button");
+        open.setOnAction(event -> openTravelWebsite(url));
+        VBox card = new VBox(9, AppUi.symbolIcon("\uE806", "transport-mode-icon"), strong(name), muted("Official website"), open);
+        card.getStyleClass().add("transport-website-card");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private void showTrainSearch() {
+        ComboBox<String> from = cityCombo("Select Station", majorIndianStations());
+        ComboBox<String> to = cityCombo("Select Station", majorIndianStations());
+        DatePicker date = transportDatePicker();
+        ComboBox<Integer> passengers = passengerCombo();
+        Button search = new Button("SEARCH TRAINS");
+        search.getStyleClass().add("transport-primary-button");
+        VBox results = new VBox(12);
+        search.setOnAction(event -> {
+            if (validJourney(selectedValue(from), selectedValue(to), date.getValue(), passengers.getValue())) {
+                results.getChildren().setAll(officialTrainWebsites(date.getValue()));
+            }
+        });
+        VBox form = transportForm("TRAIN SEARCH", journeyInput("FROM", from, "\uE707"),
+                journeyInput("TO", to, "\uE707"), journeyInput("DATE", date, "\uE787"),
+                journeyInput("PASSENGERS", passengers, "\uE716"), search);
+        form.getStyleClass().add("transport-train-form");
+        root.setCenter(scroll(pageShell("Train Travel", "Search train travel websites for your journey to Nashik.",
+                transportBackButton("Back to Transport", this::showTransportLanding), form, results)));
+    }
+
+    private VBox officialTrainWebsites(java.time.LocalDate date) {
+        VBox cards = new VBox(10, sectionTitle("Official Train Travel Websites"));
+        HBox sites = new HBox(12,
+                travelWebsiteCard("🚆", "IRCTC", "Official Indian Railways online ticketing portal.", "https://www.irctc.co.in/nget/train-search", date),
+                travelWebsiteCard("🚆", "MakeMyTrip Rail", "Search rail travel options on MakeMyTrip.", "https://www.makemytrip.com/railways/", date),
+                travelWebsiteCard("🚆", "ConfirmTkt", "Check rail travel information on ConfirmTkt.", "https://www.confirmtkt.com/", date),
+                travelWebsiteCard("🚆", "ixigo Trains", "Search train journeys on ixigo.", "https://www.ixigo.com/trains", date));
+        cards.getChildren().addAll(sites, dateEntryNote(date), muted("Live availability, timings, fares and seat information are provided by the respective travel provider."));
+        return cards;
+    }
+
+    private void showFlightSearch() {
+        ComboBox<String> from = cityCombo("Select City/Airport", majorIndianAirports());
+        ComboBox<String> to = cityCombo("Select City/Airport", majorIndianAirports());
+        to.setValue("Nashik / Ozar Airport (ISK)");
+        DatePicker date = transportDatePicker();
+        ComboBox<Integer> passengers = passengerCombo();
+        Button search = new Button("SEARCH FLIGHTS");
+        search.getStyleClass().add("transport-primary-button");
+        VBox results = new VBox(12);
+        search.setOnAction(event -> {
+            if (validJourney(selectedValue(from), selectedValue(to), date.getValue(), passengers.getValue())) {
+                results.getChildren().setAll(officialFlightWebsites(date.getValue()));
+            }
+        });
+        VBox form = transportForm("FLIGHT SEARCH", journeyInput("FROM", from, "\uE707"),
+                journeyInput("TO", to, "\uE707"), journeyInput("DATE", date, "\uE787"),
+                journeyInput("PASSENGERS", passengers, "\uE716"), search);
+        form.getStyleClass().add("transport-flight-form");
+        root.setCenter(scroll(pageShell("Flight Travel", "Search flight travel websites for your journey to Nashik.",
+                transportBackButton("Back to Transport", this::showTransportLanding), form, results)));
+    }
+
+    private VBox officialFlightWebsites(java.time.LocalDate date) {
+        VBox cards = new VBox(10, sectionTitle("Official Flight Travel Websites"));
+        HBox sites = new HBox(12,
+                travelWebsiteCard("✈", "MakeMyTrip", "Search domestic flight options on MakeMyTrip.", "https://www.makemytrip.com/flights/", date),
+                travelWebsiteCard("✈", "Yatra", "Search flights on Yatra.", "https://www.yatra.com/flights", date),
+                travelWebsiteCard("✈", "EaseMyTrip", "Search flights on EaseMyTrip.", "https://www.easemytrip.com/flights.html", date),
+                travelWebsiteCard("✈", "Air India", "Official Air India website.", "https://www.airindia.com/", date));
+        cards.getChildren().addAll(sites, dateEntryNote(date), muted("Live availability, timings, fares and seat information are provided by the respective travel provider."));
+        return cards;
+    }
+
+    private VBox datedTravelWebsiteCard(String name, String url, java.time.LocalDate date, String icon) {
+        Button open = new Button("OPEN WEBSITE");
+        open.getStyleClass().add("transport-primary-button");
+        open.setOnAction(event -> {
+            openTravelWebsite(url);
+            showInfo("Enter journey date", "Please enter the selected journey date: " + formatJourneyDate(date));
+        });
+        VBox card = new VBox(9, AppUi.symbolIcon(icon, "transport-mode-icon"), strong(name), muted("Official website"), open);
+        card.getStyleClass().add("transport-website-card");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private VBox travelWebsiteCard(String icon, String name, String description, String url, java.time.LocalDate date) {
+        Button open = new Button("OPEN WEBSITE");
+        open.getStyleClass().add("transport-primary-button");
+        open.setOnAction(event -> {
+            openTravelWebsite(url);
+            showInfo("Enter journey date", "Please enter the selected journey date: " + formatJourneyDate(date));
+        });
+        Label websiteIcon = new Label(icon);
+        websiteIcon.getStyleClass().add("transport-provider-icon");
+        VBox card = new VBox(9, websiteIcon, strong(name), paragraph(description), open);
+        card.getStyleClass().add("transport-website-card");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private Label dateEntryNote(java.time.LocalDate date) {
+        return muted("Please enter the selected journey date: " + formatJourneyDate(date)
+                + ". These websites are opened for manual search because date transfer is not confirmed.");
+    }
+
+    private String formatJourneyDate(java.time.LocalDate date) {
+        return date.format(java.time.format.DateTimeFormatter.ofPattern("dd MMM uuuu"));
+    }
+
+    private void showLocalTransport() {
+        ComboBox<String> from = cityCombo("Select starting point", "Nashik CBS", "Nashik Road Railway Station", "Panchavati", "Tapovan", "Ramkund", "Mahamarg Bus Stand");
+        ComboBox<String> to = cityCombo("Select destination", "Ramkund", "Panchavati", "Tapovan", "Trimbakeshwar", "Kalaram Mandir");
+        DatePicker date = transportDatePicker();
+        VBox results = new VBox(12);
+        Button search = new Button("SEARCH LOCAL TRANSPORT");
+        search.getStyleClass().add("transport-primary-button");
+        search.setOnAction(event -> {
+            if (from.getValue() == null || from.getValue().isBlank() || to.getValue() == null || to.getValue().isBlank() || date.getValue() == null) {
+                showInfo("Missing details", "Select From, To and a valid date before searching local transport.");
+                return;
+            }
+            results.getChildren().setAll(localRouteCards(from.getValue(), to.getValue()));
+        });
+        VBox form = transportForm("Nashik Local & Kumbh Transport", journeyInput("FROM", from, "\uE707"),
+                journeyInput("TO", to, "\uE707"), journeyInput("DATE", date, "\uE787"), search);
+        root.setCenter(scroll(pageShell("Nashik Local & Kumbh Transport", "Route information only. Live GPS and ETA are not shown when no verified live source is connected.",
+                transportBackButton("Back to Bus Transport", this::showBusOptions), form, results)));
+    }
+
+    private VBox localRouteCards(String from, String to) {
+        VBox routes = new VBox(10, sectionTitle("Local Transport Routes"));
+        routes.getChildren().addAll(localRouteCard("Kumbh Shuttle", from + " → " + to, "Check the official boarding point on arrival."),
+                localRouteCard("Nashik City Bus", from + " → CBS / Citylink → " + to, "Route diversions may apply on crowd-control days."));
+        return routes;
+    }
+
+    private VBox localRouteCard(String bus, String route, String nextStop) {
+        VBox card = new VBox(6, new HBox(10, moduleIcon("transport", "pilgrim-card-icon"), strong(bus)),
+                muted("Route: " + route), muted("Next stop: " + nextStop), badge("Live tracking unavailable"));
+        card.getStyleClass().add("transport-route-card");
+        return card;
+    }
+
+    private VBox transportForm(String title, Node... nodes) {
+        VBox form = new VBox(14, sectionTitle(title));
+        javafx.scene.layout.FlowPane fields = new javafx.scene.layout.FlowPane(12, 12);
+        fields.setAlignment(Pos.CENTER_LEFT);
+        fields.setRowValignment(javafx.geometry.VPos.BOTTOM);
+        for (Node node : nodes) {
+            fields.getChildren().add(node);
+        }
+        form.getChildren().add(fields);
+        form.getStyleClass().add("journey-planner");
+        return form;
+    }
+
+    private VBox outsideJourneySearchForm(ComboBox<LocationOption> from, Button swapCities, ComboBox<LocationOption> to,
+            DatePicker date, ComboBox<Integer> passengers, Button search) {
+        VBox fromBox = journeyInput("From City", from, "\uE707");
+        VBox toBox = journeyInput("To City", to, "\uE707");
+        VBox dateBox = journeyInput("Date of Journey", date, "\uE787");
+        VBox passengerBox = journeyInput("Passengers", passengers, "\uE716");
+
+        HBox fields = new HBox(10, fromBox, swapCities, toBox, dateBox, passengerBox, search);
+        fields.setAlignment(Pos.BOTTOM_LEFT);
+        fields.getStyleClass().add("outside-journey-search-row");
+
+        VBox form = new VBox(12, sectionTitle("Plan Your Journey to Nashik Kumbh"), fields);
+        form.getStyleClass().addAll("journey-planner", "outside-journey-form");
+
+        fromBox.setMinWidth(0);
+        toBox.setMinWidth(0);
+        dateBox.setMinWidth(0);
+        passengerBox.setMinWidth(0);
+        fromBox.prefWidthProperty().bind(form.widthProperty().multiply(0.23));
+        toBox.prefWidthProperty().bind(form.widthProperty().multiply(0.23));
+        dateBox.prefWidthProperty().bind(form.widthProperty().multiply(0.18));
+        passengerBox.prefWidthProperty().bind(form.widthProperty().multiply(0.12));
+        search.prefWidthProperty().bind(form.widthProperty().multiply(0.12));
+        search.setMaxWidth(Double.MAX_VALUE);
+        return form;
+    }
+
+    private ComboBox<LocationOption> locationCombo(String prompt, ObjectProperty<LocationOption> selectedLocationProperty) {
+        ComboBox<LocationOption> combo = new ComboBox<>();
+        combo.setEditable(true);
+        combo.setPromptText(prompt);
+        combo.getEditor().setPromptText("Type village / gaon name");
+        combo.setVisibleRowCount(8);
+        combo.setMaxWidth(Double.MAX_VALUE);
+        combo.getStyleClass().addAll("journey-combo", "location-autocomplete");
+        combo.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(LocationOption location) {
+                return location == null ? "" : location.displayName();
+            }
+
+            @Override
+            public LocationOption fromString(String text) {
+                return null;
+            }
+        });
+        Label noResults = new Label("No village / location found");
+        noResults.getStyleClass().add("city-search-empty");
+        combo.setPlaceholder(noResults);
+        combo.setCellFactory(list -> new ListCell<>() {
+            @Override
+            protected void updateItem(LocationOption location, boolean empty) {
+                super.updateItem(location, empty);
+                if (empty || location == null) {
+                    setGraphic(null);
+                    setText(null);
+                    return;
+                }
+                Label pin = new Label("\uE707");
+                pin.getStyleClass().add("location-result-pin");
+                Label name = new Label(location.name());
+                name.getStyleClass().add("location-result-name");
+                Label detail = new Label(location.details());
+                detail.getStyleClass().add("location-result-detail");
+                VBox copy = new VBox(1, name, detail);
+                HBox row = new HBox(8, pin, copy);
+                row.getStyleClass().add("location-search-result");
+                row.setAlignment(Pos.CENTER_LEFT);
+                setGraphic(row);
+                setText(null);
+            }
+        });
+        combo.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(LocationOption location, boolean empty) {
+                super.updateItem(location, empty);
+                setText(empty || location == null ? "" : location.displayName());
+            }
+        });
+
+        combo.valueProperty().addListener((observable, oldLocation, newLocation) -> {
+            if (Boolean.TRUE.equals(combo.getProperties().get("locationSelectionInProgress"))) {
+                return;
+            }
+            if (newLocation != null) {
+                selectedLocationProperty.set(newLocation);
+                combo.getProperties().put("locationSelectionInProgress", true);
+                try {
+                    combo.getEditor().setText(newLocation.displayName());
+                    combo.getEditor().positionCaret(combo.getEditor().getText().length());
+                } finally {
+                    combo.getProperties().remove("locationSelectionInProgress");
+                }
+                System.out.println("LOCATION SELECTED: " + newLocation.displayName());
+                javafx.application.Platform.runLater(combo::hide);
+            }
+        });
+
+        java.util.function.Consumer<String> filter = text -> {
+            String query = text == null ? "" : text.trim().toLowerCase();
+            int requestId = nextLocationRequestId(combo);
+            LOCATION_SEARCH_EXECUTOR.execute(() -> {
+                java.util.stream.Stream<LocationOption> locations = query.isBlank()
+                        ? suggestedJourneyLocations().stream()
+                        : INDIA_LOCATION_OPTIONS.stream().filter(location -> location.matches(query));
+                java.util.List<LocationOption> matches = locations.limit(LOCATION_SEARCH_LIMIT).toList();
+                javafx.application.Platform.runLater(() -> {
+                    if (currentLocationRequestId(combo) == requestId) {
+                        setLocationItemsPreservingSelection(combo, matches, selectedLocationProperty);
+                    }
+                });
+            });
+        };
+        combo.getEditor().textProperty().addListener((observable, previous, text) -> {
+            if (Boolean.TRUE.equals(combo.getProperties().get("locationSelectionInProgress"))) {
+                return;
+            }
+            LocationOption selected = selectedLocationProperty.get();
+            if (selected != null && !selected.displayName().equals(text)) {
+                clearSelectedLocation(combo, selectedLocationProperty);
+            }
+            filter.accept(text);
+            if (combo.isFocused() && !combo.isShowing()) {
+                combo.show();
+            }
+        });
+        combo.setOnShowing(event -> filter.accept(combo.getEditor().getText()));
+        combo.getEditor().setOnMouseClicked(event -> combo.show());
+        combo.focusedProperty().addListener((observable, wasFocused, isFocused) -> {
+            if (!isFocused) {
+                LocationOption selected = selectedLocationProperty.get();
+                if (selected != null) {
+                    combo.getProperties().put("locationSelectionInProgress", true);
+                    try {
+                        combo.setValue(selected);
+                        combo.getEditor().setText(selected.displayName());
+                        combo.getEditor().positionCaret(combo.getEditor().getText().length());
+                    } finally {
+                        combo.getProperties().remove("locationSelectionInProgress");
+                    }
+                }
+            }
+        });
+        combo.getEditor().setOnKeyPressed(event -> {
+            switch (event.getCode()) {
+                case ESCAPE -> {
+                    combo.hide();
+                    event.consume();
+                }
+                case ENTER -> {
+                    if (combo.isShowing() && !combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.setValue(combo.getItems().get(index < 0 ? 0 : index));
+                        event.consume();
+                    }
+                }
+                case DOWN -> {
+                    combo.show();
+                    if (!combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.getSelectionModel().select(Math.min(index + 1, combo.getItems().size() - 1));
+                    }
+                    event.consume();
+                }
+                case UP -> {
+                    combo.show();
+                    if (!combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.getSelectionModel().select(index <= 0 ? 0 : index - 1);
+                    }
+                    event.consume();
+                }
+                default -> { }
+            }
+        });
+        filter.accept("");
+        return combo;
+    }
+
+    private void setLocationItemsPreservingSelection(ComboBox<LocationOption> combo, java.util.List<LocationOption> matches,
+            ObjectProperty<LocationOption> selectedLocationProperty) {
+        LocationOption selected = selectedLocationProperty.get();
+        java.util.List<LocationOption> items = new java.util.ArrayList<>(matches);
+        if (selected != null && !items.contains(selected)) {
+            items.add(0, selected);
+            if (items.size() > LOCATION_SEARCH_LIMIT) {
+                items = new java.util.ArrayList<>(items.subList(0, LOCATION_SEARCH_LIMIT));
+            }
+        }
+        combo.getProperties().put("locationSelectionInProgress", true);
+        try {
+            combo.getItems().setAll(items);
+            if (selected != null) {
+                combo.setValue(selected);
+                combo.getEditor().setText(selected.displayName());
+                combo.getEditor().positionCaret(combo.getEditor().getText().length());
+            }
+        } finally {
+            combo.getProperties().remove("locationSelectionInProgress");
+        }
+    }
+
+    private int nextLocationRequestId(ComboBox<LocationOption> combo) {
+        Object requestId = combo.getProperties().getOrDefault("locationRequestId", 0);
+        int next = ((Integer) requestId) + 1;
+        combo.getProperties().put("locationRequestId", next);
+        return next;
+    }
+
+    private int currentLocationRequestId(ComboBox<LocationOption> combo) {
+        Object requestId = combo.getProperties().getOrDefault("locationRequestId", 0);
+        return (Integer) requestId;
+    }
+
+    private void setSelectedLocation(ComboBox<LocationOption> combo, LocationOption location, ObjectProperty<LocationOption> selectedLocationProperty) {
+        combo.getProperties().put("locationSelectionInProgress", true);
+        try {
+            if (location == null) {
+                selectedLocationProperty.set(null);
+                return;
+            }
+            selectedLocationProperty.set(location);
+            if (!combo.getItems().contains(location)) {
+                combo.getItems().setAll(INDIA_LOCATION_OPTIONS.stream()
+                        .filter(option -> option.matches(location.name()) || option.equals(location))
+                        .limit(LOCATION_SEARCH_LIMIT)
+                        .toList());
+            }
+            combo.getSelectionModel().select(location);
+            combo.setValue(location);
+            combo.getEditor().setText(location.displayName());
+            combo.getEditor().positionCaret(combo.getEditor().getText().length());
+        } finally {
+            combo.getProperties().remove("locationSelectionInProgress");
+        }
+    }
+
+    private void clearSelectedLocation(ComboBox<LocationOption> combo, ObjectProperty<LocationOption> selectedLocationProperty) {
+        selectedLocationProperty.set(null);
+    }
+
+    private boolean validSelectedJourney(LocationOption from, LocationOption to, java.time.LocalDate date, Integer passengers) {
+        if (from == null || to == null) {
+            showInfo("Search details required", "Please select a valid location from the search results.");
+            return false;
+        }
+        return validJourney(from.displayName(), to.displayName(), date, passengers);
+    }
+
+    private ComboBox<String> cityCombo(String prompt, String... values) {
+        ComboBox<String> combo = new ComboBox<>();
+        combo.setPromptText(prompt);
+        combo.getItems().addAll(values);
+        combo.setEditable(true);
+        combo.setVisibleRowCount(12);
+        combo.getEditor().setPromptText("Type to search city / taluka");
+        Label noResults = new Label("No city or taluka found. You may type a location manually.");
+        noResults.getStyleClass().add("city-search-empty");
+        combo.setPlaceholder(noResults);
+        combo.setCellFactory(list -> new ListCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty ? null : item);
+                getStyleClass().remove("city-search-result");
+                if (!empty) {
+                    getStyleClass().add("city-search-result");
+                }
+            }
+        });
+        java.util.List<String> allValues = java.util.List.of(values);
+        combo.getEditor().textProperty().addListener((observable, oldText, text) -> {
+            String query = text == null ? "" : text.trim().toLowerCase();
+            combo.getItems().setAll(allValues.stream()
+                    .filter(value -> value.toLowerCase().contains(query))
+                    .toList());
+            if (!query.isEmpty() && !combo.isShowing()) {
+                combo.show();
+            }
+        });
+        combo.setOnShowing(event -> {
+            String query = combo.getEditor().getText() == null ? "" : combo.getEditor().getText().trim().toLowerCase();
+            if ("nashik".equals(query) && "nashik".equalsIgnoreCase(combo.getValue())) {
+                query = "";
+            }
+            final String searchQuery = query;
+            combo.getItems().setAll(allValues.stream()
+                    .filter(value -> value.toLowerCase().contains(searchQuery))
+                    .toList());
+        });
+        combo.getEditor().setOnMouseClicked(event -> combo.show());
+        combo.getEditor().setOnKeyReleased(event -> {
+            String query = combo.getEditor().getText() == null ? "" : combo.getEditor().getText().trim().toLowerCase();
+            combo.getItems().setAll(allValues.stream()
+                    .filter(value -> value.toLowerCase().contains(query))
+                    .toList());
+            combo.show();
+        });
+        combo.setOnAction(event -> {
+            String selected = combo.getValue();
+            if (selected != null) {
+                combo.getEditor().setText(selected);
+                combo.hide();
+            }
+        });
+        combo.getStyleClass().add("journey-combo");
+        combo.setMaxWidth(Double.MAX_VALUE);
+        return combo;
+    }
+
+    private HBox journeyFormHint() {
+        HBox hint = new HBox(9, AppUi.symbolIcon("\uE946", "journey-form-hint-icon"),
+                muted("Select or type any Indian city in both From and To. You can search the dropdown by city name."));
+        hint.getStyleClass().add("journey-form-hint");
+        hint.setAlignment(Pos.CENTER_LEFT);
+        return hint;
+    }
+
+    private String selectedValue(ComboBox<String> combo) {
+        String editorText = combo.isEditable() ? combo.getEditor().getText() : null;
+        if (editorText != null && !editorText.isBlank()) {
+            return editorText.trim();
+        }
+        return combo.getValue();
+    }
+
+    private String[] allIndianCities() {
+        return INDIA_LOCATION_OPTIONS.stream().map(LocationOption::displayName).toArray(String[]::new);
+    }
+
+    private static java.util.List<LocationOption> suggestedJourneyLocations() {
+        return INDIA_LOCATION_OPTIONS.stream()
+                .filter(location -> java.util.Set.of("Nashik", "Sinnar", "Shirdi", "Rahuri", "Rahata", "Trimbak",
+                        "Pune", "Mumbai", "Nagpur", "Ahmednagar", "Aurangabad", "Delhi").contains(location.name()))
+                .limit(LOCATION_SEARCH_LIMIT)
+                .toList();
+    }
+
+    private static java.util.List<LocationOption> loadIndiaLocationOptions() {
+        java.util.LinkedHashMap<String, LocationOption> options = new java.util.LinkedHashMap<>();
+        for (String city : baseIndianCities()) {
+            addLocation(options, new LocationOption("city-" + city.toLowerCase().replaceAll("[^a-z0-9]+", "-"), city,
+                    "City", "", "India"));
+        }
+        for (LocationOption location : supplementalVillageLocations()) {
+            addLocation(options, location);
+        }
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.InputStreamReader(
+                DashboardPage.class.getResourceAsStream("/data/india-subdistricts-lgd.csv"), java.nio.charset.StandardCharsets.UTF_8))) {
+            reader.readLine();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] columns = line.split(",", -1);
+                if (columns.length > 7 && !columns[7].isBlank()) {
+                    String state = toLocationName(columns[2]);
+                    String district = toLocationName(columns[4]);
+                    String name = columns[7].trim();
+                    addLocation(options, new LocationOption("subdistrict-" + columns[5], name, "Taluka", district, state));
+                    addLocation(options, new LocationOption("district-" + columns[3], district, "District", district, state));
+                }
+            }
+        } catch (Exception ignored) {
+            // The manually supplied city list remains usable if the local resource is unavailable.
+        }
+        return options.values().stream().sorted(java.util.Comparator.comparingInt(DashboardPage::locationPriority)
+                .thenComparing(LocationOption::name, String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(LocationOption::type)).toList();
+    }
+
+    private static void addLocation(java.util.Map<String, LocationOption> options, LocationOption location) {
+        options.putIfAbsent(location.id(), location);
+    }
+
+    private static int locationPriority(LocationOption location) {
+        return switch (location.type().toLowerCase()) {
+            case "village" -> 0;
+            case "town", "locality" -> 1;
+            case "taluka" -> 2;
+            case "district" -> 3;
+            default -> 4;
+        };
+    }
+
+    private static String toLocationName(String value) {
+        String lowerCase = value == null ? "" : value.trim().toLowerCase();
+        StringBuilder display = new StringBuilder(lowerCase.length());
+        boolean capitalize = true;
+        for (char character : lowerCase.toCharArray()) {
+            display.append(capitalize ? Character.toUpperCase(character) : character);
+            capitalize = character == ' ' || character == '-' || character == '/';
+        }
+        return display.toString();
+    }
+
+    private record LocationOption(String id, String name, String type, String district, String state) {
+        private String displayName() {
+            return district == null || district.isBlank() ? name : name + ", " + district + ", " + state;
+        }
+
+        private String details() {
+            if ("District".equalsIgnoreCase(type)) {
+                return name + " District, " + state;
+            }
+            if ("Taluka".equalsIgnoreCase(type)) {
+                return name + " Taluka, " + district + ", " + state;
+            }
+            return district == null || district.isBlank() ? state : district + ", " + state;
+        }
+
+        private boolean matches(String query) {
+            if (query == null || query.isBlank()) {
+                return true;
+            }
+            String searchable = (name + " " + type + " " + district + " " + state).toLowerCase();
+            return searchable.contains(query.toLowerCase());
+        }
+    }
+
+    private record JourneySearchState(LocationOption from, LocationOption to, java.time.LocalDate date, int passengers) { }
+
+    private record BusOption(String provider, String busName, java.time.LocalTime departureTime, java.time.LocalTime arrivalTime,
+            String duration, String busType, int availableSeats, int price, String bookingUrl) {
+        private static final java.time.format.DateTimeFormatter TIME_FORMAT =
+                java.time.format.DateTimeFormatter.ofPattern("hh:mm a");
+
+        private String displayDepartureTime() {
+            return departureTime.format(TIME_FORMAT);
+        }
+
+        private String displayArrivalTime() {
+            return arrivalTime.format(TIME_FORMAT);
+        }
+    }
+
+    private static String[] baseIndianCities() {
+        return new String[] {
+                "Agartala", "Agra", "Ahmedabad", "Ahmednagar", "Aizawl", "Ajmer", "Akola", "Alappuzha", "Aligarh", "Alwar", "Amaravati", "Ambala", "Amravati", "Amritsar", "Anand", "Anantapur", "Asansol", "Aurangabad", "Ayodhya",
+                "Badlapur", "Bagalkot", "Balasore", "Ballari", "Banda", "Bengaluru", "Berhampur", "Bhagalpur", "Bharatpur", "Bharuch", "Bhavnagar", "Bhilai", "Bhilwara", "Bhiwandi", "Bhiwani", "Bhopal", "Bhubaneswar", "Bidar", "Bikaner", "Bilaspur", "Bokaro", "Bongaigaon", "Brahmapur", "Bulandshahr",
+                "Chandigarh", "Chandrapur", "Chennai", "Chhatrapati Sambhajinagar (Aurangabad)", "Chhindwara", "Chittorgarh", "Coimbatore", "Cuttack",
+                "Darbhanga", "Darjeeling", "Davangere", "Dehradun", "Deoghar", "Dewas", "Dhanbad", "Dharamshala", "Dharwad", "Dibrugarh", "Dimapur", "Durg", "Durgapur",
+                "Eluru", "Erode", "Etawah",
+                "Faridabad", "Firozabad", "Gandhidham", "Gandhinagar", "Gangtok", "Gaya", "Ghaziabad", "Goa / Panaji", "Gorakhpur", "Greater Noida", "Guntur", "Gurugram", "Guwahati", "Gwalior",
+                "Haldia", "Haridwar", "Hisar", "Hosur", "Hubballi", "Hyderabad",
+                "Imphal", "Indore", "Itanagar",
+                "Jabalpur", "Jaipur", "Jalandhar", "Jalgaon", "Jalna", "Jammu", "Jamnagar", "Jamshedpur", "Jaunpur", "Jhansi", "Jodhpur", "Jorhat", "Junagadh",
+                "Kakinada", "Kalaburagi", "Kannur", "Kanpur", "Karimnagar", "Karnal", "Katni", "Kavaratti", "Kochi", "Kolhapur", "Kolkata", "Kollam", "Kota", "Kottayam", "Kozhikode", "Kurnool",
+                "Latur", "Leh", "Lucknow", "Ludhiana",
+                "Madurai", "Mangaluru", "Mathura", "Meerut", "Mira-Bhayandar", "Modinagar", "Moradabad", "Morbi", "Mumbai", "Munger", "Muzaffarnagar", "Muzaffarpur", "Mysuru",
+                "Nagpur", "Nanded", "Nashik", "Navi Mumbai", "Nellore", "New Delhi", "Nizamabad", "Noida",
+                "Ongole",
+                "Palakkad", "Panipat", "Parbhani", "Patiala", "Patna", "Phagwara", "Pimpri-Chinchwad", "Port Blair", "Prayagraj", "Puducherry", "Pune", "Puri",
+                "Raipur", "Rajahmundry", "Rajkot", "Ranchi", "Ratlam", "Rewa", "Rewari", "Rohtak", "Roorkee", "Rourkela",
+                "Sagar", "Salem", "Sambalpur", "Sangli", "Sasaram", "Satara", "Shillong", "Shimla", "Shirdi", "Shivamogga", "Sikar", "Siliguri", "Srinagar", "Solapur", "Sonipat", "Sri Ganganagar", "Srikakulam", "Srinagar", "Surat", "Surendranagar",
+                "Thane", "Thanjavur", "Thiruvananthapuram", "Thrissur", "Tiruchirappalli", "Tirunelveli", "Tirupati", "Tumakuru",
+                "Udaipur", "Udupi", "Ujjain", "Ulhasnagar", "Una", "Vadodara", "Varanasi", "Vellore", "Vijayawada", "Visakhapatnam", "Vizianagaram",
+                "Warangal", "Yamunanagar",
+
+                "Nashik Taluka", "Niphad Taluka", "Dindori Taluka", "Igatpuri Taluka", "Kalwan Taluka", "Malegaon Taluka", "Baglan / Satana Taluka", "Sinnar Taluka", "Yeola Taluka", "Nandgaon Taluka", "Chandwad Taluka", "Deola Taluka", "Trimbakeshwar Taluka", "Peth Taluka", "Surgana Taluka",
+                "Ambegaon Taluka", "Baramati Taluka", "Bhor Taluka", "Daund Taluka", "Haveli Taluka", "Indapur Taluka", "Junnar Taluka", "Khed Taluka", "Maval Taluka", "Mulshi Taluka", "Purandar Taluka", "Shirur Taluka", "Velhe Taluka",
+                "Karjat Taluka", "Khalapur Taluka", "Panvel Taluka", "Uran Taluka", "Alibag Taluka", "Mahad Taluka", "Mangaon Taluka", "Murud Taluka", "Pen Taluka", "Roha Taluka", "Shrivardhan Taluka", "Tala Taluka",
+                "Akole Taluka", "Jamkhed Taluka", "Karjat Taluka (Ahmednagar)", "Kopargaon Taluka", "Nevasa Taluka", "Parner Taluka", "Pathardi Taluka", "Rahata Taluka", "Rahuri Taluka", "Sangamner Taluka", "Shevgaon Taluka", "Shrigonda Taluka", "Shrirampur Taluka",
+                "Koregaon Taluka", "Khandala Taluka", "Man Taluka", "Patan Taluka", "Phaltan Taluka", "Wai Taluka", "Khatav Taluka", "Jaoli Taluka", "Mahabaleshwar Taluka", "Satara Taluka",
+                "Miraj Taluka", "Tasgaon Taluka", "Kavathe Mahankal Taluka", "Khanapur Taluka", "Atpadi Taluka", "Jat Taluka", "Walwa Taluka", "Shirala Taluka", "Palus Taluka", "Kadegaon Taluka",
+                "Chopda Taluka", "Erandol Taluka", "Jamner Taluka", "Pachora Taluka", "Raver Taluka", "Yawal Taluka", "Bhusawal Taluka", "Amalner Taluka", "Bodwad Taluka", "Dharangaon Taluka", "Muktainagar Taluka",
+                "Bhiwapur Taluka", "Hingna Taluka", "Kalmeshwar Taluka", "Kamptee Taluka", "Katol Taluka", "Kuhi Taluka", "Mauda Taluka", "Narkhed Taluka", "Parseoni Taluka", "Ramtek Taluka", "Savner Taluka", "Umred Taluka",
+                "Mokhada Taluka", "Palghar Taluka", "Dahanu Taluka", "Talasari Taluka", "Vasai Taluka", "Wada Taluka", "Vikramgad Taluka", "Jawhar Taluka",
+                "Kankavli Taluka", "Kudal Taluka", "Malvan Taluka", "Sawantwadi Taluka", "Vengurla Taluka", "Devgad Taluka", "Vaibhavwadi Taluka", "Dodamarg Taluka"
+        };
+    }
+
+    private static LocationOption[] supplementalVillageLocations() {
+        return new LocationOption[] {
+                new LocationOption("village-anjaneri-nashik", "Anjaneri", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("village-matori-nashik", "Matori", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("village-dugaon-nashik", "Dugaon", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("village-saykheda-nashik", "Saykheda", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("village-nandur-naka-nashik", "Nandur Naka", "Locality", "Nashik", "Maharashtra"),
+                new LocationOption("village-gangapur-nashik", "Gangapur", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("village-trimbak-nashik", "Trimbak", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("town-sinnar-nashik", "Sinnar", "Town", "Nashik", "Maharashtra"),
+                new LocationOption("village-shirdi-ahmednagar", "Shirdi", "Village", "Rahata Taluka, Ahmednagar", "Maharashtra"),
+                new LocationOption("village-ghoti-nashik", "Ghoti", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("village-vani-nashik", "Vani", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("village-nanduri-nashik", "Nanduri", "Village", "Nashik", "Maharashtra"),
+                new LocationOption("village-lasur-station-aurangabad", "Lasur Station", "Village", "Chhatrapati Sambhajinagar", "Maharashtra"),
+                new LocationOption("village-shani-shingnapur-ahmednagar", "Shani Shingnapur", "Village", "Ahmednagar", "Maharashtra"),
+                new LocationOption("village-ranjangaon-pune", "Ranjangaon", "Village", "Pune", "Maharashtra"),
+                new LocationOption("village-alandi-pune", "Alandi", "Town", "Pune", "Maharashtra"),
+                new LocationOption("village-jejuri-pune", "Jejuri", "Town", "Pune", "Maharashtra"),
+                new LocationOption("village-mahabalipuram-chengalpattu", "Mahabalipuram", "Town", "Chengalpattu", "Tamil Nadu"),
+                new LocationOption("village-hampi-vijayanagara", "Hampi", "Village", "Vijayanagara", "Karnataka"),
+                new LocationOption("village-pushkar-ajmer", "Pushkar", "Town", "Ajmer", "Rajasthan"),
+                new LocationOption("village-rishikesh-dehradun", "Rishikesh", "City", "Dehradun", "Uttarakhand"),
+                new LocationOption("village-dwarka-devbhumi-dwarka", "Dwarka", "City", "Devbhumi Dwarka", "Gujarat")
+        };
+    }
+
+    private String[] majorIndianStations() {
+        return new String[] { "Nashik Road", "Manmad Junction", "Mumbai CSMT", "Mumbai Central", "Lokmanya Tilak Terminus", "Pune Junction", "Nagpur Junction", "New Delhi", "Delhi Junction", "Ahmedabad Junction", "Surat", "Vadodara Junction", "Indore Junction", "Bhopal Junction", "Jaipur Junction", "Kota Junction", "Varanasi Junction", "Prayagraj Junction", "Lucknow", "Hyderabad Deccan", "Bengaluru City", "Chennai Central", "Howrah (Kolkata)", "Shirdi Sainagar" };
+    }
+
+    private String[] majorIndianAirports() {
+        return new String[] { "Nashik / Ozar Airport (ISK)", "Mumbai / Chhatrapati Shivaji Maharaj International Airport (BOM)", "Pune Airport (PNQ)", "Delhi / Indira Gandhi International Airport (DEL)", "Bengaluru / Kempegowda International Airport (BLR)", "Hyderabad / Rajiv Gandhi International Airport (HYD)", "Chennai International Airport (MAA)", "Kolkata / Netaji Subhas Chandra Bose International Airport (CCU)", "Ahmedabad / Sardar Vallabhbhai Patel International Airport (AMD)", "Jaipur International Airport (JAI)", "Goa / Manohar International Airport (GOX)", "Indore / Devi Ahilyabai Holkar Airport (IDR)", "Bhopal / Raja Bhoj Airport (BHO)", "Nagpur / Dr. Babasaheb Ambedkar International Airport (NAG)" };
+    }
+
+    private ComboBox<Integer> passengerCombo() {
+        ComboBox<Integer> combo = new ComboBox<>();
+        combo.getItems().addAll(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+        combo.setValue(1);
+        combo.getStyleClass().add("journey-combo");
+        combo.setMaxWidth(Double.MAX_VALUE);
+        return combo;
+    }
+
+    private DatePicker transportDatePicker() {
+        DatePicker picker = new DatePicker(java.time.LocalDate.now());
+        picker.setPromptText("Select Date");
+        picker.setDayCellFactory(datePicker -> new DateCell() {
+            @Override
+            public void updateItem(java.time.LocalDate value, boolean empty) {
+                super.updateItem(value, empty);
+                setDisable(empty || value.isBefore(java.time.LocalDate.now()));
+            }
+        });
+        picker.getStyleClass().add("journey-field");
+        return picker;
+    }
+
+    private boolean validJourney(String from, String to, java.time.LocalDate date, Integer passengers) {
+        if (from == null || from.isBlank()) {
+            showInfo("Search details required", "Please select From City.");
+            return false;
+        }
+        if (to == null || to.isBlank()) {
+            showInfo("Search details required", "Please select To City.");
+            return false;
+        }
+        if (from.trim().equalsIgnoreCase(to.trim())) {
+            showInfo("Search details required", "From City and To City cannot be the same.");
+            return false;
+        }
+        if (date == null) {
+            showInfo("Search details required", "Please select Journey Date.");
+            return false;
+        }
+        if (date.isBefore(java.time.LocalDate.now())) {
+            showInfo("Search details required", "Please select today or a future date.");
+            return false;
+        }
+        if (passengers == null || passengers < 1) {
+            showInfo("Invalid passengers", "Select at least one passenger.");
+            return false;
+        }
+        return true;
+    }
+
+    private void openTravelWebsite(String url) {
+        String[] chromePaths = { System.getenv("ProgramFiles") + "\\Google\\Chrome\\Application\\chrome.exe",
+                System.getenv("ProgramFiles(x86)") + "\\Google\\Chrome\\Application\\chrome.exe",
+                System.getenv("LocalAppData") + "\\Google\\Chrome\\Application\\chrome.exe" };
+        for (String chromePath : chromePaths) {
+            if (chromePath != null && new java.io.File(chromePath).isFile()) {
+                try {
+                    new ProcessBuilder(chromePath, url).start();
+                    return;
+                } catch (java.io.IOException ignored) {
+                    // Fall through to the operating system's default browser.
+                }
+            }
+        }
+        openUrl(url);
     }
 
     private VBox packagesPage() {
@@ -347,9 +1566,9 @@ public class DashboardPage {
     }
 
     private VBox transportJourneyPlanner() {
-        ComboBox<String> from = locationCombo("From");
+        ComboBox<String> from = transportLocationCombo("From");
         from.setValue("Nashik Road Railway Station");
-        ComboBox<String> to = locationCombo("To");
+        ComboBox<String> to = transportLocationCombo("To");
         to.setValue("Ramkund Ghat");
 
         ComboBox<String> mode = new ComboBox<>();
@@ -417,7 +1636,7 @@ public class DashboardPage {
         return planner;
     }
 
-    private ComboBox<String> locationCombo(String prompt) {
+    private ComboBox<String> transportLocationCombo(String prompt) {
         ComboBox<String> combo = new ComboBox<>();
         combo.setEditable(true);
         combo.setPromptText(prompt);
