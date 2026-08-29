@@ -1,0 +1,4 @@
+# Optional JavaFX payment client configuration.
+# Do not place Razorpay key secret in this file.
+payments.enabled=false
+payments.backendBaseUrl=http://localhost:8080

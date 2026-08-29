@@ -1,0 +1,381 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userExists() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function role() {
+      return userExists()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : "";
+    }
+
+    function isAdmin() {
+      return role() == "admin";
+    }
+
+    function isBusiness() {
+      return role() == "business";
+    }
+
+    function isTransportOperator() {
+      return role() == "transport_operator";
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function approvedPublic() {
+      return resource.data.approved == true
+        || resource.data.status == "approved"
+        || resource.data.published == true;
+    }
+
+    function ownsActiveBusiness(businessId) {
+      return isBusiness()
+        && exists(/databases/$(database)/documents/businesses/$(businessId))
+        && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid
+        && (
+          get(/databases/$(database)/documents/businesses/$(businessId)).data.status == "approved"
+          || get(/databases/$(database)/documents/businesses/$(businessId)).data.status == "active"
+        );
+    }
+
+    function ownsBusinessId(businessId) {
+      return isBusiness()
+        && exists(/databases/$(database)/documents/businesses/$(businessId))
+        && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
+    }
+
+    // ================= USERS =================
+
+    match /users/{uid} {
+
+      allow create: if isOwner(uid)
+        && request.resource.data.uid == uid
+        && (
+          (
+            request.resource.data.role == "user"
+            && request.resource.data.status == "active"
+          )
+          ||
+          (
+            request.resource.data.role in [
+              "business",
+              "transport_operator"
+            ]
+            && request.resource.data.status == "pending"
+          )
+        );
+
+      allow read: if isOwner(uid) || isAdmin();
+
+      // Owner can edit profile,
+      // but cannot change own role or approval status.
+      allow update: if isOwner(uid)
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.uid == resource.data.uid;
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ================= BUSINESSES =================
+
+    match /businesses/{uid} {
+
+      allow create: if isOwner(uid)
+        && isBusiness()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == "pending"
+        && request.resource.data.approved == false;
+
+      allow read: if isAdmin()
+        || isOwner(uid)
+        || approvedPublic();
+
+      // Business owner may edit normal information only.
+      // They cannot approve themselves.
+      allow update: if isOwner(uid)
+        && isBusiness()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.approved == resource.data.approved
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'description', 'mobile', 'location', 'openingTime', 'closingTime',
+          'facilities', 'amenities', 'photoReferences', 'updatedAt'
+        ]);
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ================= TRANSPORT OPERATORS =================
+
+    match /transportOperators/{uid} {
+
+      allow create: if isOwner(uid)
+        && isTransportOperator()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status in ["pending", "active"]
+        && request.resource.data.approved is bool;
+
+      allow read: if isAdmin()
+        || isOwner(uid)
+        || approvedPublic();
+
+      allow update: if isOwner(uid)
+        && isTransportOperator()
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.approved == resource.data.approved;
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ================= APPROVAL REQUESTS =================
+
+    match /approvalRequests/{id} {
+
+      allow create: if isSignedIn()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == "pending";
+
+      allow read, update, delete: if isAdmin();
+    }
+
+    // ================= PAYMENTS =================
+
+    match /payments/{id} {
+
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      // Normal clients may not create or mutate authoritative payment state.
+      // Trusted backend/admin mechanisms must perform payment writes.
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ================= BOOKINGS & TICKETS =================
+
+    match /bookings/{id} {
+
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid)
+        || (isBusiness() && resource.data.businessOwnerId == request.auth.uid)
+        || ownsBusinessId(resource.data.businessId)
+        || (isTransportOperator() && resource.data.transportOwnerId == request.auth.uid);
+
+      // A business may only advance its own operational booking state.  Payment,
+      // user, business and transaction fields remain immutable on this path.
+      allow update: if isBusiness()
+        && (resource.data.businessOwnerId == request.auth.uid || ownsBusinessId(resource.data.businessId))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'bookingStatus', 'updatedAt', 'rejectionReason', 'ownerOperationalNotes'
+        ])
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.businessId == resource.data.businessId
+        && request.resource.data.amountPaise == resource.data.amountPaise
+        && request.resource.data.paymentStatus == resource.data.paymentStatus
+        && request.resource.data.razorpayPaymentId == resource.data.razorpayPaymentId
+        && request.resource.data.internalPaymentId == resource.data.internalPaymentId
+        && (
+          (resource.data.bookingStatus == 'PENDING'
+            && request.resource.data.bookingStatus in ['CONFIRMED', 'REJECTED'])
+          || (resource.data.bookingStatus == 'CONFIRMED'
+            && request.resource.data.bookingStatus == 'COMPLETED')
+        );
+
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.businessId == resource.data.businessId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'bookingStatus', 'paymentStatus', 'updatedAt', 'internalPaymentId', 'razorpayPaymentId'
+        ])
+        && request.resource.data.paymentStatus in ['PENDING', 'PAID', 'FAILED', 'CANCELLED', 'NOT_REQUIRED']
+        && request.resource.data.bookingStatus in [
+          'PENDING', 'PENDING_PAYMENT', 'PAYMENT_PROCESSING', 'CONFIRMED',
+          'PAYMENT_FAILED', 'CANCELLED', 'PAY_AT_LOCATION'
+        ];
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.bookingStatus in ['PENDING', 'PENDING_PAYMENT', 'PAY_AT_LOCATION']
+        && request.resource.data.paymentStatus in ['UNPAID', 'PENDING', 'NOT_REQUIRED']
+        && (
+          request.resource.data.moduleType != 'BUSINESS'
+          || (
+            exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
+            && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.approved == true
+            && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.status in ['approved', 'active']
+          )
+        )
+        && (!('razorpayPaymentId' in request.resource.data) || request.resource.data.razorpayPaymentId == '')
+        && (!('internalPaymentId' in request.resource.data) || request.resource.data.internalPaymentId == '');
+
+      // Payment mutation and deletion stay authoritative.
+      allow delete: if isAdmin();
+    }
+
+    match /tickets/{id} {
+
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid)
+        || (isBusiness() && resource.data.businessOwnerId == request.auth.uid);
+
+      // Tickets are issued by trusted backend/admin mechanisms only.
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ================= APP DATA =================
+
+    match /appItems/{id} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ================= BUSINESS OPERATIONAL DATA =================
+
+    match /businessItems/{itemId} {
+      allow read: if isAdmin()
+        || (isBusiness() && resource.data.ownerId == request.auth.uid)
+        || (resource.data.active == true
+          && exists(/databases/$(database)/documents/businesses/$(resource.data.businessId))
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.approved == true
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.status in ['approved', 'active']);
+
+      allow create: if isBusiness()
+        && request.resource.data.ownerId == request.auth.uid
+        && ownsActiveBusiness(request.resource.data.businessId)
+        && request.resource.data.active is bool
+        && request.resource.data.price is string
+        && request.resource.data.ownerId == get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerId;
+
+      allow update: if isAdmin() || (
+        isBusiness()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.businessId == resource.data.businessId
+        && ownsActiveBusiness(resource.data.businessId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'itemType', 'name', 'description', 'price', 'capacity', 'totalUnits',
+          'availableUnits', 'stock', 'facilities', 'availability', 'active', 'updatedAt'
+        ])
+      );
+
+      // Historical items are soft-deactivated by their owner; only admins delete.
+      allow delete: if isAdmin();
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if isAdmin()
+        || (isBusiness() && exists(/databases/$(database)/documents/businesses/$(resource.data.businessId))
+          && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.ownerId == request.auth.uid)
+        || resource.data.moderationStatus == 'approved';
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1 && request.resource.data.rating <= 5;
+
+      allow update: if isAdmin() || (
+        isSignedIn() && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.businessId == resource.data.businessId
+      );
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /businessNotifications/{notificationId} {
+      allow read: if isAdmin()
+        || (isBusiness() && resource.data.ownerId == request.auth.uid);
+      allow update: if isBusiness()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == resource.data.ownerId
+        && request.resource.data.businessId == resource.data.businessId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'updatedAt']);
+      allow create, delete: if isAdmin();
+    }
+
+    match /lostFoundReports/{caseId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.reporterUid == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && request.resource.data.reporterUid == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (isSignedIn()
+          && resource.data.reporterUid == request.auth.uid
+          && request.resource.data.reporterUid == resource.data.reporterUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'updatedAt', 'reporterNote'
+          ]));
+
+      allow delete: if isAdmin();
+    }
+
+    match /transportRoutes/{routeId} {
+      allow read: if isAdmin()
+        || (isTransportOperator() && resource.data.operatorId == request.auth.uid)
+        || (resource.data.published == true && resource.data.active == true);
+
+      allow create: if isAdmin()
+        || (isTransportOperator()
+          && request.resource.data.operatorId == request.auth.uid
+          && request.resource.data.published == false);
+
+      allow update: if isAdmin()
+        || (isTransportOperator()
+          && resource.data.operatorId == request.auth.uid
+          && request.resource.data.operatorId == resource.data.operatorId
+          && request.resource.data.published == resource.data.published
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'routeName', 'from', 'to', 'via', 'stops', 'mode', 'startTime',
+            'endTime', 'fare', 'duration', 'mapUrl', 'liveSourceUrl',
+            'active', 'status', 'updatedAt'
+          ]));
+
+      allow delete: if isAdmin();
+    }
+
+    // ================= PUBLIC MODULES =================
+
+    // Ghat status is pilgrim operational data.  Keep it available to authenticated
+    // user accounts only when the admin has explicitly published the document.
+    // The client queries on published == true so Firestore can prove this rule.
+    match /ghats/{ghatId} {
+      allow read: if isAdmin()
+        || (isSignedIn()
+          && role() == "user"
+          && resource.data.published == true
+          && resource.data.active == true);
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /{collection}/{id} {
+
+      allow read: if collection in [
+        "kumbhPackages",
+        "pujaServices",
+        "stays",
+        "announcements",
+        "liveUpdates",
+        "emergencyContacts",
+        "events",
+        "lostFound"
+      ] && approvedPublic();
+
+      allow write: if isAdmin();
+    }
+  }
+}
