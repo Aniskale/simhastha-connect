@@ -1,5 +1,8 @@
 package com.simhastha.view;
 
+import com.simhastha.model.Ghat;
+import com.simhastha.model.GhatOperationalState;
+import com.simhastha.service.GhatRepository;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -13,14 +16,16 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.logging.Logger;
 
-public final class FirestoreGateway {
+public final class FirestoreGateway implements GhatRepository {
 
     private static final String ROOT = "https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents";
     private static final Pattern DOCUMENT_PATTERN = Pattern.compile("\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\".*?\"fields\"\\s*:\\s*\\{(.*?)\\}\\s*(?:,\\s*\"createTime\"|,\\s*\"updateTime\"|\\})", Pattern.DOTALL);
     private static final Pattern STRING_FIELD_PATTERN = Pattern.compile("\"%s\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"(.*?)\"\\s*\\}", Pattern.DOTALL);
 
     private final FirebaseConfig config;
+    private static final Logger LOGGER = Logger.getLogger(FirestoreGateway.class.getName());
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
@@ -51,6 +56,129 @@ public final class FirestoreGateway {
         }
         return items;
     }
+
+    /** Reads the ghat collection as structured data; controllers never parse Firestore fields directly. */
+    public List<Ghat> loadGhats(String idToken) throws IOException, InterruptedException {
+        if (!isEnabled()) {
+            return List.of();
+        }
+        List<Ghat> ghats = new ArrayList<>();
+        for (Document document : loadPublishedGhatDocuments(idToken)) {
+            Ghat ghat = parseGhat(document);
+            if (ghat != null && ghat.published() && ghat.active()) ghats.add(ghat);
+        }
+        return ghats;
+    }
+
+    /** Admin-only listing includes drafts and inactive records from the same ghats collection. */
+    public List<Ghat> loadAdminGhats(String idToken) throws IOException, InterruptedException {
+        if (!isEnabled()) return List.of();
+        List<Ghat> ghats = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("ghats", idToken)) {
+            Ghat ghat = parseGhat(document);
+            if (ghat != null) ghats.add(ghat);
+        }
+        return ghats;
+    }
+
+    @Override
+    public Ghat loadGhat(String ghatId, String idToken) throws IOException, InterruptedException {
+        HttpRequest request = authorizedBuilder(documentUri("ghats", ghatId), idToken)
+                .timeout(Duration.ofSeconds(8)).GET().build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) {
+            throw firestoreFailure("GET", documentUri("ghats", ghatId), response);
+        }
+        return parseDocuments(response.body()).stream().map(this::parseGhat).filter(java.util.Objects::nonNull)
+                .findFirst().orElseThrow(() -> new IOException("Ghat document could not be parsed: " + ghatId));
+    }
+
+    private Ghat parseGhat(Document document) {
+            try {
+                String fields = document.fields;
+                String name = firstNonBlank(field(fields, "ghatName"), field(fields, "name"), field(fields, "title"));
+                if (!notBlank(name)) return null;
+                Ghat ghat = new Ghat(document.id, name, firstNonBlank(field(fields, "area"), field(fields, "location")),
+                    field(fields, "description"), decimalField(fields, "latitude"), decimalField(fields, "longitude"),
+                    decimalField(fields, "entryLatitude"), decimalField(fields, "entryLongitude"), field(fields, "imageUrl"),
+                    enumValue(Ghat.OperationalStatus.class, field(fields, "operationalStatus"), Ghat.OperationalStatus.INFORMATION_ONLY),
+                    enumValue(Ghat.CrowdLevel.class, field(fields, "crowdLevel"), Ghat.CrowdLevel.UNKNOWN),
+                    integerField(fields, "estimatedWaitMinutes"), "true".equalsIgnoreCase(boolField(fields, "bathingAvailable")),
+                    new Ghat.Walking(enumValue(Ghat.WalkingDifficulty.class, field(fields, "walkingDifficulty"), Ghat.WalkingDifficulty.MODERATE),
+                            integerField(fields, "approximateSteps"), integerField(fields, "walkingDistanceMeters"),
+                            "true".equalsIgnoreCase(boolField(fields, "seniorFriendly")),
+                            "true".equalsIgnoreCase(boolField(fields, "wheelchairAccessible"))),
+                    stringListField(fields, "facilities"),
+                    new Ghat.Weather(integerField(fields, "weatherTemperatureCelsius"), field(fields, "weatherCondition")),
+                    new Ghat.History(field(fields, "historicalBackground"), field(fields, "religiousSignificance"),
+                            field(fields, "simhasthaConnection"), field(fields, "associatedSacredPlaces"),
+                            field(fields, "rituals"), field(fields, "didYouKnow"), field(fields, "historyImageUrl")),
+                    firstNonBlank(field(fields, "lastUpdated"), field(fields, "updatedAt"), timestampField(fields, "updatedAt")),
+                    operationalState(fields), !"false".equalsIgnoreCase(boolField(fields, "published")),
+                    !"false".equalsIgnoreCase(boolField(fields, "active")));
+                return ghat;
+            } catch (RuntimeException exception) {
+                LOGGER.warning("Skipping malformed ghat document " + document.id + ": " + exception.getMessage());
+                return null;
+            }
+    }
+
+    /** Persists the shared Ghat model directly; no Admin-only document shape is used. */
+    public void saveGhat(Ghat ghat, String idToken) throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("ghatName", ghat.name()), fieldJson("area", ghat.area()), fieldJson("description", ghat.description()),
+                fieldJson("imageUrl", ghat.imageUrl()), numberOrNullFieldJson("latitude", ghat.latitude()), numberOrNullFieldJson("longitude", ghat.longitude()),
+                numberOrNullFieldJson("entryLatitude", ghat.entryLatitude()), numberOrNullFieldJson("entryLongitude", ghat.entryLongitude()),
+                fieldJson("operationalStatus", ghat.operationalStatus().name()), fieldJson("crowdLevel", ghat.crowdLevel().name()),
+                numberOrNullFieldJson("estimatedWaitMinutes", ghat.estimatedWaitMinutes()), boolFieldJson("bathingAvailable", ghat.bathingAvailable()),
+                fieldJson("walkingDifficulty", ghat.walking().difficulty().name()), numberOrNullFieldJson("approximateSteps", ghat.walking().approximateSteps()),
+                numberOrNullFieldJson("walkingDistanceMeters", ghat.walking().distanceMeters()), boolFieldJson("seniorFriendly", ghat.walking().seniorFriendly()),
+                boolFieldJson("wheelchairAccessible", ghat.walking().wheelchairAccessible()), stringArrayFieldJson("facilities", ghat.facilities()),
+                fieldJson("historicalBackground", ghat.history().historicalBackground()), fieldJson("religiousSignificance", ghat.history().religiousSignificance()),
+                fieldJson("simhasthaConnection", ghat.history().simhasthaConnection()), fieldJson("associatedSacredPlaces", ghat.history().associatedSacredPlaces()),
+                fieldJson("rituals", ghat.history().rituals()), fieldJson("didYouKnow", ghat.history().didYouKnow()), fieldJson("historyImageUrl", ghat.history().imageUrl()),
+                fieldJson("bathingStatus", ghat.operationalState().bathingStatus().name()),
+                fieldJson("waterSafety", ghat.operationalState().waterSafety().name()), fieldJson("restrictionReason", ghat.operationalState().restrictionReason()),
+                fieldJson("alertPriority", ghat.operationalState().priorityAlert().priority().name()), fieldJson("alertMessage", ghat.operationalState().priorityAlert().message()),
+                stringArrayFieldJson("gates", ghat.operationalState().gates().stream().map(gate -> gate.name() + "|" + gate.status() + "|" + gate.note()).toList()),
+                stringArrayFieldJson("zones", ghat.operationalState().zones().stream().map(zone -> zone.name() + "|" + zone.status() + "|" + zone.crowdLevel() + "|" + (zone.bathingAvailable() ? "AVAILABLE" : "UNAVAILABLE") + "|" + zone.hazard()).toList()),
+                stringArrayFieldJson("hazards", ghat.operationalState().hazards().stream().map(hazard -> hazard.type() + "|" + hazard.message() + "|" + hazard.priority()).toList()),
+                stringArrayFieldJson("facilityStatuses", ghat.operationalState().facilities().stream().map(facility -> facility.name() + "|" + facility.status()).toList()),
+                stringArrayFieldJson("accessWindows", ghat.operationalState().accessWindows().stream().map(window -> window.start() + "|" + window.end() + "|" + window.accessStatus() + "|" + window.note()).toList()),
+                fieldJson("cleaningStatus", ghat.operationalState().cleaningStatus().name()), fieldJson("operationalUpdatedAt", ghat.operationalState().lastUpdated()),
+                boolFieldJson("published", ghat.published()), boolFieldJson("active", ghat.active()), fieldJson("updatedAt", now));
+        sendAuthorizedPatch(documentUri("ghats", ghat.id()), json, idToken);
+    }
+
+    /** Image-only update avoids overwriting operational data during Admin Change Image. */
+    @Override
+    public void updateGhatImage(String ghatId, String imageUrl, String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(fieldJson("imageUrl", imageUrl), fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        URI document = documentUri("ghats", ghatId);
+        System.out.println("FIREBASE PROJECT ID = " + config.projectId());
+        System.out.println("FIREBASE DOCUMENT PATH = " + document.getPath());
+        System.out.println("UPDATE PAYLOAD = " + json);
+        sendAuthorizedPatch(document, json, idToken);
+    }
+
+    private GhatOperationalState operationalState(String fields) {
+        GhatOperationalState.BathingStatus bathing = enumValue(GhatOperationalState.BathingStatus.class,
+                field(fields, "bathingStatus"), "true".equalsIgnoreCase(boolField(fields, "bathingAvailable")) ? GhatOperationalState.BathingStatus.AVAILABLE : GhatOperationalState.BathingStatus.UNAVAILABLE);
+        GhatOperationalState.WaterSafety water = enumValue(GhatOperationalState.WaterSafety.class, field(fields, "waterSafety"), GhatOperationalState.WaterSafety.CAUTION);
+        return new GhatOperationalState(bathing, water, hazards(stringListField(fields, "hazards")), zones(stringListField(fields, "zones")),
+                gates(stringListField(fields, "gates")), facilities(stringListField(fields, "facilityStatuses")), accessWindows(stringListField(fields, "accessWindows")),
+                enumValue(GhatOperationalState.CleaningStatus.class, field(fields, "cleaningStatus"), GhatOperationalState.CleaningStatus.NORMAL),
+                field(fields, "restrictionReason"), new GhatOperationalState.PriorityAlert(enumValue(GhatOperationalState.AlertPriority.class,
+                        field(fields, "alertPriority"), GhatOperationalState.AlertPriority.INFO), field(fields, "alertMessage")),
+                firstNonBlank(field(fields, "operationalUpdatedAt"), timestampField(fields, "operationalUpdatedAt")));
+    }
+
+    private List<GhatOperationalState.Hazard> hazards(List<String> values) { return values.stream().map(value -> { String[] parts = value.split("\\|", 3); return new GhatOperationalState.Hazard(enumValue(GhatOperationalState.HazardType.class, parts[0], GhatOperationalState.HazardType.OTHER), parts.length > 1 ? parts[1] : value, parts.length > 2 ? enumValue(GhatOperationalState.AlertPriority.class, parts[2], GhatOperationalState.AlertPriority.ADVISORY) : GhatOperationalState.AlertPriority.ADVISORY); }).toList(); }
+    private List<GhatOperationalState.Zone> zones(List<String> values) { return values.stream().map(value -> { String[] p = value.split("\\|", 5); return new GhatOperationalState.Zone(p[0], p[0], p.length > 1 ? enumValue(GhatOperationalState.ZoneStatus.class, p[1], GhatOperationalState.ZoneStatus.OPEN) : GhatOperationalState.ZoneStatus.OPEN, p.length > 2 ? enumValue(Ghat.CrowdLevel.class, p[2], Ghat.CrowdLevel.MODERATE) : Ghat.CrowdLevel.MODERATE, p.length <= 3 || "AVAILABLE".equalsIgnoreCase(p[3]), p.length > 4 ? p[4] : "", ""); }).toList(); }
+    private List<GhatOperationalState.Gate> gates(List<String> values) { return values.stream().map(value -> { String[] p = value.split("\\|", 3); return new GhatOperationalState.Gate(p[0], p[0], p.length > 1 ? enumValue(GhatOperationalState.GateStatus.class, p[1], GhatOperationalState.GateStatus.OPEN) : GhatOperationalState.GateStatus.OPEN, p.length > 2 ? p[2] : ""); }).toList(); }
+    private List<GhatOperationalState.Facility> facilities(List<String> values) { return values.stream().map(value -> { String[] p = value.split("\\|", 2); return new GhatOperationalState.Facility(p[0], p.length > 1 ? enumValue(GhatOperationalState.FacilityStatus.class, p[1], GhatOperationalState.FacilityStatus.UNAVAILABLE) : GhatOperationalState.FacilityStatus.AVAILABLE); }).toList(); }
+    private List<GhatOperationalState.AccessWindow> accessWindows(List<String> values) { return values.stream().map(value -> { try { String[] p = value.split("\\|", 4); return new GhatOperationalState.AccessWindow(java.time.LocalTime.parse(p[0]), java.time.LocalTime.parse(p[1]), enumValue(GhatOperationalState.ZoneStatus.class, p[2], GhatOperationalState.ZoneStatus.OPEN), p.length > 3 ? p[3] : ""); } catch (Exception exception) { LOGGER.warning("Ignoring malformed ghat access window: " + value); return null; } }).filter(java.util.Objects::nonNull).toList(); }
 
     public List<AppDataStore.ApprovalRequest> loadApprovals() throws IOException, InterruptedException {
         return loadApprovals("");
@@ -894,9 +1022,17 @@ public final class FirestoreGateway {
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(json))
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        System.out.println("HTTP STATUS = " + response.statusCode());
         if (response.statusCode() >= 400) {
-            throw new IOException("Firestore write failed: " + response.statusCode());
+            throw firestoreFailure("PATCH", uri, response);
         }
+    }
+
+    private IOException firestoreFailure(String method, URI uri, HttpResponse<String> response) {
+        String body = response.body() == null ? "" : response.body();
+        System.out.println("FIREBASE DOCUMENT PATH = " + uri.getPath());
+        System.out.println("FIREBASE RESPONSE BODY = " + body);
+        return new IOException("Firestore " + method + " failed: HTTP " + response.statusCode() + " body=" + body);
     }
 
     private HttpRequest.Builder authorizedBuilder(URI uri, String idToken) {
@@ -955,6 +1091,17 @@ public final class FirestoreGateway {
         return "\"" + escape(name) + "\":{\"integerValue\":\"" + value + "\"}";
     }
 
+    private String numberOrNullFieldJson(String name, Number value) {
+        return value == null ? "\"" + escape(name) + "\":{\"nullValue\":null}"
+                : "\"" + escape(name) + "\":{\"doubleValue\":" + value + "}";
+    }
+
+    private String stringArrayFieldJson(String name, List<String> values) {
+        String entries = (values == null ? List.<String>of() : values).stream()
+                .map(value -> "{\"stringValue\":\"" + escape(value) + "\"}").collect(java.util.stream.Collectors.joining(","));
+        return "\"" + escape(name) + "\":{\"arrayValue\":{\"values\":[" + entries + "]}}";
+    }
+
     private List<Document> parseDocuments(String json) {
         List<Document> documents = new ArrayList<>();
         Matcher matcher = DOCUMENT_PATTERN.matcher(json == null ? "" : json);
@@ -1004,6 +1151,60 @@ public final class FirestoreGateway {
         } catch (Exception exception) {
             return fallback;
         }
+    }
+
+    /** Query constraint is required because Firestore rules must be able to prove every returned ghat is public. */
+    private List<Document> loadPublishedGhatDocuments(String idToken) throws IOException, InterruptedException {
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"ghats\"}],\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"published\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}},"
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"active\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}}]}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())),
+                query, idToken);
+        return parseDocuments(json);
+    }
+
+    private Integer integerField(String fieldsJson, String name) {
+        String value = numberField(fieldsJson, name);
+        if (!notBlank(value)) return null;
+        try { return Integer.valueOf(value.trim()); } catch (NumberFormatException exception) { return null; }
+    }
+
+    private Double decimalField(String fieldsJson, String name) {
+        String value = numberField(fieldsJson, name);
+        if (!notBlank(value)) return null;
+        try { return Double.valueOf(value.trim()); } catch (NumberFormatException exception) { return null; }
+    }
+
+    private String timestampField(String fieldsJson, String name) {
+        Matcher matcher = Pattern.compile("\"" + Pattern.quote(name)
+                + "\"\\s*:\\s*\\{\\s*\"timestampValue\"\\s*:\\s*\"(.*?)\"\\s*\\}", Pattern.DOTALL)
+                .matcher(fieldsJson == null ? "" : fieldsJson);
+        return matcher.find() ? unescape(matcher.group(1)) : "";
+    }
+
+    private List<String> stringListField(String fieldsJson, String name) {
+        String plainValue = field(fieldsJson, name);
+        if (notBlank(plainValue)) return splitValues(plainValue);
+        Matcher fieldMatcher = Pattern.compile("\"" + Pattern.quote(name)
+                + "\"\\s*:\\s*\\{\\s*\"arrayValue\"\\s*:\\s*\\{\\s*\"values\"\\s*:\\s*\\[(.*?)\\]", Pattern.DOTALL)
+                .matcher(fieldsJson == null ? "" : fieldsJson);
+        if (!fieldMatcher.find()) return List.of();
+        Matcher values = Pattern.compile("\"stringValue\"\\s*:\\s*\"(.*?)\"", Pattern.DOTALL).matcher(fieldMatcher.group(1));
+        List<String> result = new ArrayList<>();
+        while (values.find()) { String value = unescape(values.group(1)).trim(); if (!value.isBlank()) result.add(value); }
+        return result;
+    }
+
+    private List<String> splitValues(String value) {
+        if (!notBlank(value)) return List.of();
+        return java.util.Arrays.stream(value.split("[,|]"))
+                .map(String::trim).filter(this::notBlank).toList();
+    }
+
+    private <T extends Enum<T>> T enumValue(Class<T> type, String value, T fallback) {
+        if (!notBlank(value)) return fallback;
+        try { return Enum.valueOf(type, value.trim().toUpperCase(Locale.ROOT).replace(' ', '_').replace('-', '_')); }
+        catch (IllegalArgumentException exception) { return fallback; }
     }
 
     private List<Document> loadOptionalCollectionDocuments(String collection, String idToken) {

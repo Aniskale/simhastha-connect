@@ -1,5 +1,11 @@
 package com.simhastha.view;
 
+import com.simhastha.model.Ghat;
+import com.simhastha.model.GhatOperationalState;
+import com.simhastha.service.GhatCatalogueService;
+import com.simhastha.service.GhatImageService;
+import com.simhastha.service.GhatImageStorageService;
+import com.simhastha.service.GhatService;
 import java.net.URL;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -19,7 +25,9 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ContextMenu;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
@@ -35,6 +43,7 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+import javafx.stage.FileChooser;
 
 public class AdminDashboardPage {
 
@@ -52,6 +61,12 @@ public class AdminDashboardPage {
     private String editingRouteId = "";
     private String editingOperationalId = "";
     private String editingOperationalModule = "";
+    private final GhatService ghatService = new GhatService(new FirestoreGateway(FirebaseConfig.load()));
+    private final GhatCatalogueService ghatCatalogueService = new GhatCatalogueService();
+    private final GhatImageService ghatImageService = new GhatImageService();
+    private final GhatImageStorageService ghatImageStorageService = new GhatImageStorageService();
+    private List<Ghat> managedGhats = List.of();
+    private VBox managedGhatRows;
 
     public Scene createScene(Stage stage) {
         this.stage = stage;
@@ -974,13 +989,215 @@ public class AdminDashboardPage {
     }
 
     private VBox ghatsPage() {
-        VBox form = structuredForm("Ghat Name", "Location", "Map URL", "Snan Date", "Snan Time",
-                "Crowd Level", "Safety Status", "Entry Status", "Exit Status", "Medical Support",
-                "Police / Security", "Facilities", "Instructions");
-        return pageShell("Ghats & Snan", "Manage bathing ghat status and public guidance.",
-                infoPanel("Ghat Operations", form, actionRow("ghat", form, "Update Crowd", "Open/Close", "Add Guidance", "Publish Alert")),
-                listPanel("Published Ghat Guidance", "ghat", "No ghat guidance published yet.", form));
+        VBox rows = new VBox(10);
+        managedGhatRows = rows;
+        List<Ghat> initial = managedGhats.isEmpty() ? ghatCatalogueService.catalogue() : managedGhats;
+        renderManagedGhats(rows, initial);
+        Button add = new Button("Add New Ghat"); add.getStyleClass().add("primary-button"); add.setOnAction(event -> showGhatEditor(null));
+        Button refresh = smallButton("Refresh"); refresh.setOnAction(event -> refreshManagedGhats(rows));
+        HBox actions = new HBox(8, add, refresh); actions.setAlignment(Pos.CENTER_LEFT);
+        refreshManagedGhats(rows);
+        return pageShell("Ghats & Snan", "Manage the same Ghat records and live operational state used by pilgrims.",
+                infoPanel("Shared Ghat Management", new VBox(8,
+                        muted("Catalogue information is available immediately. Published backend records override the matching catalogue Ghat on the User page."), actions, rows)));
     }
+
+    private void refreshManagedGhats(VBox rows) {
+        String token = AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken();
+        ghatService.loadAdminGhats(token).whenComplete((ghats, error) -> Platform.runLater(() -> {
+            managedGhats = ghats == null || ghats.isEmpty() ? ghatCatalogueService.catalogue() : ghats;
+            renderManagedGhats(rows, managedGhats);
+            if (error != null) showInfo("Ghat data unavailable", "Showing catalogue information. Backend changes could not be loaded.");
+        }));
+    }
+
+    private void renderManagedGhats(VBox rows, List<Ghat> ghats) {
+        rows.getChildren().clear();
+        for (Ghat ghat : ghats) rows.getChildren().add(managedGhatRow(ghat));
+    }
+
+    private HBox managedGhatRow(Ghat ghat) {
+        ImageView image = ghatImageService.createView(ghat, 74, 52);
+        Button edit = smallButton("Edit"); edit.setOnAction(event -> showGhatEditor(ghat));
+        Button live = smallButton("Update Live Status"); live.setOnAction(event -> showGhatEditor(ghat, true));
+        Button imageAction = smallButton("Change Image"); imageAction.setOnAction(event -> chooseGhatImage(ghat));
+        Button publish = smallButton(ghat.published() ? "Unpublish" : "Publish"); publish.setOnAction(event -> saveGhat(withFlags(ghat, !ghat.published(), ghat.active())));
+        Button active = smallButton(ghat.active() ? "Deactivate" : "Activate"); active.setOnAction(event -> saveGhat(withFlags(ghat, ghat.published(), !ghat.active())));
+        VBox summary = new VBox(2, strong(ghat.name()), muted(ghat.area() + " | " + ghat.crowdLevel() + " | " + ghat.operationalStatus()
+                + " | Bathing " + ghat.operationalState().bathingStatus() + " | Water " + ghat.operationalState().waterSafety()
+                + " | Wait " + ghat.waitLabel() + " | " + (ghat.published() ? "Published" : "Draft") + " | " + (ghat.active() ? "Active" : "Inactive")));
+        HBox row = new HBox(9, image, summary, createSpacer(), edit, live, imageAction, publish, active);
+        HBox.setHgrow(summary, Priority.ALWAYS); row.getStyleClass().add("pilgrim-data-row"); row.setAlignment(Pos.CENTER_LEFT); return row;
+    }
+
+    private void chooseGhatImage(Ghat ghat) {
+        System.out.println("CHANGE IMAGE clicked for ghatId = " + ghat.id());
+        System.out.println("GHAT ID = " + ghat.id());
+        System.out.println("OLD IMAGE = " + ghat.imageUrl());
+        FileChooser chooser = new FileChooser(); chooser.setTitle("Choose Ghat image");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Images", "*.png", "*.jpg", "*.jpeg", "*.webp"));
+        java.io.File file = chooser.showOpenDialog(stage);
+        if (file == null) return;
+        try {
+            System.out.println("FILE CHOSEN = " + file.getAbsolutePath());
+            System.out.println("FILE EXISTS = " + file.isFile() + ", readable = " + file.canRead());
+            System.out.println("FILE SIZE = " + file.length());
+            String managedImageUrl = ghatImageStorageService.store(file.toPath(), ghat.id());
+            System.out.println("NEW IMAGE REFERENCE = " + managedImageUrl);
+            System.out.println("NEW IMAGE = " + managedImageUrl);
+            Ghat previewGhat = copyGhat(ghat, ghat.name(), ghat.area(), ghat.description(), managedImageUrl, ghat.crowdLevel(), ghat.estimatedWaitMinutes(),
+                    ghat.operationalStatus(), ghat.operationalState().bathingStatus(), ghat.operationalState().waterSafety(), ghat.published(), ghat.active());
+            Alert preview = new Alert(Alert.AlertType.CONFIRMATION, "Preview updated. Save this image to the shared Ghat record?", ButtonType.OK, ButtonType.CANCEL);
+            preview.setTitle("Save Ghat image");
+            preview.setHeaderText(ghat.name());
+            preview.setGraphic(ghatImageService.createView(previewGhat, 210, 130));
+            if (preview.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
+            ghatImageService.invalidate(ghat.imageUrl());
+            ghatImageService.invalidate(managedImageUrl);
+            updateGhatImage(previewGhat);
+        } catch (java.io.IOException exception) {
+            showInfo("Image update failed", "The selected image could not be copied into durable Ghat media. No Ghat record was changed.");
+        }
+    }
+
+    private void showGhatEditor(Ghat source) { showGhatEditor(source, false); }
+
+    private void showGhatEditor(Ghat source, boolean liveOnly) {
+        Ghat ghat = source == null ? newGhatDraft() : source;
+        Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle(liveOnly ? "Update Live Ghat Status" : source == null ? "Add New Ghat" : "Edit Ghat");
+        VBox form = new VBox(8); form.setPadding(new Insets(10));
+        TextField name = editorField(ghat.name(), "Ghat Name"); TextField area = editorField(ghat.area(), "Area / Region");
+        TextField description = editorField(ghat.description(), "Description"); TextField imageUrl = editorField(ghat.imageUrl(), "Image URL / shared media reference");
+        TextField latitude = editorField(numberText(ghat.latitude()), "Latitude"); TextField longitude = editorField(numberText(ghat.longitude()), "Longitude");
+        TextField history = editorField(ghat.history().historicalBackground(), "History"); TextField significance = editorField(ghat.history().religiousSignificance(), "Religious Significance");
+        TextField simhastha = editorField(ghat.history().simhasthaConnection(), "Simhastha Connection"); TextField facilities = editorField(String.join(", ", ghat.facilities()), "Facilities (comma separated)");
+        TextField steps = editorField(numberText(ghat.walking().approximateSteps()), "Steps"); TextField distance = editorField(numberText(ghat.walking().distanceMeters()), "Walking Distance (m)");
+        TextField wait = editorField(numberText(ghat.estimatedWaitMinutes()), "Estimated Wait (minutes)"); TextField restriction = editorField(ghat.operationalState().restrictionReason(), "Restriction reason");
+        TextField gates = editorField(gateText(ghat), "Gates: Name|STATUS, ..."); TextField zones = editorField(zoneText(ghat), "Zones: Name|STATUS, ...");
+        TextField hazards = editorField(hazardText(ghat), "Hazards: TYPE|message, ..."); TextField alert = editorField(ghat.operationalState().priorityAlert().message(), "Priority alert");
+        ComboBox<Ghat.WalkingDifficulty> walking = enumBox(Ghat.WalkingDifficulty.values(), ghat.walking().difficulty());
+        ComboBox<Ghat.CrowdLevel> crowd = enumBox(Ghat.CrowdLevel.values(), ghat.crowdLevel());
+        ComboBox<Ghat.OperationalStatus> operational = enumBox(Ghat.OperationalStatus.values(), ghat.operationalStatus());
+        ComboBox<GhatOperationalState.BathingStatus> bathing = enumBox(GhatOperationalState.BathingStatus.values(), ghat.operationalState().bathingStatus());
+        ComboBox<GhatOperationalState.WaterSafety> water = enumBox(GhatOperationalState.WaterSafety.values(), ghat.operationalState().waterSafety());
+        ComboBox<GhatOperationalState.AlertPriority> priority = enumBox(GhatOperationalState.AlertPriority.values(), ghat.operationalState().priorityAlert().priority());
+        CheckBox senior = new CheckBox("Senior Friendly"); senior.setSelected(ghat.walking().seniorFriendly());
+        CheckBox wheelchair = new CheckBox("Wheelchair Accessible"); wheelchair.setSelected(ghat.walking().wheelchairAccessible());
+        CheckBox published = new CheckBox("Published"); published.setSelected(ghat.published());
+        CheckBox active = new CheckBox("Active"); active.setSelected(ghat.active());
+        if (liveOnly) form.getChildren().addAll(labeled("Crowd Level", crowd), wait, labeled("Operational Status", operational), labeled("Bathing Status", bathing),
+                labeled("Water Safety", water), restriction, gates, zones, hazards, labeled("Alert Priority", priority), alert, published, active);
+        else form.getChildren().addAll(name, area, description, imageUrl, latitude, longitude, history, significance, simhastha, labeled("Walking Difficulty", walking), steps, distance,
+                senior, wheelchair, facilities, labeled("Crowd Level", crowd), wait, labeled("Operational Status", operational), labeled("Bathing Status", bathing), labeled("Water Safety", water),
+                restriction, gates, zones, hazards, labeled("Alert Priority", priority), alert, published, active);
+        ScrollPane scroll = new ScrollPane(form); scroll.setFitToWidth(true); scroll.setPrefViewportHeight(520); dialog.getDialogPane().setContent(scroll);
+        ButtonType save = new ButtonType(source == null ? "Save Draft / Publish" : "Save", ButtonType.OK.getButtonData()); dialog.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+        if (dialog.showAndWait().orElse(ButtonType.CANCEL) != save) return;
+        if (!liveOnly && name.getText().trim().isBlank()) { showInfo("Ghat name required", "Enter a Ghat name before saving."); return; }
+        Ghat result = copyGhat(ghat, liveOnly ? ghat.name() : name.getText(), liveOnly ? ghat.area() : area.getText(), liveOnly ? ghat.description() : description.getText(),
+                liveOnly ? ghat.imageUrl() : imageUrl.getText(), crowd.getValue(), parseInteger(wait.getText()), operational.getValue(), bathing.getValue(), water.getValue(), published.isSelected(), active.isSelected(),
+                liveOnly ? ghat.latitude() : parseDouble(latitude.getText()), liveOnly ? ghat.longitude() : parseDouble(longitude.getText()),
+                liveOnly ? ghat.history() : new Ghat.History(history.getText(), significance.getText(), simhastha.getText(), ghat.history().associatedSacredPlaces(), ghat.history().rituals(), ghat.history().didYouKnow(), ghat.history().imageUrl()),
+                liveOnly ? ghat.walking() : new Ghat.Walking(walking.getValue(), parseInteger(steps.getText()), parseInteger(distance.getText()), senior.isSelected(), wheelchair.isSelected()),
+                liveOnly ? ghat.facilities() : split(facilities.getText()), parseOperationalState(bathing.getValue(), water.getValue(), restriction.getText(), priority.getValue(), alert.getText(), gates.getText(), zones.getText(), hazards.getText()));
+        saveGhat(result);
+    }
+
+    private void saveGhat(Ghat ghat) { saveGhat(ghat, false); }
+
+    private void saveGhat(Ghat ghat, boolean imageUpdate) {
+        String token = AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken();
+        if (imageUpdate) System.out.println("SAVE CALLED = ghatId=" + ghat.id() + ", imageUrl=" + ghat.imageUrl());
+        ghatService.saveGhat(ghat, token).whenComplete((ignored, error) -> Platform.runLater(() -> {
+            if (error != null) {
+                if (imageUpdate) System.out.println("SAVE RESULT = failed: " + error.getClass().getSimpleName());
+                showInfo(imageUpdate ? "Image update failed" : "Ghat save failed",
+                        imageUpdate ? "The shared backend did not accept this image update. No successful save was assumed."
+                                : "The shared backend did not accept this Ghat change. No successful save was assumed.");
+                return;
+            }
+            if (imageUpdate) System.out.println("SAVE RESULT = success");
+            if (imageUpdate) applySavedGhat(ghat);
+            else refreshManagedGhats(managedGhatRows);
+        }));
+    }
+
+    private void updateGhatImage(Ghat ghat) {
+        AppSession.User user = AppSession.currentUser();
+        String token = user == null ? "" : user.idToken();
+        System.out.println("AUTH UID = " + (user == null ? "" : user.uid()));
+        System.out.println("AUTH ROLE = " + (user == null ? "" : user.role()));
+        System.out.println("SAVE CALLED = image-only ghatId=" + ghat.id() + ", imageUrl=" + ghat.imageUrl());
+        ghatService.updateGhatImage(ghat, ghat.imageUrl(), token).whenComplete((result, error) -> Platform.runLater(() -> {
+            if (error != null) {
+                System.out.println("EXCEPTION = " + error);
+                showInfo("Image update failed", "The shared backend rejected this image update. Check the application log for the Firebase status and response.");
+                return;
+            }
+            System.out.println("SAVE RESULT = " + (result.locallySaved() ? "local fallback" : "backend success"));
+            applySavedGhat(result.ghat());
+            showInfo(result.locallySaved() ? "Saved locally" : "Image updated successfully",
+                    result.locallySaved() ? "Cloud sync is currently unavailable. This Ghat image was saved locally and will remain available on this device."
+                            : "The shared Ghat record was updated and verified from the backend.");
+        }));
+    }
+
+    /** Keeps the Admin row in sync with the exact model that the backend accepted. */
+    private void applySavedGhat(Ghat saved) {
+        if (managedGhatRows == null) return;
+        managedGhats = java.util.stream.Stream.concat(
+                        managedGhats.stream().filter(existing -> !existing.id().equals(saved.id())), java.util.stream.Stream.of(saved))
+                .toList();
+        renderManagedGhats(managedGhatRows, managedGhats);
+    }
+
+    private Ghat newGhatDraft() {
+        return new Ghat("ghat-" + java.util.UUID.randomUUID(), "", "", "", null, null, null, null, "",
+                Ghat.OperationalStatus.INFORMATION_ONLY, Ghat.CrowdLevel.UNKNOWN, null, false, Ghat.Walking.unknown(), List.of(),
+                Ghat.Weather.unavailable(), Ghat.History.unavailable(), "", GhatOperationalState.unavailable(), false, true);
+    }
+
+    private Ghat withFlags(Ghat ghat, boolean published, boolean active) {
+        return copyGhat(ghat, ghat.name(), ghat.area(), ghat.description(), ghat.imageUrl(), ghat.crowdLevel(), ghat.estimatedWaitMinutes(),
+                ghat.operationalStatus(), ghat.operationalState().bathingStatus(), ghat.operationalState().waterSafety(), published, active);
+    }
+
+    private Ghat copyGhat(Ghat base, String name, String area, String description, String imageUrl, Ghat.CrowdLevel crowd, Integer wait,
+            Ghat.OperationalStatus operational, GhatOperationalState.BathingStatus bathing, GhatOperationalState.WaterSafety water, boolean published, boolean active) {
+        return copyGhat(base, name, area, description, imageUrl, crowd, wait, operational, bathing, water, published, active,
+                base.latitude(), base.longitude(), base.history(), base.walking(), base.facilities(),
+                new GhatOperationalState(bathing, water, base.operationalState().hazards(), base.operationalState().zones(), base.operationalState().gates(),
+                        base.operationalState().facilities(), base.operationalState().accessWindows(), base.operationalState().cleaningStatus(), base.operationalState().restrictionReason(),
+                        base.operationalState().priorityAlert(), base.operationalState().lastUpdated()));
+    }
+
+    private Ghat copyGhat(Ghat base, String name, String area, String description, String imageUrl, Ghat.CrowdLevel crowd, Integer wait,
+            Ghat.OperationalStatus operational, GhatOperationalState.BathingStatus bathing, GhatOperationalState.WaterSafety water, boolean published, boolean active,
+            Double latitude, Double longitude, Ghat.History history, Ghat.Walking walking, List<String> facilities, GhatOperationalState state) {
+        return new Ghat(base.id(), name, area, description, latitude, longitude, base.entryLatitude(), base.entryLongitude(), imageUrl, operational, crowd, wait,
+                bathing == GhatOperationalState.BathingStatus.AVAILABLE, walking, facilities, base.weather(), history, String.valueOf(System.currentTimeMillis()), state, published, active);
+    }
+
+    private TextField editorField(String value, String prompt) { TextField field = new TextField(value == null ? "" : value); field.setPromptText(prompt); return field; }
+    private <T> ComboBox<T> enumBox(T[] values, T selected) { ComboBox<T> box = new ComboBox<>(); box.getItems().addAll(values); box.setValue(selected); return box; }
+    private Node labeled(String text, Node control) { return new VBox(3, muted(text), control); }
+    private String numberText(Number number) { return number == null ? "" : String.valueOf(number); }
+    private Integer parseInteger(String value) { try { return value == null || value.isBlank() ? null : Integer.valueOf(value.trim()); } catch (NumberFormatException ignored) { return null; } }
+    private Double parseDouble(String value) { try { return value == null || value.isBlank() ? null : Double.valueOf(value.trim()); } catch (NumberFormatException ignored) { return null; } }
+    private List<String> split(String value) { return java.util.Arrays.stream((value == null ? "" : value).split(",")).map(String::trim).filter(text -> !text.isBlank()).toList(); }
+    private String gateText(Ghat ghat) { return ghat.operationalState().gates().stream().map(gate -> gate.name() + "|" + gate.status()).collect(java.util.stream.Collectors.joining(", ")); }
+    private String zoneText(Ghat ghat) { return ghat.operationalState().zones().stream().map(zone -> zone.name() + "|" + zone.status()).collect(java.util.stream.Collectors.joining(", ")); }
+    private String hazardText(Ghat ghat) { return ghat.operationalState().hazards().stream().map(hazard -> hazard.type() + "|" + hazard.message()).collect(java.util.stream.Collectors.joining(", ")); }
+    private GhatOperationalState parseOperationalState(GhatOperationalState.BathingStatus bathing, GhatOperationalState.WaterSafety water, String restriction,
+            GhatOperationalState.AlertPriority priority, String alert, String gates, String zones, String hazards) {
+        return new GhatOperationalState(bathing, water, parseHazards(hazards), parseZones(zones), parseGates(gates), List.of(), List.of(),
+                GhatOperationalState.CleaningStatus.NORMAL, restriction, new GhatOperationalState.PriorityAlert(priority, alert), String.valueOf(System.currentTimeMillis()));
+    }
+    private List<GhatOperationalState.Gate> parseGates(String text) { return split(text).stream().map(value -> { String[] p = value.split("\\|", 2); return new GhatOperationalState.Gate(p[0].trim(), p[0].trim(), p.length > 1 ? safeEnum(GhatOperationalState.GateStatus.class, p[1], GhatOperationalState.GateStatus.OPEN) : GhatOperationalState.GateStatus.OPEN, ""); }).toList(); }
+    private List<GhatOperationalState.Zone> parseZones(String text) { return split(text).stream().map(value -> { String[] p = value.split("\\|", 2); return new GhatOperationalState.Zone(p[0].trim(), p[0].trim(), p.length > 1 ? safeEnum(GhatOperationalState.ZoneStatus.class, p[1], GhatOperationalState.ZoneStatus.OPEN) : GhatOperationalState.ZoneStatus.OPEN, Ghat.CrowdLevel.UNKNOWN, bathingAvailable(p.length > 1 ? p[1] : ""), "", ""); }).toList(); }
+    private List<GhatOperationalState.Hazard> parseHazards(String text) { return split(text).stream().map(value -> { String[] p = value.split("\\|", 2); return new GhatOperationalState.Hazard(safeEnum(GhatOperationalState.HazardType.class, p[0], GhatOperationalState.HazardType.OTHER), p.length > 1 ? p[1].trim() : p[0].trim(), GhatOperationalState.AlertPriority.ADVISORY); }).toList(); }
+    private boolean bathingAvailable(String status) { return !"CLOSED".equalsIgnoreCase(status) && !"RESTRICTED".equalsIgnoreCase(status); }
+    private <T extends Enum<T>> T safeEnum(Class<T> type, String value, T fallback) { try { return Enum.valueOf(type, value.trim().toUpperCase().replace(' ', '_').replace('-', '_')); } catch (Exception ignored) { return fallback; } }
 
     private VBox stayPage() {
         HBox stats = new HBox(12, metric(String.valueOf(AppDataStore.items("stay").size()), "Total Properties"),

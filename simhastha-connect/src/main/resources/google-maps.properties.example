@@ -1,0 +1,2 @@
+# Keep actual keys outside source control. Prefer GOOGLE_MAPS_API_KEY in the environment.
+google.maps.apiKey=
