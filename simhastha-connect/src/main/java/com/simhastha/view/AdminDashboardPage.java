@@ -2,6 +2,8 @@ package com.simhastha.view;
 
 import java.net.URL;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,6 +21,8 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.DatePicker;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
@@ -36,6 +40,11 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
+import com.simhastha.schedule.ScheduleCategory;
+import com.simhastha.schedule.ScheduleEvent;
+import com.simhastha.schedule.ScheduleAlert;
+import com.simhastha.schedule.ScheduleService;
+
 public class AdminDashboardPage {
 
     private static final DateTimeFormatter ADMIN_TIME = DateTimeFormatter.ofPattern("dd MMM yyyy | hh:mm a");
@@ -52,6 +61,7 @@ public class AdminDashboardPage {
     private String editingRouteId = "";
     private String editingOperationalId = "";
     private String editingOperationalModule = "";
+    private final ScheduleService scheduleService = new ScheduleService();
 
     public Scene createScene(Stage stage) {
         this.stage = stage;
@@ -1067,11 +1077,69 @@ public class AdminDashboardPage {
     }
 
     private VBox schedulePage() {
-        VBox form = structuredForm("Event", "Date", "Start", "End", "Location", "Type", "Status");
-        return pageShell("Schedule & Events", "Manage official event schedule and operational windows.",
-                infoPanel("Schedule Manager", form, actionRow("schedule", form, "Add Event", "Edit", "Publish", "Cancel")),
-                listPanel("Published Events", "schedule", "No schedule items published yet.", form));
+        DatePicker date = new DatePicker(LocalDate.now());
+        Button add = smallButton("+ Add Event"); add.setOnAction(event -> showScheduleEventForm(null, date.getValue()));
+        Button alerts = smallButton("Manage Alerts"); alerts.setOnAction(event -> showScheduleAlerts(date.getValue()));
+        HBox controls = new HBox(10, add, alerts, muted("Date"), date); controls.setAlignment(Pos.CENTER_LEFT);
+        VBox rows = new VBox(9, muted("Loading official schedule..."));
+        Runnable reload = () -> loadAdminScheduleRows(rows, date.getValue()); date.setOnAction(event -> reload.run()); reload.run();
+        return pageShell("All Day Schedule Management", "Manage official Simhastha events, timings and schedule alerts", controls, infoPanel("Official Events", rows));
     }
+
+    private void loadAdminScheduleRows(VBox rows, LocalDate date) {
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> { try { return scheduleService.eventsForDate(date); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } })
+                .whenComplete((events, error) -> Platform.runLater(() -> {
+                    if (error != null) { rows.getChildren().setAll(muted("Schedule could not be refreshed.")); return; }
+                    if (events.isEmpty()) { rows.getChildren().setAll(muted("No events scheduled for this date.")); return; }
+                    rows.getChildren().setAll(events.stream().map(this::adminScheduleRow).toList());
+                }));
+    }
+
+    private HBox adminScheduleRow(ScheduleEvent item) {
+        Button edit = smallButton("Edit"); edit.setOnAction(event -> showScheduleEventForm(item, item.date()));
+        Button reschedule = smallButton("Reschedule"); reschedule.setOnAction(event -> showScheduleEventForm(item, item.date()));
+        Button cancel = smallButton(item.cancelled() ? "Restore" : "Cancel"); cancel.setOnAction(event -> saveScheduleEvent(new ScheduleEvent(item.id(), item.title(), item.category(), item.location(), item.date(), item.startTime(), item.endTime(), item.description(), item.organizer(), item.important(), item.note(), !item.cancelled(), item.latitude(), item.longitude(), item.locationId())));
+        Button delete = smallButton("Delete"); delete.setOnAction(event -> { if (confirm("Delete Event", "Delete this event permanently? This removes it from user schedules.")) deleteScheduleEvent(item.id()); });
+        VBox text = new VBox(2, strong(formatAdminTime(item) + "  " + item.title()), muted(item.category().label() + " | " + item.location() + " | " + (item.cancelled() ? "CANCELLED" : "SCHEDULED") + (item.important() ? " | Important" : "")));
+        HBox row = new HBox(10, text, createSpacer(), edit, reschedule, cancel, delete); row.getStyleClass().add("pilgrim-data-row"); row.setAlignment(Pos.CENTER_LEFT); return row;
+    }
+
+    private void showScheduleEventForm(ScheduleEvent existing, LocalDate defaultDate) {
+        TextField title = AppUi.textField("Event title"); TextField location = AppUi.textField("Location"); TextField start = AppUi.textField("HH:mm"); TextField end = AppUi.textField("HH:mm"); TextField organizer = AppUi.textField("Organizer"); TextField description = AppUi.textField("Description"); TextField note = AppUi.textField("Important note");
+        ComboBox<ScheduleCategory> category = new ComboBox<>(); category.getItems().setAll(ScheduleCategory.values()); category.setPromptText("Category"); DatePicker date = new DatePicker(defaultDate); CheckBox important = new CheckBox("Important");
+        if (existing != null) { title.setText(existing.title()); location.setText(existing.location()); start.setText(existing.startTime().toString()); end.setText(existing.endTime().toString()); organizer.setText(existing.organizer()); description.setText(existing.description()); note.setText(existing.note()); category.setValue(existing.category()); date.setValue(existing.date()); important.setSelected(existing.important()); }
+        VBox form = new VBox(9, title, category, date, start, end, label("Location", "pilgrim-small-gold"), location, organizer, description, note, important); form.setPadding(new Insets(14));
+        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle(existing == null ? "Add Event" : "Edit Event"); dialog.getDialogPane().setContent(form); ButtonType save = new ButtonType(existing == null ? "Save Event" : "Save Changes"); dialog.getButtonTypes().addAll(ButtonType.CANCEL, save);
+        dialog.showAndWait().ifPresent(result -> { if (result != save) return; try { saveScheduleEvent(new ScheduleEvent(existing == null ? "" : existing.id(), title.getText().trim(), category.getValue(), location.getText().trim(), date.getValue(), LocalTime.parse(start.getText().trim()), LocalTime.parse(end.getText().trim()), description.getText().trim(), organizer.getText().trim(), important.isSelected(), note.getText().trim(), existing != null && existing.cancelled(), existing == null ? null : existing.latitude(), existing == null ? null : existing.longitude(), existing == null ? "" : existing.locationId())); } catch (Exception exception) { showInfo("Event not saved", exception.getMessage()); } });
+    }
+
+    private void saveScheduleEvent(ScheduleEvent event) { java.util.concurrent.CompletableFuture.runAsync(() -> { try { scheduleService.saveEvent(event); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } }).whenComplete((ignored, error) -> Platform.runLater(() -> { if (error != null) showInfo("Event not saved", error.getCause().getMessage()); else showSection("Schedule & Events"); })); }
+    private void deleteScheduleEvent(String id) { java.util.concurrent.CompletableFuture.runAsync(() -> { try { scheduleService.deleteEvent(id); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } }).whenComplete((ignored, error) -> Platform.runLater(() -> { if (error != null) showInfo("Delete failed", error.getCause().getMessage()); else showSection("Schedule & Events"); })); }
+    private String formatAdminTime(ScheduleEvent event) { return event.date() + " | " + event.startTime() + "–" + event.endTime(); }
+    private void showScheduleAlertForm(ScheduleAlert existing, LocalDate defaultDate) {
+        TextField title = AppUi.textField("Alert title"); TextField message = AppUi.textField("Message"); TextField location = AppUi.textField("Location"); TextField start = AppUi.textField("HH:mm (optional)"); TextField end = AppUi.textField("HH:mm (optional)");
+        DatePicker date = new DatePicker(defaultDate); ComboBox<String> severity = new ComboBox<>(); severity.getItems().addAll("INFO", "WARNING", "CRITICAL"); severity.setValue("WARNING"); CheckBox active = new CheckBox("Active"); active.setSelected(true);
+        if (existing != null) { title.setText(existing.title()); message.setText(existing.message()); location.setText(existing.location()); date.setValue(existing.date()); start.setText(existing.startTime() == null ? "" : existing.startTime().toString()); end.setText(existing.endTime() == null ? "" : existing.endTime().toString()); severity.setValue(existing.severity()); active.setSelected(existing.active()); }
+        VBox form = new VBox(9, title, message, location, date, start, end, severity, active); form.setPadding(new Insets(14));
+        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle(existing == null ? "Add Schedule Alert" : "Edit Schedule Alert"); dialog.getDialogPane().setContent(form); ButtonType save = new ButtonType(existing == null ? "Save Alert" : "Save Changes"); dialog.getButtonTypes().addAll(ButtonType.CANCEL, save);
+        dialog.showAndWait().ifPresent(result -> { if (result != save) return; try { LocalTime from = start.getText().isBlank() ? null : LocalTime.parse(start.getText().trim()); LocalTime to = end.getText().isBlank() ? null : LocalTime.parse(end.getText().trim()); if ((from == null) != (to == null) || (from != null && !to.isAfter(from))) throw new IllegalArgumentException("Alert end time must be after start time."); saveScheduleAlert(new ScheduleAlert(existing == null ? "" : existing.id(), title.getText().trim(), message.getText().trim(), location.getText().trim(), date.getValue(), from, to, severity.getValue(), active.isSelected())); } catch (Exception exception) { showInfo("Alert not saved", exception.getMessage()); } });
+    }
+
+    private void showScheduleAlerts(LocalDate date) {
+        VBox rows = new VBox(9, muted("Loading alerts...")); Button add = smallButton("+ Add Alert"); add.setOnAction(event -> showScheduleAlertForm(null, date));
+        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle("Manage Schedule Alerts"); dialog.getDialogPane().setContent(new VBox(12, add, rows)); dialog.getButtonTypes().add(ButtonType.CLOSE);
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> { try { return scheduleService.alertsForDate(date); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } }).whenComplete((alerts, error) -> Platform.runLater(() -> { if (error != null) rows.getChildren().setAll(muted("Alerts could not be refreshed.")); else if (alerts.isEmpty()) rows.getChildren().setAll(muted("No alerts for this date.")); else rows.getChildren().setAll(alerts.stream().map(this::adminAlertRow).toList()); })); dialog.showAndWait();
+    }
+
+    private HBox adminAlertRow(ScheduleAlert alert) {
+        Button edit = smallButton("Edit"); edit.setOnAction(event -> showScheduleAlertForm(alert, alert.date()));
+        Button active = smallButton(alert.active() ? "Deactivate" : "Activate"); active.setOnAction(event -> saveScheduleAlert(new ScheduleAlert(alert.id(), alert.title(), alert.message(), alert.location(), alert.date(), alert.startTime(), alert.endTime(), alert.severity(), !alert.active())));
+        Button delete = smallButton("Delete"); delete.setOnAction(event -> { if (confirm("Delete Alert", "Delete this alert permanently?")) deleteScheduleAlert(alert.id()); });
+        HBox row = new HBox(10, new VBox(2, strong(alert.title()), muted(alert.severity() + " | " + alert.location() + " | " + (alert.active() ? "Active" : "Inactive"))), createSpacer(), edit, active, delete); row.getStyleClass().add("pilgrim-data-row"); row.setAlignment(Pos.CENTER_LEFT); return row;
+    }
+
+    private void saveScheduleAlert(ScheduleAlert alert) { java.util.concurrent.CompletableFuture.runAsync(() -> { try { scheduleService.saveAlert(alert); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } }).whenComplete((ignored, error) -> Platform.runLater(() -> { if (error != null) showInfo("Alert not saved", error.getCause().getMessage()); else showSection("Schedule & Events"); })); }
+    private void deleteScheduleAlert(String id) { java.util.concurrent.CompletableFuture.runAsync(() -> { try { scheduleService.deleteAlert(id); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } }).whenComplete((ignored, error) -> Platform.runLater(() -> { if (error != null) showInfo("Delete failed", error.getCause().getMessage()); else showSection("Schedule & Events"); })); }
 
     private VBox announcementsPage() {
         VBox form = structuredForm("Title", "Category", "Priority", "Message", "Location optional",

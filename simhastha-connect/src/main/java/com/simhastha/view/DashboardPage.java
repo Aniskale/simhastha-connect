@@ -5,9 +5,23 @@ import java.net.URL;
 import java.util.List;
 import java.net.URI;
 import java.util.List;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+
+import com.simhastha.schedule.ScheduleAlert;
+import com.simhastha.schedule.ScheduleCategory;
+import com.simhastha.schedule.ScheduleEvent;
+import com.simhastha.schedule.SchedulePeriod;
+import com.simhastha.schedule.ScheduleStatus;
+import com.simhastha.schedule.ScheduleService;
+import com.simhastha.schedule.NashikLocationRegistry;
 
 import javafx.animation.Animation;
 import javafx.animation.Interpolator;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.animation.TranslateTransition;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
@@ -28,6 +42,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
@@ -51,6 +66,25 @@ public class DashboardPage {
     private static final java.util.Map<String, Place> TRANSPORT_PLACES = createTransportPlaces();
     private static final java.util.List<LocationOption> INDIA_LOCATION_OPTIONS = loadIndiaLocationOptions();
     private static final int LOCATION_SEARCH_LIMIT = 30;
+    private static final java.util.concurrent.ExecutorService SCHEDULE_REFRESH_EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "simhastha-schedule-refresh");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final ScheduleService scheduleService = new ScheduleService();
+    private final Map<String, com.simhastha.schedule.ScheduleEvent> savedScheduleEvents = new LinkedHashMap<>();
+    private java.time.LocalDate selectedScheduleDate = java.time.LocalDate.now();
+    private ScheduleCategory selectedScheduleCategory;
+    private List<com.simhastha.schedule.ScheduleEvent> loadedScheduleEvents = List.of();
+    private List<ScheduleAlert> loadedScheduleAlerts = List.of();
+    private VBox scheduleDateArea, scheduleFeatureArea, scheduleFilterArea, scheduleTimelineArea;
+    private Timeline scheduleRefreshTimeline;
+    private boolean schedulePageActive;
+    private long scheduleRefreshGeneration;
+    private boolean scheduleRefreshInFlight;
+    private final Runnable scheduleLocalChangeListener = () -> javafx.application.Platform.runLater(() -> {
+        if (schedulePageActive) refreshSchedule();
+    });
     private static final java.util.concurrent.ExecutorService LOCATION_SEARCH_EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "simhastha-location-search");
         thread.setDaemon(true);
@@ -159,11 +193,15 @@ public class DashboardPage {
     }
 
     private void showHomePage() {
+        stopScheduleRefresh();
         setActiveModule("home");
         root.setCenter(scroll(createHomePage()));
     }
 
     private void showModulePage(String module) {
+        if (!"schedule".equals(module)) {
+            stopScheduleRefresh();
+        }
         setActiveModule(module);
         Node page = switch (module) {
             case "packages" -> packagesPage();
@@ -2050,21 +2088,329 @@ public class DashboardPage {
     }
 
     private VBox schedulePage() {
-        if (!AppDataStore.items("schedule").isEmpty()) {
-            return pageShell("KUMBH ALL DAY SCHEDULE", "Daily movement, snan, seva and security schedule.",
-                    filterRow("Select Date", "Select Location", "Filter by Category", "Download Schedule"),
-                    adminControlledGrid("schedule", "Official Update"));
-        }
-        HBox body = new HBox(14, scheduleTable(),
-                new VBox(10,
-                        infoPanel("Today Highlights", "Morning snan guidance\nEvening aarti crowd movement\nNight patrol after 10 PM"),
-                        infoPanel("Important Information", "Carry ID\nUse official route diversions\nKeep water with you"),
-                        infoPanel("Emergency Contacts", "112 Unified Emergency\n108 Ambulance\n100 Police"),
-                        infoPanel("Weather Update", "Demo weather panel for official advisory display")));
-        HBox.setHgrow(body.getChildren().get(0), Priority.ALWAYS);
-        return pageShell("KUMBH ALL DAY SCHEDULE", "Daily movement, snan, seva and security schedule.",
-                filterRow("Select Date", "Select Location", "Filter by Category", "Download Schedule"), body);
+        schedulePageActive = true;
+        scheduleDateArea = new VBox(); scheduleFeatureArea = new VBox(); scheduleFilterArea = new VBox(); scheduleTimelineArea = new VBox();
+        VBox content = new VBox(16, topControls(), scheduleHeader(), scheduleDateArea, scheduleFeatureArea,
+                scheduleFilterArea, scheduleTimelineArea, scheduleInfoStrip());
+        content.getStyleClass().addAll("pilgrim-dashboard-main", "schedule-page");
+        content.setPadding(new Insets(12, 22, 28, 22));
+        startScheduleRefresh();
+        scheduleService.addLocalChangeListener(scheduleLocalChangeListener);
+        refreshSchedule();
+        return content;
     }
+
+    /** Static presentation data only; Part 2 can replace these records with controller-provided events. */
+    private VBox scheduleHeader() {
+        Label title = label("All Day Schedule", "schedule-page-title");
+        Label subtitle = label("Plan your day at Simhastha", "schedule-page-subtitle");
+        Region divider = new Region();
+        divider.getStyleClass().add("schedule-divider");
+        VBox header = new VBox(3, title, subtitle, divider);
+        header.getStyleClass().add("schedule-header");
+        return header;
+    }
+
+    private HBox scheduleDateControls() {
+        Label calendar = AppUi.symbolIcon("\uE787", "schedule-date-icon");
+        boolean today = selectedScheduleDate.equals(java.time.LocalDate.now());
+        String dateText = today ? "Today, " + formatScheduleDate(selectedScheduleDate)
+                : selectedScheduleDate.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMM yyyy"));
+        VBox dateCopy = new VBox(1, label(today ? "TODAY" : selectedScheduleDate.getDayOfWeek().toString(), "schedule-date-caption"), label(dateText, "schedule-date-value"));
+        DatePicker picker = new DatePicker(selectedScheduleDate);
+        picker.getStyleClass().add("schedule-date-picker");
+        picker.setOnAction(event -> { if (picker.getValue() != null) changeScheduleDate(picker.getValue()); });
+        HBox dateCard = new HBox(9, calendar, dateCopy, picker);
+        dateCard.getStyleClass().add("schedule-date-card");
+        dateCard.setAlignment(Pos.CENTER_LEFT);
+
+        Button previous = scheduleIconButton("\uE72B", "Previous day");
+        Button next = scheduleIconButton("\uE72A", "Next day");
+        previous.setOnAction(event -> changeScheduleDate(selectedScheduleDate.minusDays(1)));
+        next.setOnAction(event -> changeScheduleDate(selectedScheduleDate.plusDays(1)));
+        Button mySchedule = new Button("☆  My Schedule");
+        mySchedule.getStyleClass().add("schedule-my-button");
+        mySchedule.setOnAction(event -> showMySchedule());
+
+        HBox row = new HBox(8, dateCard, previous, next, createSpacer(), mySchedule);
+        row.getStyleClass().add("schedule-date-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private HBox scheduleFeatureCards() {
+        VBox live = createFeatureCard("LIVE NOW", "Kakad Aarti", "Ramkund, Panchavati", "05:30 AM – 06:30 AM",
+                "\uE707", "View Route", "schedule-feature-live");
+        VBox next = createFeatureCard("UP NEXT", "Holy Snan", "Godavari Ghat", "07:00 AM – 08:30 AM",
+                "\uE707", "Starting in 1h 29m", "schedule-feature-next");
+        VBox update = createFeatureCard("IMPORTANT UPDATE", "Ramkund Gate 2 closed until 10:00 AM.", "Use Gate 3 for entry.", "",
+                "\uE7BA", "View Details", "schedule-feature-alert");
+        HBox cards = new HBox(12, live, next, update);
+        cards.getStyleClass().add("schedule-feature-row");
+        cards.setAlignment(Pos.TOP_LEFT);
+        return cards;
+    }
+
+    private VBox createFeatureCard(String eyebrow, String title, String location, String time, String icon, String action,
+            String style) {
+        Label marker = label(eyebrow, "schedule-feature-eyebrow");
+        Label eventTitle = label(title, "schedule-feature-title");
+        Label place = new Label("\uE707  " + location);
+        place.getStyleClass().add("schedule-feature-detail");
+        Label eventTime = label(time, "schedule-feature-time");
+        Button button = new Button(action);
+        button.getStyleClass().add("schedule-feature-action");
+        button.setOnAction(event -> showInfo("Schedule", action + " is a UI-only action for Part 1."));
+        VBox card = new VBox(7, new HBox(8, AppUi.symbolIcon(icon, "schedule-feature-icon"), marker), eventTitle, place, eventTime,
+                button);
+        card.getStyleClass().addAll("schedule-feature-card", style);
+        VBox.setVgrow(eventTime, Priority.ALWAYS);
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private HBox scheduleFilterBar() {
+        HBox filters = new HBox(7);
+        String[] categories = { "All Events", "Snan", "Aarti", "Akhada", "Samaj", "Cultural", "Government", "Important" };
+        for (String category : categories) {
+            filters.getChildren().add(createFilterButton(category, (selectedScheduleCategory == null && "All Events".equals(category))
+                    || (selectedScheduleCategory != null && selectedScheduleCategory.label().equals(category))));
+        }
+        Button filter = new Button("\uE71C  Filter");
+        filter.getStyleClass().add("schedule-filter-button");
+        filter.setOnAction(event -> showInfo("Schedule filter", "Use the category filters to narrow the displayed events."));
+        HBox row = new HBox(9, filters, createSpacer(), filter);
+        row.getStyleClass().add("schedule-filter-bar");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private Button createFilterButton(String text, boolean selected) {
+        Button button = new Button(text);
+        button.getStyleClass().addAll("schedule-filter-button", selected ? "schedule-filter-selected" : "schedule-filter-idle");
+        button.setOnAction(event -> { selectedScheduleCategory = "All Events".equals(text) ? null : ScheduleCategory.valueOf(text.toUpperCase()); refreshTimeline(); if (scheduleFilterArea != null) scheduleFilterArea.getChildren().setAll(scheduleFilterBar()); });
+        return button;
+    }
+
+    private GridPane scheduleTimeline() {
+        GridPane grid = new GridPane();
+        grid.getStyleClass().add("schedule-timeline-grid");
+        ColumnConstraints column = new ColumnConstraints();
+        column.setPercentWidth(50);
+        column.setHgrow(Priority.ALWAYS);
+        grid.getColumnConstraints().addAll(column, new ColumnConstraints());
+        grid.getColumnConstraints().get(1).setPercentWidth(50);
+        grid.add(createScheduleSection("MORNING", "05:00 AM – 12:00 PM", List.of(
+                new ScheduleEvent("05:30 AM", "06:30 AM", "Morning Aarti", "Ramkund, Panchavati", "Live Now", "\uEC29"),
+                new ScheduleEvent("07:00 AM", "08:30 AM", "Holy Snan", "Godavari Ghat", "Upcoming", "\uE707"),
+                new ScheduleEvent("09:30 AM", "11:00 AM", "Akhada Procession", "Panchavati Main Road", "Upcoming", "\uE95D"))), 0, 0);
+        grid.add(createScheduleSection("AFTERNOON", "12:00 PM – 05:00 PM", List.of(
+                new ScheduleEvent("01:00 PM", "02:30 PM", "Pravachan", "Kumbh Pravachan Mandap", "Upcoming", "\uE8D4"),
+                new ScheduleEvent("03:00 PM", "04:00 PM", "Bhandara", "Vishram Ghat", "Upcoming", "\uE8EC"))), 1, 0);
+        grid.add(createScheduleSection("EVENING", "05:00 PM – 09:00 PM", List.of(
+                new ScheduleEvent("06:30 PM", "07:30 PM", "Godavari Maha Aarti", "Ramkund, Panchavati", "Upcoming", "\uEC29"),
+                new ScheduleEvent("08:00 PM", "09:00 PM", "Bhajan / Kirtan", "Sant Dnyaneshwar Maidan", "Upcoming", "\uE8D4"))), 0, 1);
+        grid.add(createScheduleSection("NIGHT", "09:00 PM – 11:30 PM", List.of(
+                new ScheduleEvent("09:30 PM", "11:00 PM", "Cultural Program", "Cultural Ground", "Upcoming", "\uE946"))), 1, 1);
+        return grid;
+    }
+
+    private VBox createScheduleSection(String title, String duration, List<ScheduleEvent> events) {
+        VBox rows = new VBox(8);
+        for (ScheduleEvent event : events) rows.getChildren().add(createEventRow(event));
+        VBox card = new VBox(12, new VBox(2, label(title, "schedule-section-title"), label(duration, "schedule-section-duration")), rows);
+        card.getStyleClass().add("schedule-section-card");
+        return card;
+    }
+
+    private HBox createEventRow(ScheduleEvent event) {
+        VBox time = new VBox(1, label(event.start(), "schedule-event-time"), label("– " + event.end(), "schedule-event-end"));
+        StackPane node = new StackPane(AppUi.symbolIcon(event.icon(), "schedule-event-icon"));
+        node.getStyleClass().add("schedule-event-node");
+        VBox details = new VBox(2, label(event.name(), "schedule-event-name"), label("\uE707  " + event.location(), "schedule-event-location"));
+        Label status = createStatusBadge(event.status());
+        Button detail = new Button("Details"); detail.getStyleClass().add("schedule-event-action");
+        Button route = new Button("Route"); route.getStyleClass().add("schedule-event-action");
+        Button bell = scheduleIconButton("\uE7F4", "Set reminder"); bell.getStyleClass().add("schedule-event-bell");
+        HBox row = new HBox(8, time, node, details, status, detail, route, bell);
+        row.getStyleClass().add("schedule-event-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(details, Priority.ALWAYS);
+        return row;
+    }
+
+    private Label createStatusBadge(String status) {
+        Label badge = label(status, "schedule-status-badge");
+        badge.getStyleClass().add("Live Now".equals(status) ? "schedule-status-live" : "schedule-status-upcoming");
+        return badge;
+    }
+
+    private HBox scheduleInfoStrip() {
+        HBox strip = new HBox(10,
+                createInfoCard("\uE706", "Crowd Status", "Moderate", "Ramkund Area"),
+                createInfoCard("\uE708", "Weather", "26°C", "Partly Cloudy"),
+                createInfoCard("\uE7D4", "Drinking Water", "Available", "At all ghats"),
+                createInfoCard("\uE95E", "Medical Help", "24x7", "Near Ramkund"),
+                createInfoCard("\uE717", "Emergency Contact", "112 / 108", "Police / Ambulance"));
+        strip.getStyleClass().add("schedule-info-strip");
+        return strip;
+    }
+
+    private VBox createInfoCard(String icon, String title, String value, String detail) {
+        VBox card = new VBox(3, AppUi.symbolIcon(icon, "schedule-info-icon"), label(title, "schedule-info-title"), label(value, "schedule-info-value"), label(detail, "schedule-info-detail"));
+        card.getStyleClass().add("schedule-info-card");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private Button scheduleIconButton(String icon, String tooltip) {
+        Button button = new Button(icon);
+        button.getStyleClass().add("schedule-icon-button");
+        button.setTooltip(new javafx.scene.control.Tooltip(tooltip));
+        button.setOnAction(event -> showInfo("Schedule", tooltip + " is a UI-only action for Part 1."));
+        return button;
+    }
+
+    private record ScheduleEvent(String start, String end, String name, String location, String status, String icon) { }
+
+    private void refreshSchedule() {
+        if (!schedulePageActive || scheduleDateArea == null || scheduleRefreshInFlight) return;
+        final long generation = scheduleRefreshGeneration;
+        final java.time.LocalDate requestedDate = selectedScheduleDate;
+        scheduleRefreshInFlight = true;
+        scheduleDateArea.getChildren().setAll(scheduleDateControls());
+        if (loadedScheduleEvents.isEmpty()) scheduleFeatureArea.getChildren().setAll(infoPanel("Loading schedule", "Loading official schedule..."));
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return new ScheduleLoad(scheduleService.eventsForDate(requestedDate), scheduleService.alertsForDate(requestedDate)); }
+            catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); }
+        }, SCHEDULE_REFRESH_EXECUTOR).whenComplete((loaded, error) -> javafx.application.Platform.runLater(() -> {
+            if (!schedulePageActive) return;
+            if (generation != scheduleRefreshGeneration) { scheduleRefreshInFlight = false; refreshSchedule(); return; }
+            scheduleRefreshInFlight = false;
+            if (error == null) { loadedScheduleEvents = loaded.events(); loadedScheduleAlerts = loaded.alerts();
+                savedScheduleEvents.keySet().removeIf(id -> loadedScheduleEvents.stream().noneMatch(event -> event.id().equals(id)));
+                loadedScheduleEvents.forEach(event -> { if (savedScheduleEvents.containsKey(event.id())) savedScheduleEvents.put(event.id(), event); }); }
+            else System.err.println("Schedule could not be refreshed for " + requestedDate + ": " + error.getCause());
+            scheduleFeatureArea.getChildren().setAll(functionalFeatureCards()); scheduleFilterArea.getChildren().setAll(scheduleFilterBar()); refreshTimeline();
+        }));
+    }
+
+    private void refreshTimeline() {
+        if (scheduleTimelineArea != null) scheduleTimelineArea.getChildren().setAll(functionalScheduleTimeline());
+    }
+
+    private void changeScheduleDate(java.time.LocalDate date) {
+        selectedScheduleDate = date;
+        scheduleRefreshGeneration++;
+        scheduleRefreshInFlight = false;
+        refreshSchedule();
+    }
+
+    private HBox functionalFeatureCards() {
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        Optional<com.simhastha.schedule.ScheduleEvent> live = loadedScheduleEvents.stream()
+                .filter(item -> scheduleService.statusFor(item, now) == ScheduleStatus.LIVE_NOW)
+                .sorted(Comparator.comparing(com.simhastha.schedule.ScheduleEvent::important).reversed().thenComparing(com.simhastha.schedule.ScheduleEvent::startTime)).findFirst();
+        Optional<com.simhastha.schedule.ScheduleEvent> next = findNextEvent(now);
+        ScheduleAlert alert = loadedScheduleAlerts.stream().filter(ScheduleAlert::active)
+                .filter(item -> !selectedScheduleDate.equals(java.time.LocalDate.now()) || (item.startTime() == null || !java.time.LocalTime.now().isBefore(item.startTime())))
+                .filter(item -> item.endTime() == null || !selectedScheduleDate.equals(java.time.LocalDate.now()) || !java.time.LocalTime.now().isAfter(item.endTime()))
+                .sorted(Comparator.comparingInt((ScheduleAlert item) -> switch (item.severity().toUpperCase()) { case "CRITICAL" -> 3; case "WARNING" -> 2; default -> 1; }).reversed()).findFirst().orElse(null);
+        VBox liveCard = live.map(item -> dynamicFeatureCard("LIVE NOW", item.title(), item.location(), formatEventTime(item), "View Route", "schedule-feature-live", () -> handleRoute(item)))
+                .orElseGet(() -> dynamicFeatureCard("LIVE NOW", "No event live right now", "Check upcoming schedule below", "", "View Schedule", "schedule-feature-live", () -> { }));
+        VBox nextCard = next.map(item -> dynamicFeatureCard("UP NEXT", item.title(), item.location(), formatEventTime(item),
+                selectedScheduleDate.equals(now.toLocalDate()) ? formatCountdown(java.time.Duration.between(now, java.time.LocalDateTime.of(item.date(), item.startTime()))) : "Upcoming",
+                "schedule-feature-next", () -> showEventDetails(item)))
+                .orElseGet(() -> dynamicFeatureCard("UP NEXT", "No more events today", "Check another date for events", "", "Schedule", "schedule-feature-next", () -> { }));
+        VBox alertCard = alert == null ? dynamicFeatureCard("IMPORTANT UPDATE", "No important updates for this date.", "", "", "Details", "schedule-feature-alert", () -> { })
+                : dynamicFeatureCard("IMPORTANT UPDATE", alert.title(), alert.location(), "", "View Details", "schedule-feature-alert", () -> showAlertDetails(alert));
+        HBox row = new HBox(12, liveCard, nextCard, alertCard); row.getStyleClass().add("schedule-feature-row"); return row;
+    }
+
+    private VBox dynamicFeatureCard(String heading, String title, String place, String detail, String action, String style, Runnable handler) {
+        Button button = new Button(action); button.getStyleClass().add("schedule-feature-action"); button.setOnAction(event -> handler.run());
+        VBox card = new VBox(7, label(heading, "schedule-feature-eyebrow"), label(title, "schedule-feature-title"),
+                label(place, "schedule-feature-detail"), label(detail, "schedule-feature-time"), button);
+        card.getStyleClass().addAll("schedule-feature-card", style); HBox.setHgrow(card, Priority.ALWAYS); return card;
+    }
+
+    private GridPane functionalScheduleTimeline() {
+        GridPane grid = new GridPane(); grid.getStyleClass().add("schedule-timeline-grid");
+        ColumnConstraints first = new ColumnConstraints(); first.setPercentWidth(50); first.setHgrow(Priority.ALWAYS);
+        ColumnConstraints second = new ColumnConstraints(); second.setPercentWidth(50); second.setHgrow(Priority.ALWAYS); grid.getColumnConstraints().addAll(first, second);
+        SchedulePeriod[] periods = SchedulePeriod.values();
+        for (int index = 0; index < periods.length; index++) grid.add(functionalScheduleSection(periods[index]), index % 2, index / 2);
+        return grid;
+    }
+
+    private VBox functionalScheduleSection(SchedulePeriod period) {
+        List<com.simhastha.schedule.ScheduleEvent> items = filteredScheduleEvents().stream().filter(item -> SchedulePeriod.from(item.startTime()) == period).toList();
+        VBox rows = new VBox(8); if (items.isEmpty()) rows.getChildren().add(label("No events scheduled", "schedule-empty-text")); else items.forEach(item -> rows.getChildren().add(functionalEventRow(item)));
+        VBox card = new VBox(12, new VBox(2, label(period.title(), "schedule-section-title"), label(period.duration(), "schedule-section-duration")), rows); card.getStyleClass().add("schedule-section-card"); return card;
+    }
+
+    private HBox functionalEventRow(com.simhastha.schedule.ScheduleEvent item) {
+        ScheduleStatus status = scheduleService.statusFor(item, java.time.LocalDateTime.now());
+        VBox time = new VBox(1, label(formatTime(item.startTime()), "schedule-event-time"), label("– " + formatTime(item.endTime()), "schedule-event-end"));
+        StackPane node = new StackPane(label(item.category().label().substring(0, 1), "schedule-event-icon")); node.getStyleClass().add("schedule-event-node");
+        VBox details = new VBox(2, label(item.title(), "schedule-event-name"), label(item.location(), "schedule-event-location"));
+        Button detailsButton = new Button("Details"); detailsButton.getStyleClass().add("schedule-event-action"); detailsButton.setOnAction(event -> showEventDetails(item));
+        Button routeButton = new Button("Route"); routeButton.getStyleClass().add("schedule-event-action"); routeButton.setOnAction(event -> handleRoute(item));
+        boolean saved = savedScheduleEvents.containsKey(item.id()); Button bell = new Button(saved ? "Saved" : "\uE7F4"); bell.getStyleClass().addAll("schedule-icon-button", "schedule-event-bell"); if (saved) bell.getStyleClass().add("schedule-event-bell-saved"); bell.setOnAction(event -> toggleSavedEvent(item));
+        HBox row = new HBox(8, time, node, details, createStatusBadge(status), detailsButton, routeButton, bell); row.getStyleClass().add("schedule-event-row"); if (status == ScheduleStatus.LIVE_NOW) row.getStyleClass().add("schedule-event-live"); row.setAlignment(Pos.CENTER_LEFT); HBox.setHgrow(details, Priority.ALWAYS); return row;
+    }
+
+    private List<com.simhastha.schedule.ScheduleEvent> filteredScheduleEvents() {
+        return loadedScheduleEvents.stream().filter(item -> selectedScheduleCategory == null || item.category() == selectedScheduleCategory || (selectedScheduleCategory == ScheduleCategory.IMPORTANT && item.important())).sorted(Comparator.comparing(com.simhastha.schedule.ScheduleEvent::startTime)).toList();
+    }
+
+    private Optional<com.simhastha.schedule.ScheduleEvent> findNextEvent(java.time.LocalDateTime now) {
+        return loadedScheduleEvents.stream().filter(item -> !item.cancelled() && (item.date().isAfter(now.toLocalDate()) || (item.date().equals(now.toLocalDate()) && item.startTime().isAfter(now.toLocalTime())))).findFirst();
+    }
+
+    private void toggleSavedEvent(com.simhastha.schedule.ScheduleEvent item) { if (savedScheduleEvents.containsKey(item.id())) savedScheduleEvents.remove(item.id()); else savedScheduleEvents.put(item.id(), item); refreshTimeline(); }
+    private void handleRoute(com.simhastha.schedule.ScheduleEvent item) {
+        if (item.latitude() != null || item.longitude() != null) {
+            if (!NashikLocationRegistry.validNashikPoint(item.latitude(), item.longitude())) {
+                showInfo("Location unavailable", "Location is outside the supported Nashik Simhastha area.");
+                return;
+            }
+        }
+        NashikLocationRegistry.resolve(item.locationId(), item.location(), item.latitude(), item.longitude()).ifPresentOrElse(
+                point -> showScheduleLocationMap(item, point),
+                () -> showInfo("Location unavailable", "Accurate location is not available for this event yet."));
+    }
+
+    private void showScheduleLocationMap(com.simhastha.schedule.ScheduleEvent item, NashikLocationRegistry.LocationPoint point) {
+        Place destination = new Place(point.displayName(), point.latitude(), point.longitude());
+        ImageView mapImage = staticMapImage(destination, destination);
+        VBox selected = new VBox(4, AppUi.symbolIcon("\uE707", "transport-map-pin"), strong(item.title()),
+                muted(item.location()), muted(formatEventTime(item) + " | " + item.category().label()));
+        selected.getStyleClass().add("transport-map-pin-box"); selected.setAlignment(Pos.CENTER);
+        Button openMap = new Button("Open Live Map"); openMap.getStyleClass().add("map-open-button");
+        openMap.setOnAction(event -> openUrl("https://www.openstreetmap.org/?mlat=" + point.latitude() + "&mlon=" + point.longitude() + "#map=16/" + point.latitude() + "/" + point.longitude()));
+        Button back = new Button("← Back to All Day Schedule"); back.getStyleClass().add("map-secondary-button"); back.setOnAction(event -> showModulePage("schedule"));
+        HBox tools = new HBox(8, back, createSpacer(), openMap); tools.setAlignment(Pos.CENTER_LEFT);
+        StackPane map = new StackPane(transportMapFallback(destination, destination), mapImage, selected);
+        map.getStyleClass().add("transport-map-shell"); map.setMinHeight(420); StackPane.setAlignment(selected, Pos.CENTER);
+        VBox content = pageShell("Event Location", "Nashik Simhastha schedule destination", tools, map,
+                infoPanel("Selected Event", item.title() + "\n" + item.location() + "\n" + formatEventTime(item) + "\n" + item.category().label()));
+        root.setCenter(scroll(content));
+    }
+    private String formatScheduleDate(java.time.LocalDate date) { return date.format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy")); }
+    private String formatTime(java.time.LocalTime time) { return time.format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a")); }
+    private String formatEventTime(com.simhastha.schedule.ScheduleEvent item) { return formatTime(item.startTime()) + " – " + formatTime(item.endTime()); }
+    private String formatCountdown(java.time.Duration duration) { long minutes = Math.max(0, duration.toMinutes()); return minutes < 60 ? "Starting in " + minutes + "m" : "Starting in " + (minutes / 60) + "h " + (minutes % 60) + "m"; }
+    private Label createStatusBadge(ScheduleStatus status) { String text = status == ScheduleStatus.LIVE_NOW ? "Live Now" : status.name().substring(0, 1) + status.name().substring(1).toLowerCase().replace('_', ' '); Label badge = label(text, "schedule-status-badge"); badge.getStyleClass().add(switch (status) { case LIVE_NOW -> "schedule-status-live"; case COMPLETED -> "schedule-status-completed"; case CANCELLED -> "schedule-status-cancelled"; default -> "schedule-status-upcoming"; }); return badge; }
+
+    private void startScheduleRefresh() { stopScheduleRefresh(); schedulePageActive = true; scheduleRefreshTimeline = new Timeline(new KeyFrame(Duration.seconds(30), event -> refreshSchedule())); scheduleRefreshTimeline.setCycleCount(Animation.INDEFINITE); scheduleRefreshTimeline.play(); }
+    private void stopScheduleRefresh() { schedulePageActive = false; scheduleRefreshGeneration++; scheduleRefreshInFlight = false; scheduleService.removeLocalChangeListener(scheduleLocalChangeListener); if (scheduleRefreshTimeline != null) { scheduleRefreshTimeline.stop(); scheduleRefreshTimeline = null; } }
+
+    private void showEventDetails(com.simhastha.schedule.ScheduleEvent item) { showScheduleDialog(item.title(), "Category: " + item.category().label() + "\nDate: " + formatScheduleDate(item.date()) + "\nTime: " + formatEventTime(item) + "\nLocation: " + item.location() + "\nOrganizer: " + item.organizer() + "\nStatus: " + createStatusBadge(scheduleService.statusFor(item, java.time.LocalDateTime.now())).getText() + "\n\n" + item.description() + "\n\nNote: " + item.note()); }
+    private void showAlertDetails(ScheduleAlert alert) { showScheduleDialog(alert.severity() + " Update", alert.title() + "\n\n" + alert.message() + "\n\nLocation: " + alert.location()); }
+    private void showScheduleDialog(String title, String detail) { Alert dialog = new Alert(Alert.AlertType.INFORMATION); dialog.setTitle(title); dialog.setHeaderText(title); dialog.setContentText(detail); dialog.getDialogPane().getStyleClass().add("schedule-dialog"); dialog.showAndWait(); }
+    private void showMySchedule() { String detail = savedScheduleEvents.isEmpty() ? "No events added to My Schedule yet." : savedScheduleEvents.values().stream().sorted(Comparator.comparing(com.simhastha.schedule.ScheduleEvent::date).thenComparing(com.simhastha.schedule.ScheduleEvent::startTime)).map(item -> formatTime(item.startTime()) + "  " + item.title() + " — " + item.location()).collect(java.util.stream.Collectors.joining("\n")); showScheduleDialog("My Schedule", detail); }
+    private record ScheduleLoad(List<com.simhastha.schedule.ScheduleEvent> events, List<ScheduleAlert> alerts) { }
 
     private VBox businessPage() {
         HBox categories = new HBox(8,
