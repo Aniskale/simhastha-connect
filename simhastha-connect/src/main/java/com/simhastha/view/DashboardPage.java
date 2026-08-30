@@ -37,6 +37,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
+import javafx.scene.shape.Rectangle;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
@@ -227,7 +228,7 @@ public class DashboardPage {
                 metric("24/7", "Support"));
 
         return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and information platform",
-                searchBar(), services, announcementTicker(), lower, metrics);
+                searchBar(), announcementTicker(), services, lower, metrics);
     }
 
     private HBox topControls() {
@@ -281,17 +282,36 @@ public class DashboardPage {
     }
 
     private StackPane announcementTicker() {
-        Label text = new Label("Important announcements, emergency alerts and official notices will appear here.");
+        String updates = AnnouncementDemoStore.all().stream()
+                .filter(item -> "LIVE".equals(item.status()) || "NEW".equals(item.status()) || "UPDATED".equals(item.status()))
+                .map(AnnouncementDemoStore.Announcement::title)
+                .collect(java.util.stream.Collectors.joining("  •  "));
+        Label text = new Label(updates.isBlank() ? "No active official updates." : updates);
         text.getStyleClass().add("pilgrim-ticker-text");
-        StackPane ticker = new StackPane(text);
+        Label live = new Label("📢  LIVE UPDATES");
+        live.getStyleClass().add("announcement-ticker-label");
+        StackPane viewport = new StackPane(text);
+        viewport.getStyleClass().add("announcement-ticker-viewport");
+        Rectangle clip = new Rectangle();
+        clip.widthProperty().bind(viewport.widthProperty());
+        clip.heightProperty().bind(viewport.heightProperty());
+        viewport.setClip(clip);
+        HBox content = new HBox(12, live, viewport);
+        content.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(viewport, Priority.ALWAYS);
+        StackPane ticker = new StackPane(content);
         ticker.getStyleClass().add("pilgrim-alert-ticker");
         ticker.setMinHeight(30);
-        TranslateTransition transition = new TranslateTransition(Duration.seconds(18), text);
-        transition.setFromX(700);
-        transition.setToX(-700);
-        transition.setCycleCount(Animation.INDEFINITE);
-        transition.setInterpolator(Interpolator.LINEAR);
-        transition.play();
+        ticker.setOnMouseClicked(event -> showModulePage("announcement"));
+        javafx.application.Platform.runLater(() -> {
+            double travel = Math.max(500, viewport.getWidth() + text.getWidth() + 42);
+            TranslateTransition transition = new TranslateTransition(Duration.seconds(Math.max(14, travel / 70)), text);
+            transition.setFromX(12);
+            transition.setToX(-text.getWidth() - 30);
+            transition.setCycleCount(Animation.INDEFINITE);
+            transition.setInterpolator(Interpolator.LINEAR);
+            transition.play();
+        });
         return ticker;
     }
 
@@ -2099,18 +2119,16 @@ public class DashboardPage {
         return pageShell("My Bookings & Payments", "Your real booking records, payment status and tickets.", rows);
     }
 
-    private VBox announcementPage() {
-        if (!AppDataStore.items("announcement").isEmpty()) {
-            return pageShell("Announcements & Official Notices", "Pinned alerts, route changes and schedule updates.",
-                    adminControlledGrid("announcement", "Official"));
+    private Node announcementPage() {
+        return new UserAnnouncementView(this::showAnnouncementContent).page();
+    }
+
+    private void showAnnouncementContent(Node page) {
+        if (page instanceof UserAnnouncementView.AnnouncementDetailsPage) {
+            root.setCenter(page);
+        } else {
+            root.setCenter(scroll(page));
         }
-        return pageShell("Announcements & Official Notices", "Pinned alerts, route changes and schedule updates.",
-                twoColumnGrid(
-                        notice("Important", "09:00 AM", "Ramkund Crowd Level Updated", "Use alternate entry if volunteer teams advise."),
-                        notice("Transport", "10:30 AM", "Additional Shuttle Buses Added", "Extra buses active from Nashik Road and CBS."),
-                        notice("Events", "04:15 PM", "Evening Aarti Timing Changed", "Check updated timing before moving to ghat."),
-                        notice("Safety", "06:40 PM", "Medical Help Booth Added", "New help booth near main pedestrian route."),
-                        notice("Important", "Pinned", "Official notices only", "Follow verified announcements from this panel.")));
     }
 
     private VBox aboutPage() {
