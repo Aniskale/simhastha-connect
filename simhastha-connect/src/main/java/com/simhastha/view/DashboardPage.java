@@ -2401,12 +2401,7 @@ public class DashboardPage {
                     adminControlledGrid("stay", "View Details"));
         }
         return pageShell("Stay & Accommodation", "Hotels, dharamshalas and camp information.",
-                filterRow("Area", "Type", "Budget"),
-                twoColumnGrid(
-                        paidCard("stay", "Dharamshala Availability Desk", "Panchavati / Trimbakeshwar\nBudget\nPilgrim-friendly", "Reserve", "stay-dharamshala-bed", 1, 1),
-                        paidCard("stay", "Family Hotel Zone", "Nashik Road\nCBS\nGangapur Road", "Reserve", "stay-family-room", 1, 1),
-                        paidCard("stay", "Festival Camp Stay", "Temporary camps\nVerified group stay support", "Reserve", "stay-festival-tent", 1, 1),
-                        infoPanel("Area Guide", "Panchavati: close to Ramkund\nNashik Road: rail access\nTrimbakeshwar: temple-focused stay")));
+                infoPanel("No verified stays available yet", "Approved accommodation listings will appear here when they are available."));
     }
 
     private VBox lostFoundPage() {
@@ -2463,16 +2458,190 @@ public class DashboardPage {
 
     private VBox myBookingsPage() {
         AppSession.User user = AppSession.currentUser();
-        VBox rows = new VBox(10);
-        if (user == null || AppDataStore.bookingsForUser(user.uid()).isEmpty()) {
-            rows.getChildren().add(infoPanel("No bookings yet",
-                    "Paid bookings and tickets will appear here after you reserve a package, stay, puja or approved business service."));
-        } else {
-            for (AppDataStore.BookingRecord booking : AppDataStore.bookingsForUser(user.uid())) {
-                rows.getChildren().add(bookingRow(booking));
-            }
+        java.util.List<AppDataStore.BookingRecord> bookings = user == null ? java.util.List.of()
+                : AppDataStore.bookingsForUser(user.uid()).stream()
+                        .sorted(java.util.Comparator.comparing((AppDataStore.BookingRecord booking) -> booking.createdAt).reversed())
+                        .toList();
+        long upcoming = bookings.stream().filter(booking -> bookingBucket(booking).equals("Upcoming")).count();
+        long completed = bookings.stream().filter(booking -> bookingBucket(booking).equals("Completed")).count();
+        long cancelled = bookings.stream().filter(booking -> bookingBucket(booking).equals("Cancelled")).count();
+
+        HBox summary = new HBox(12,
+                bookingMetric("All Bookings", bookings.size(), "All recorded services"),
+                bookingMetric("Upcoming", upcoming, "Confirmed or in progress"),
+                bookingMetric("Completed", completed, "Completed services"),
+                bookingMetric("Cancelled", cancelled, "Cancelled bookings"));
+        summary.getStyleClass().add("booking-summary-grid");
+        summary.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
+
+        TextField search = AppUi.textField("Search booking ID or service");
+        String[] categories = {"All", "Kumbh Packages", "Stay", "Puja Services", "Business Services"};
+        VBox results = new VBox(10);
+        java.util.Map<String, Button> filters = new java.util.LinkedHashMap<>();
+        final String[] selectedCategory = {"All"};
+        Runnable refresh = () -> renderBookingResults(results, bookings, selectedCategory[0], search.getText());
+        HBox filterBar = new HBox(8);
+        for (String category : categories) {
+            Button filter = new Button(category);
+            filter.getStyleClass().add("booking-filter-button");
+            filter.setOnAction(event -> {
+                selectedCategory[0] = category;
+                filters.values().forEach(button -> button.getStyleClass().remove("booking-filter-active"));
+                filter.getStyleClass().add("booking-filter-active");
+                refresh.run();
+            });
+            filters.put(category, filter);
+            filterBar.getChildren().add(filter);
         }
-        return pageShell("My Bookings & Payments", "Your real booking records, payment status and tickets.", rows);
+        filters.get("All").getStyleClass().add("booking-filter-active");
+        search.textProperty().addListener((observable, oldValue, newValue) -> refresh.run());
+        HBox controls = new HBox(12, filterBar, createSpacer(), search);
+        controls.setAlignment(Pos.CENTER_LEFT); controls.getStyleClass().add("booking-filter-bar");
+        HBox.setHgrow(search, Priority.ALWAYS); search.setMaxWidth(300);
+        refresh.run();
+        return pageShell("My Bookings", "View and manage all your Simhastha bookings in one place.", summary, controls, results);
+    }
+
+    private VBox bookingMetric(String title, long count, String detail) {
+        VBox card = new VBox(4, muted(title), label(String.valueOf(count), "booking-metric-value"), muted(detail));
+        card.getStyleClass().add("booking-metric-card");
+        card.setMinWidth(150);
+        return card;
+    }
+
+    private void renderBookingResults(VBox results, java.util.List<AppDataStore.BookingRecord> bookings, String category, String query) {
+        java.util.List<AppDataStore.BookingRecord> matches = bookings.stream()
+                .filter(booking -> bookingMatchesCategory(booking, category))
+                .filter(booking -> bookingMatchesSearch(booking, query)).toList();
+        if (matches.isEmpty()) {
+            VBox empty = new VBox(9, label("⌂", "booking-empty-icon"), strong(bookings.isEmpty() ? "No bookings yet" : "No matching bookings"),
+                    muted(bookings.isEmpty() ? "Your package, stay, puja and service bookings will appear here."
+                            : "Try a different category or search term."));
+            empty.setAlignment(Pos.CENTER); empty.getStyleClass().add("booking-empty-state");
+            results.getChildren().setAll(empty);
+            return;
+        }
+        VBox cards = new VBox(12);
+        matches.forEach(booking -> cards.getChildren().add(bookingCard(booking)));
+        results.getChildren().setAll(cards);
+    }
+
+    private boolean bookingMatchesCategory(AppDataStore.BookingRecord booking, String category) {
+        return "All".equals(category) || categoryForBooking(booking).equals(category);
+    }
+
+    private boolean bookingMatchesSearch(AppDataStore.BookingRecord booking, String query) {
+        if (query == null || query.isBlank()) return true;
+        String text = (safeBookingText(booking.bookingId) + " " + safeBookingText(booking.title) + " "
+                + safeBookingText(booking.location) + " " + safeBookingText(booking.businessId)).toLowerCase(java.util.Locale.ROOT);
+        return text.contains(query.trim().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    private String categoryForBooking(AppDataStore.BookingRecord booking) {
+        String module = safeBookingText(booking.moduleType).toLowerCase(java.util.Locale.ROOT);
+        if (module.contains("stay")) return "Stay";
+        if (module.contains("puja")) return "Puja Services";
+        if (module.contains("package")) return "Kumbh Packages";
+        return "Business Services";
+    }
+
+    private String bookingBucket(AppDataStore.BookingRecord booking) {
+        String status = safeBookingText(booking.bookingStatus).toLowerCase(java.util.Locale.ROOT);
+        if (status.contains("cancel") || status.contains("reject")) return "Cancelled";
+        if (status.contains("complete") || status.contains("past")) return "Completed";
+        return "Upcoming";
+    }
+
+    private HBox bookingCard(AppDataStore.BookingRecord booking) {
+        StackPane visual = new StackPane(moduleIcon(safeBookingText(booking.moduleType).toLowerCase(java.util.Locale.ROOT), "booking-card-icon"));
+        visual.getStyleClass().add("booking-card-visual"); visual.setMinSize(100, 86); visual.setPrefSize(100, 86);
+        VBox copy = new VBox(5, strong(safeBookingText(booking.title)), badge(categoryForBooking(booking)),
+                muted("Booking ID: " + safeBookingText(booking.bookingId)),
+                muted(bookingPrimaryDetail(booking)),
+                muted("Booked " + formatBookingTimestamp(booking.createdAt)));
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        VBox status = new VBox(7, label(bookingAmount(booking), "booking-amount"), bookingStatusPill(booking.bookingStatus), paymentStatusPill(booking.paymentStatus));
+        status.setAlignment(Pos.CENTER_RIGHT);
+        Button view = new Button("View Booking"); view.getStyleClass().add("primary-button");
+        view.setOnAction(event -> root.setCenter(scroll(bookingDetailsPage(booking))));
+        HBox card = new HBox(15, visual, copy, status, view);
+        card.setAlignment(Pos.CENTER_LEFT); card.getStyleClass().add("booking-premium-card");
+        return card;
+    }
+
+    private String bookingPrimaryDetail(AppDataStore.BookingRecord booking) {
+        java.util.List<String> details = new java.util.ArrayList<>();
+        if (!safeBookingText(booking.dateText).isBlank()) details.add(booking.dateText);
+        if (!safeBookingText(booking.location).isBlank()) details.add(booking.location);
+        if (booking.nights > 0) details.add(booking.nights + (booking.nights == 1 ? " night" : " nights"));
+        if (booking.quantity > 0) details.add(booking.quantity + (booking.quantity == 1 ? " unit" : " units"));
+        return details.isEmpty() ? "Booking details available in your confirmation." : String.join("  •  ", details);
+    }
+
+    private Label bookingStatusPill(String value) { return bookingPill("Booking: " + safeBookingText(value), "booking-status-pill"); }
+    private Label paymentStatusPill(String value) { return bookingPill("Payment: " + safeBookingText(value), "booking-payment-pill"); }
+    private Label bookingPill(String value, String style) { Label pill = badge(value); pill.getStyleClass().add(style); return pill; }
+    private String bookingAmount(AppDataStore.BookingRecord booking) {
+        return booking.amountPaise > 0 ? "₹" + String.format(java.util.Locale.ROOT, "%,.2f", booking.amountPaise / 100.0) : "Amount not recorded";
+    }
+    private String safeBookingText(String value) { return value == null ? "" : value.trim(); }
+    private String formatBookingTimestamp(String value) {
+        try { return java.time.Instant.ofEpochMilli(Long.parseLong(value)).atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString(); }
+        catch (RuntimeException ignored) { return value == null || value.isBlank() ? "date unavailable" : value; }
+    }
+
+    private VBox bookingDetailsPage(AppDataStore.BookingRecord booking) {
+        Button back = new Button("← Back to My Bookings"); back.getStyleClass().add("pilgrim-small-action"); back.setOnAction(event -> showModulePage("bookings"));
+        StackPane visual = new StackPane(moduleIcon(safeBookingText(booking.moduleType).toLowerCase(java.util.Locale.ROOT), "booking-card-icon"));
+        visual.getStyleClass().add("booking-detail-visual"); visual.setMinSize(170, 135);
+        VBox intro = new VBox(6, strong(safeBookingText(booking.title)), badge(categoryForBooking(booking)), muted("Booking ID: " + safeBookingText(booking.bookingId)),
+                bookingStatusPill(booking.bookingStatus), paymentStatusPill(booking.paymentStatus));
+        HBox overview = new HBox(18, visual, intro); overview.setAlignment(Pos.CENTER_LEFT); overview.getStyleClass().add("booking-detail-hero");
+        VBox service = bookingDetailSection("Service Details", detailLine("Service", booking.title), detailLine("Category", categoryForBooking(booking)),
+                detailLine("Reference", booking.catalogItemId), detailLine("Quantity", booking.quantity > 0 ? String.valueOf(booking.quantity) : ""));
+        VBox customer = bookingDetailSection("Customer Details", detailLine("Customer", booking.customerName));
+        VBox schedule = bookingDetailSection("Date & Location", detailLine("Service / visit date", booking.dateText),
+                detailLine("Location", booking.location), detailLine("Nights", booking.nights > 0 ? String.valueOf(booking.nights) : ""));
+        VBox payment = bookingDetailSection("Payment Summary", detailLine("Total amount", bookingAmount(booking)),
+                detailLine("Payment status", booking.paymentStatus), detailLine("Booking status", booking.bookingStatus),
+                detailLine("Payment ID", booking.razorpayPaymentId), detailLine("Transaction reference", booking.internalPaymentId));
+        VBox timeline = bookingTimeline(booking);
+        HBox actions = new HBox(10);
+        AppDataStore.TicketRecord ticket = AppDataStore.ticketForBooking(booking.bookingId);
+        if (ticket != null && ("CONFIRMED".equalsIgnoreCase(booking.bookingStatus) || "UPCOMING".equalsIgnoreCase(booking.bookingStatus))) {
+            Button pass = new Button("View Ticket / Booking Pass"); pass.getStyleClass().add("primary-button"); pass.setOnAction(event -> TicketViewDialog.show(ticket)); actions.getChildren().add(pass);
+        }
+        if (!safeBookingText(booking.location).isBlank()) {
+            Button map = new Button("View Location"); map.getStyleClass().add("pilgrim-small-action");
+            map.setOnAction(event -> openUrl("https://www.google.com/maps/search/?api=1&query=" + java.net.URLEncoder.encode(booking.location, java.nio.charset.StandardCharsets.UTF_8)));
+            actions.getChildren().add(map);
+        }
+        return pageShell("Booking Details", "Your persisted booking and payment information.", back, overview, service, customer, schedule, payment, timeline, actions);
+    }
+
+    private VBox bookingDetailSection(String title, Node... lines) {
+        VBox section = new VBox(7, sectionTitle(title));
+        for (Node line : lines) if (line != null) section.getChildren().add(line);
+        section.getStyleClass().add("booking-detail-section"); return section;
+    }
+
+    private Node detailLine(String label, String value) {
+        if (value == null || value.isBlank()) return null;
+        return new HBox(8, muted(label), createSpacer(), strong(value));
+    }
+
+    private VBox bookingTimeline(AppDataStore.BookingRecord booking) {
+        FlowPane steps = new FlowPane(8, 8, badge("Booking Created"));
+        String status = safeBookingText(booking.bookingStatus).toLowerCase(java.util.Locale.ROOT);
+        String payment = safeBookingText(booking.paymentStatus).toLowerCase(java.util.Locale.ROOT);
+        if (payment.contains("paid") || payment.contains("verified")) steps.getChildren().add(badge("Payment Confirmed"));
+        if (status.contains("cancel") || status.contains("reject")) steps.getChildren().add(badge("Cancelled"));
+        else {
+            if (status.contains("confirm") || status.contains("upcoming") || status.contains("complete")) steps.getChildren().add(badge("Booking Confirmed"));
+            if (status.contains("complete") || status.contains("past")) steps.getChildren().add(badge("Completed"));
+            else if (status.contains("confirm") || status.contains("upcoming")) steps.getChildren().add(badge("Service Upcoming"));
+        }
+        VBox section = new VBox(7, sectionTitle("Booking Timeline"), steps); section.getStyleClass().add("booking-detail-section"); return section;
     }
 
     private VBox announcementPage() {
