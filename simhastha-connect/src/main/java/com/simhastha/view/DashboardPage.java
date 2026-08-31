@@ -268,8 +268,18 @@ public class DashboardPage {
                 metric("42", "Help Points"),
                 metric("24/7", "Support"));
 
+        // TEMPORARY RAZORPAY API TEST
+        // Remove after module payment integration is verified.
+        Button paymentTest = new Button("Test Razorpay Payment");
+        paymentTest.getStyleClass().add("developer-payment-test-button");
+        paymentTest.setOnAction(event -> paymentCoordinator.startDeveloperRazorpayTest(
+                root.getScene() == null ? null : root.getScene().getWindow()));
+        HBox developerTest = new HBox(paymentTest);
+        developerTest.setAlignment(Pos.CENTER_RIGHT);
+        developerTest.getStyleClass().add("developer-payment-test-row");
+
         return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and information platform",
-                searchBar(), services, announcementTicker(), lower, metrics);
+                searchBar(), services, announcementTicker(), lower, metrics, developerTest);
     }
 
     private HBox topControls() {

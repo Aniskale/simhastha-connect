@@ -1,26 +1,38 @@
 package com.simhastha.payment.ui;
 
+import java.awt.Desktop;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
 
 import com.simhastha.payment.CheckoutHandler;
 import com.simhastha.payment.PaymentOrder;
 import com.simhastha.payment.PaymentRequest;
 import com.simhastha.payment.PaymentResult;
 import com.simhastha.payment.PaymentStatus;
+import com.simhastha.payment.api.PaymentJson;
 import com.simhastha.view.ThemeManager;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 
 import javafx.application.Platform;
-import javafx.concurrent.Worker;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.control.Button;
+import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
-import javafx.scene.layout.BorderPane;
-import javafx.scene.web.WebEngine;
-import javafx.scene.web.WebView;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.Window;
-import netscape.javascript.JSObject;
 
 public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
 
@@ -40,26 +52,24 @@ public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
             dialog.initModality(Modality.WINDOW_MODAL);
         }
 
-        WebView webView = new WebView();
-        webView.setPrefSize(780, 640);
-        Label loading = new Label("Opening secure payment checkout...");
-        loading.getStyleClass().add("payment-status-text");
+        Label title = new Label("Complete the secure payment in your browser");
+        title.getStyleClass().add("payment-title");
+        Label status = new Label("Opening Razorpay Checkout...");
+        status.getStyleClass().add("payment-status-text");
+        status.setWrapText(true);
+        Hyperlink checkoutLink = new Hyperlink();
+        checkoutLink.setVisible(false);
+        checkoutLink.setManaged(false);
 
-        BorderPane root = new BorderPane(webView);
-        root.setTop(loading);
-        root.setPadding(new Insets(10));
-        root.getStyleClass().add("payment-checkout-root");
+        Button cancel = new Button("Cancel");
+        cancel.getStyleClass().add("back-button");
+        HBox actions = new HBox(10, cancel);
+        actions.setAlignment(Pos.CENTER_RIGHT);
 
-        WebEngine engine = webView.getEngine();
-        engine.getLoadWorker().stateProperty().addListener((observable, oldState, newState) -> {
-            if (newState == Worker.State.SUCCEEDED) {
-                JSObject window = (JSObject) engine.executeScript("window");
-                window.setMember("simhasthaPayment", new CheckoutBridge(dialog, order, result));
-            } else if (newState == Worker.State.FAILED && !result.isDone()) {
-                result.complete(PaymentResult.failed("Secure checkout could not be opened.", "CHECKOUT_LOAD_FAILED"));
-                dialog.close();
-            }
-        });
+        VBox root = new VBox(10, title, status, checkoutLink, actions);
+        root.setPadding(new Insets(20));
+        root.setPrefWidth(430);
+        root.getStyleClass().add("payment-dialog");
 
         dialog.setOnCloseRequest(event -> {
             if (!result.isDone()) {
@@ -67,22 +77,57 @@ public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
                         PaymentStatus.CANCELLED, "Payment checkout was cancelled.", "CHECKOUT_CANCELLED"));
             }
         });
+        cancel.setOnAction(event -> {
+            if (!result.isDone()) {
+                result.complete(new PaymentResult(order.internalPaymentId(), order.razorpayOrderId(), "", "",
+                        PaymentStatus.CANCELLED, "Payment checkout was cancelled.", "CHECKOUT_CANCELLED"));
+            }
+            dialog.close();
+        });
 
         Scene scene = new Scene(root);
         ThemeManager.addTheme(scene, this);
         ThemeManager.addListener(() -> ThemeManager.applyTo(root));
         dialog.setScene(scene);
-        engine.loadContent(checkoutHtml(request, order));
         dialog.show();
+
+        try {
+            BrowserCheckoutServer checkoutServer = new BrowserCheckoutServer(request, order, result, dialog);
+            URI checkoutUri = checkoutServer.start();
+            result.whenComplete((paymentResult, throwable) -> checkoutServer.stop());
+            checkoutLink.setText(checkoutUri.toString());
+            checkoutLink.setOnAction(event -> openBrowser(checkoutUri, result, dialog));
+            openBrowser(checkoutUri, result, dialog);
+            status.setText("Razorpay Checkout opened in your browser. Keep this window open until payment finishes.");
+            checkoutLink.setVisible(true);
+            checkoutLink.setManaged(true);
+        } catch (IOException exception) {
+            result.complete(PaymentResult.failed("Secure checkout could not be opened.", "CHECKOUT_LOAD_FAILED"));
+            dialog.close();
+        }
     }
 
-    private String checkoutHtml(PaymentRequest request, PaymentOrder order) {
+    private void openBrowser(URI checkoutUri, CompletableFuture<PaymentResult> result, Stage dialog) {
+        try {
+            if (!Desktop.isDesktopSupported() || !Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                throw new IOException("Desktop browser is unavailable.");
+            }
+            Desktop.getDesktop().browse(checkoutUri);
+        } catch (IOException | RuntimeException exception) {
+            if (!result.isDone()) {
+                result.complete(PaymentResult.failed("Secure checkout could not be opened.", "CHECKOUT_BROWSER_FAILED"));
+            }
+            dialog.close();
+        }
+    }
+
+    private String checkoutHtml(PaymentRequest request, PaymentOrder order, String token) {
         return """
                 <!doctype html>
                 <html>
                 <head>
                   <meta charset="utf-8">
-                  <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' https://checkout.razorpay.com; connect-src https://api.razorpay.com https://checkout.razorpay.com; img-src https: data:; style-src 'unsafe-inline';">
+                  <meta name="viewport" content="width=device-width, initial-scale=1">
                   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
                   <style>
                     body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: #fff8ed; color: #30190d; }
@@ -97,15 +142,27 @@ public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
                   <div class="shell">
                     <div>
                       <div class="title">Simhastha Connect Secure Payment</div>
-                      <div class="detail">Complete the checkout window to continue. Final confirmation will happen after secure verification.</div>
+                      <div class="detail" id="status">Complete checkout to continue. Final confirmation will happen after secure verification.</div>
                       <button onclick="openCheckout()">Pay Securely</button>
-                      <div class="muted">Do not close this window while payment is processing.</div>
+                      <div class="muted">Do not close the Simhastha Connect payment window while payment is processing.</div>
                     </div>
                   </div>
                   <script>
+                    var callbackToken = '%s';
+                    function notifyApp(path, payload) {
+                      return fetch(path + '?token=' + encodeURIComponent(callbackToken), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload || {})
+                      }).then(function() {
+                        document.getElementById('status').textContent = 'Payment response received. You can return to Simhastha Connect.';
+                      }).catch(function() {
+                        document.getElementById('status').textContent = 'Payment response could not reach Simhastha Connect. Please keep this page open and try again.';
+                      });
+                    }
                     function openCheckout() {
                       if (!window.Razorpay) {
-                        window.simhasthaPayment.failed('Razorpay checkout is unavailable.', 'RAZORPAY_UNAVAILABLE');
+                        notifyApp('/failure', { message: 'Razorpay checkout is unavailable.', code: 'RAZORPAY_UNAVAILABLE' });
                         return;
                       }
                       var options = {
@@ -117,20 +174,23 @@ public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
                         order_id: '%s',
                         prefill: { name: '%s', email: '%s', contact: '%s' },
                         notes: { bookingId: '%s', moduleType: '%s', internalPaymentId: '%s' },
-                        modal: { ondismiss: function() { window.simhasthaPayment.cancelled(); } },
+                        modal: { ondismiss: function() { notifyApp('/cancelled', {}); } },
                         handler: function(response) {
-                          window.simhasthaPayment.success(
-                            response.razorpay_payment_id || '',
-                            response.razorpay_order_id || '',
-                            response.razorpay_signature || ''
-                          );
+                          notifyApp('/callback', {
+                            razorpay_payment_id: response.razorpay_payment_id || '',
+                            razorpay_order_id: response.razorpay_order_id || '',
+                            razorpay_signature: response.razorpay_signature || ''
+                          });
                         },
                         theme: { color: '#b13b14' }
                       };
                       var checkout = new Razorpay(options);
                       checkout.on('payment.failed', function(response) {
                         var error = response && response.error ? response.error : {};
-                        window.simhasthaPayment.failed(error.description || 'Payment failed.', error.code || 'PAYMENT_FAILED');
+                        notifyApp('/failure', {
+                          message: error.description || 'Payment failed.',
+                          code: error.code || 'PAYMENT_FAILED'
+                        });
                       });
                       checkout.open();
                     }
@@ -139,6 +199,7 @@ public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
                 </body>
                 </html>
                 """.formatted(
+                escapeJs(token),
                 escapeJs(order.keyId()),
                 order.amount(),
                 escapeJs(order.currency()),
@@ -153,21 +214,68 @@ public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
     }
 
     private String escapeJs(String value) {
-        return value == null ? "" : value.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ");
+        return value == null ? "" : value.replace("\\", "\\\\").replace("'", "\\'")
+                .replace("\r", " ").replace("\n", " ");
     }
 
-    public static final class CheckoutBridge {
-        private final Stage dialog;
+    private String escapeHtml(String value) {
+        return value == null ? "" : value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
+    private final class BrowserCheckoutServer {
+        private final PaymentRequest request;
         private final PaymentOrder order;
         private final CompletableFuture<PaymentResult> result;
+        private final Stage dialog;
+        private final String token = UUID.randomUUID().toString();
+        private HttpServer server;
 
-        private CheckoutBridge(Stage dialog, PaymentOrder order, CompletableFuture<PaymentResult> result) {
-            this.dialog = dialog;
+        private BrowserCheckoutServer(PaymentRequest request, PaymentOrder order, CompletableFuture<PaymentResult> result,
+                Stage dialog) {
+            this.request = request;
             this.order = order;
             this.result = result;
+            this.dialog = dialog;
         }
 
-        public void success(String paymentId, String orderId, String signature) {
+        private URI start() throws IOException {
+            server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+            server.createContext("/checkout", this::handleCheckout);
+            server.createContext("/callback", this::handleCallback);
+            server.createContext("/cancelled", this::handleCancelled);
+            server.createContext("/failure", this::handleFailure);
+            server.setExecutor(Executors.newCachedThreadPool(runnable -> {
+                Thread thread = new Thread(runnable, "simhastha-razorpay-checkout");
+                thread.setDaemon(true);
+                return thread;
+            }));
+            server.start();
+            return URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/checkout");
+        }
+
+        private void stop() {
+            if (server != null) {
+                server.stop(0);
+            }
+        }
+
+        private void handleCheckout(HttpExchange exchange) throws IOException {
+            if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
+                send(exchange, 405, "Method not allowed.", "text/plain");
+                return;
+            }
+            send(exchange, 200, checkoutHtml(request, order, token), "text/html; charset=utf-8");
+        }
+
+        private void handleCallback(HttpExchange exchange) throws IOException {
+            if (!isValidPost(exchange)) {
+                return;
+            }
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            String paymentId = PaymentJson.value(body, "razorpay_payment_id");
+            String orderId = PaymentJson.value(body, "razorpay_order_id");
+            String signature = PaymentJson.value(body, "razorpay_signature");
+            send(exchange, 200, "Payment response received. Return to Simhastha Connect.", "text/plain");
             if (!result.isDone()) {
                 result.complete(new PaymentResult(order.internalPaymentId(), valueOr(orderId, order.razorpayOrderId()),
                         paymentId, signature, PaymentStatus.AUTHORIZED,
@@ -176,7 +284,11 @@ public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
             Platform.runLater(dialog::close);
         }
 
-        public void cancelled() {
+        private void handleCancelled(HttpExchange exchange) throws IOException {
+            if (!isValidPost(exchange)) {
+                return;
+            }
+            send(exchange, 200, "Payment cancelled. Return to Simhastha Connect.", "text/plain");
             if (!result.isDone()) {
                 result.complete(new PaymentResult(order.internalPaymentId(), order.razorpayOrderId(), "", "",
                         PaymentStatus.CANCELLED, "Payment checkout was cancelled.", "CHECKOUT_CANCELLED"));
@@ -184,12 +296,40 @@ public final class RazorpayWebViewCheckoutHandler implements CheckoutHandler {
             Platform.runLater(dialog::close);
         }
 
-        public void failed(String message, String errorCode) {
+        private void handleFailure(HttpExchange exchange) throws IOException {
+            if (!isValidPost(exchange)) {
+                return;
+            }
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            String message = valueOr(PaymentJson.value(body, "message"), "Payment failed.");
+            String code = valueOr(PaymentJson.value(body, "code"), "PAYMENT_FAILED");
+            send(exchange, 200, escapeHtml(message), "text/plain");
             if (!result.isDone()) {
                 result.complete(new PaymentResult(order.internalPaymentId(), order.razorpayOrderId(), "", "",
-                        PaymentStatus.FAILED, valueOr(message, "Payment failed."), valueOr(errorCode, "PAYMENT_FAILED")));
+                        PaymentStatus.FAILED, message, code));
             }
             Platform.runLater(dialog::close);
+        }
+
+        private boolean isValidPost(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                send(exchange, 405, "Method not allowed.", "text/plain");
+                return false;
+            }
+            if (!("token=" + token).equals(exchange.getRequestURI().getRawQuery())) {
+                send(exchange, 403, "Forbidden.", "text/plain");
+                return false;
+            }
+            return true;
+        }
+
+        private void send(HttpExchange exchange, int status, String body, String contentType) throws IOException {
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", contentType);
+            exchange.sendResponseHeaders(status, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(bytes);
+            }
         }
 
         private String valueOr(String value, String fallback) {

@@ -7,6 +7,8 @@ import java.util.Optional;
 
 public final class PaymentCatalog {
 
+    // Temporary developer fixture. Remove after module payment integration is verified.
+    public static final String DEV_RAZORPAY_TEST_ITEM_ID = "dev-razorpay-test";
     public static final String META_CATALOG_ITEM_ID = "catalogItemId";
     public static final String META_QUANTITY = "quantity";
     public static final String META_NIGHTS = "nights";
@@ -59,6 +61,11 @@ public final class PaymentCatalog {
 
     private static Map<String, CatalogItem> createItems() {
         Map<String, CatalogItem> items = new LinkedHashMap<>();
+        // TEMPORARY RAZORPAY API TEST
+        // Remove after module payment integration is verified.
+        add(items, new CatalogItem(DEV_RAZORPAY_TEST_ITEM_ID, PaymentModuleType.BUSINESS,
+                "Razorpay Test Payment", "Developer-only Test Mode payment request", new BigDecimal("10.00"),
+                "INR", "dev-test", "Developer Test", true, PaymentType.FULL, false));
         add(items, new CatalogItem("package-divine-nashik", PaymentModuleType.PACKAGE, "Divine Nashik Package",
                 "Ramkund, Trimbakeshwar and guided darshan support", new BigDecimal("1500.00"), "INR", "",
                 "Ramkund / Trimbakeshwar", true, PaymentType.FULL, false));

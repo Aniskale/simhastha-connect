@@ -5052,3 +5052,24 @@
     -fx-background-color: linear-gradient(to right, #8a0718, #c83333);
     -fx-text-fill: #ffffff;
 }
+
+/* TEMPORARY RAZORPAY API TEST: remove with the developer test button. */
+.developer-payment-test-row {
+    -fx-padding: 2 0 0 0;
+}
+
+.developer-payment-test-button {
+    -fx-background-color: transparent;
+    -fx-border-color: #c98a2c;
+    -fx-border-width: 1;
+    -fx-border-radius: 4;
+    -fx-background-radius: 4;
+    -fx-text-fill: #7a2418;
+    -fx-font-size: 11px;
+    -fx-padding: 7 12;
+}
+
+.developer-payment-test-button:hover,
+.developer-payment-test-button:focused {
+    -fx-background-color: rgba(201, 138, 44, 0.14);
+}
