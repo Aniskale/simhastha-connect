@@ -5,6 +5,7 @@
     "version": "0.2.0",
     "configurations": [
 
+
     
 
         {
@@ -19,7 +20,7 @@
             "request": "launch",
             "mainClass": "com.simhastha.Main",
             "projectName": "simhastha-connect",
-           "vmArgs": "--module-path \"D://SuperX//javafx-sdk-21.0.12//lib\" --add-modules javafx.controls,javafx.fxml"
+           "vmArgs": "--module-path \"D://SuperX//javafx-sdk-21.0.12//lib\" --add-modules javafx.controls,javafx.fxml,javafx.web"
         }
     ]
 }

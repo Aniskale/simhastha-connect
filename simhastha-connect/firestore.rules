@@ -37,11 +37,12 @@ service cloud.firestore {
     function approvedPublic() {
       return resource.data.approved == true
         || resource.data.status == "approved"
+        || resource.data.status == "active"
         || resource.data.published == true;
     }
 
     function ownsActiveBusiness(businessId) {
-      return isBusiness()
+      return isSignedIn()
         && exists(/databases/$(database)/documents/businesses/$(businessId))
         && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid
         && (
@@ -51,7 +52,7 @@ service cloud.firestore {
     }
 
     function ownsBusinessId(businessId) {
-      return isBusiness()
+      return isSignedIn()
         && exists(/databases/$(database)/documents/businesses/$(businessId))
         && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
     }
@@ -112,7 +113,10 @@ service cloud.firestore {
         && request.resource.data.approved == resource.data.approved
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'description', 'mobile', 'location', 'openingTime', 'closingTime',
-          'facilities', 'amenities', 'photoReferences', 'updatedAt'
+          'facilities', 'amenities', 'photoReferences', 'updatedAt',
+          'name', 'businessName', 'email', 'address', 'area', 'city',
+          'latitude', 'longitude', 'locationUpdatedAt', 'operatingHours',
+          'priceRange'
         ]);
 
       allow update, delete: if isAdmin();
@@ -247,13 +251,15 @@ service cloud.firestore {
 
     match /businessItems/{itemId} {
       allow read: if isAdmin()
-        || (isBusiness() && resource.data.ownerId == request.auth.uid)
+        || (isSignedIn()
+          && resource.data.ownerId == request.auth.uid
+          && ownsBusinessId(resource.data.businessId))
         || (resource.data.active == true
           && exists(/databases/$(database)/documents/businesses/$(resource.data.businessId))
           && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.approved == true
           && get(/databases/$(database)/documents/businesses/$(resource.data.businessId)).data.status in ['approved', 'active']);
 
-      allow create: if isBusiness()
+      allow create: if isSignedIn()
         && request.resource.data.ownerId == request.auth.uid
         && ownsActiveBusiness(request.resource.data.businessId)
         && request.resource.data.active is bool
@@ -261,7 +267,7 @@ service cloud.firestore {
         && request.resource.data.ownerId == get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerId;
 
       allow update: if isAdmin() || (
-        isBusiness()
+        isSignedIn()
         && resource.data.ownerId == request.auth.uid
         && request.resource.data.ownerId == resource.data.ownerId
         && request.resource.data.businessId == resource.data.businessId

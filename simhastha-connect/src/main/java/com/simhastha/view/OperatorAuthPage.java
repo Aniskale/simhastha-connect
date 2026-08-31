@@ -77,6 +77,8 @@ public class OperatorAuthPage {
         Label icon = AppUi.symbolIcon("\uE806", "auth-large-icon");
         Label title = new Label("Transport Operator Portal");
         title.getStyleClass().add("auth-visual-title");
+        title.setWrapText(true);
+        title.setMaxWidth(300);
 
         Label subtitle = new Label("Manage buses, routes, timings and fare information");
         subtitle.getStyleClass().add("auth-visual-subtitle");

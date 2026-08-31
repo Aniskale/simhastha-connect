@@ -6,6 +6,8 @@ import com.simhastha.gateway.firebase.FirebaseConfig;
 import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.dao.implementation.FirestoreBookingDao;
 import com.simhastha.dao.implementation.FirestoreBusinessDao;
+import com.simhastha.model.BusinessLocation;
+import com.simhastha.model.BusinessProfileUpdate;
 import com.simhastha.view.AppDataStore;
 
 import java.io.IOException;
@@ -45,6 +47,16 @@ public final class BusinessDashboardService {
     public void saveInventoryItem(FirestoreGateway.BusinessInventoryItem item, String idToken)
             throws IOException, InterruptedException {
         businessDao.saveInventoryItem(item, idToken);
+    }
+
+    public void updateBusinessProfile(BusinessProfileUpdate update, String idToken)
+            throws IOException, InterruptedException {
+        businessDao.updateProfile(update, idToken);
+    }
+
+    public void updateBusinessLocation(String businessId, BusinessLocation location, String idToken)
+            throws IOException, InterruptedException {
+        businessDao.updateLocation(businessId, location, idToken);
     }
 
     public List<AppDataStore.BookingRecord> findBookingsForBusiness(String businessId, String idToken)

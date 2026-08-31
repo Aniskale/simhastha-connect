@@ -2,6 +2,8 @@ package com.simhastha.dao.implementation;
 
 import com.simhastha.dao.BusinessDao;
 import com.simhastha.gateway.firebase.FirestoreGateway;
+import com.simhastha.model.BusinessLocation;
+import com.simhastha.model.BusinessProfileUpdate;
 import com.simhastha.view.AppDataStore;
 import com.simhastha.view.BusinessAuthPage;
 
@@ -23,6 +25,11 @@ public final class FirestoreBusinessDao implements BusinessDao {
     }
 
     @Override
+    public List<AppDataStore.BusinessRecord> findPublic(String idToken) throws IOException, InterruptedException {
+        return gateway.loadPublicBusinesses(idToken);
+    }
+
+    @Override
     public Optional<FirestoreGateway.BusinessProfile> findByOwner(String ownerId, String idToken)
             throws IOException, InterruptedException {
         return Optional.ofNullable(gateway.loadBusinessForOwner(ownerId, idToken));
@@ -32,6 +39,12 @@ public final class FirestoreBusinessDao implements BusinessDao {
     public List<FirestoreGateway.BusinessInventoryItem> findInventory(String businessId, String ownerId, String idToken)
             throws IOException, InterruptedException {
         return gateway.loadBusinessItems(businessId, ownerId, idToken);
+    }
+
+    @Override
+    public List<FirestoreGateway.BusinessInventoryItem> findPublicInventory(String businessId, String idToken)
+            throws IOException, InterruptedException {
+        return gateway.loadPublicBusinessItems(businessId, idToken);
     }
 
     @Override
@@ -47,8 +60,19 @@ public final class FirestoreBusinessDao implements BusinessDao {
     }
 
     @Override
+    public void updateProfile(BusinessProfileUpdate update, String idToken) throws IOException, InterruptedException {
+        gateway.updateBusinessProfile(update, idToken);
+    }
+
+    @Override
     public void updateStatus(String businessId, String status, boolean approved, String idToken)
             throws IOException, InterruptedException {
         gateway.updateDocumentStatus("businesses", businessId, status, approved, idToken);
+    }
+
+    @Override
+    public void updateLocation(String businessId, BusinessLocation location, String idToken)
+            throws IOException, InterruptedException {
+        gateway.updateBusinessLocation(businessId, location, idToken);
     }
 }

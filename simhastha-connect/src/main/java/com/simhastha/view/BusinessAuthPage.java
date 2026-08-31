@@ -77,6 +77,8 @@ public class BusinessAuthPage {
         Label icon = AppUi.symbolIcon("\uE719", "auth-large-icon");
         Label title = new Label("Local Business Portal");
         title.getStyleClass().add("auth-visual-title");
+        title.setWrapText(true);
+        title.setMaxWidth(300);
 
         Label subtitle = new Label("Connect your services with Simhastha pilgrims");
         subtitle.getStyleClass().add("auth-visual-subtitle");
@@ -362,6 +364,12 @@ public class BusinessAuthPage {
         public final String mobile;
         public final String email;
         public final String location;
+        public final String address;
+        public final String area;
+        public final String city;
+        public final String latitude;
+        public final String longitude;
+        public final String locationUpdatedAt;
         public final List<String> services = new ArrayList<>();
         public final List<String> bookings = new ArrayList<>();
         private final String password;
@@ -374,6 +382,12 @@ public class BusinessAuthPage {
             this.mobile = mobile;
             this.email = email;
             this.location = location;
+            this.address = location;
+            this.area = "";
+            this.city = "";
+            this.latitude = "";
+            this.longitude = "";
+            this.locationUpdatedAt = "";
             this.password = password;
         }
     }

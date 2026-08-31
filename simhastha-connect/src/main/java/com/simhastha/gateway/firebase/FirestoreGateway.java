@@ -1,6 +1,9 @@
 package com.simhastha.gateway.firebase;
 
 import com.simhastha.util.AppSession;
+import com.simhastha.model.BusinessLocation;
+import com.simhastha.model.BusinessMedia;
+import com.simhastha.model.BusinessProfileUpdate;
 import com.simhastha.view.AppDataStore;
 import com.simhastha.view.BusinessAuthPage;
 import com.simhastha.view.OperatorAuthPage;
@@ -14,13 +17,18 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class FirestoreGateway {
 
+    private static final Logger LOGGER = Logger.getLogger(FirestoreGateway.class.getName());
     private static final String ROOT = "https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents";
     private static final Pattern DOCUMENT_PATTERN = Pattern.compile("\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\".*?\"fields\"\\s*:\\s*\\{(.*?)\\}\\s*(?:,\\s*\"createTime\"|,\\s*\"updateTime\"|\\})", Pattern.DOTALL);
     private static final Pattern STRING_FIELD_PATTERN = Pattern.compile("\"%s\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"(.*?)\"\\s*\\}", Pattern.DOTALL);
@@ -129,10 +137,79 @@ public final class FirestoreGateway {
     public List<AppDataStore.BusinessRecord> loadBusinesses(String idToken) throws IOException, InterruptedException {
         List<AppDataStore.BusinessRecord> records = new ArrayList<>();
         for (Document document : loadCollectionDocuments("businesses", idToken)) {
+            AppDataStore.BusinessRecord record = businessFrom(document);
+            if (record != null) {
+                records.add(record);
+            }
+        }
+        return records;
+    }
+
+    /**
+     * Reads only documents covered by the public Firestore rule. A full
+     * collection GET is rejected when the collection also contains pending or
+     * rejected businesses, even though approved documents are public.
+     */
+    public List<AppDataStore.BusinessRecord> loadPublicBusinesses(String idToken)
+            throws IOException, InterruptedException {
+        Map<String, Document> documents = new LinkedHashMap<>();
+        IOException firstPermissionFailure = null;
+        try {
+            addPublicBusinessQuery(documents, "approved", "booleanValue", "true", idToken);
+        } catch (IOException exception) {
+            firstPermissionFailure = exception;
+        }
+        try {
+            addPublicBusinessQuery(documents, "status", "stringValue", "approved", idToken);
+        } catch (IOException exception) {
+            if (firstPermissionFailure == null) firstPermissionFailure = exception;
+        }
+        try {
+            addPublicBusinessQuery(documents, "status", "stringValue", "active", idToken);
+        } catch (IOException exception) {
+            if (firstPermissionFailure == null) firstPermissionFailure = exception;
+        }
+        try {
+            addPublicBusinessQuery(documents, "published", "booleanValue", "true", idToken);
+        } catch (IOException exception) {
+            if (firstPermissionFailure == null) firstPermissionFailure = exception;
+        }
+        if (documents.isEmpty() && firstPermissionFailure != null) {
+            throw firstPermissionFailure;
+        }
+
+        List<AppDataStore.BusinessRecord> records = new ArrayList<>();
+        for (Document document : documents.values()) {
+            AppDataStore.BusinessRecord record = businessFrom(document);
+            if (record != null) {
+                records.add(record);
+            }
+        }
+        return records;
+    }
+
+    private void addPublicBusinessQuery(Map<String, Document> target, String fieldName, String valueType,
+            String value, String idToken) throws IOException, InterruptedException {
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"businesses\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\""
+                + escape(fieldName) + "\"},\"op\":\"EQUAL\",\"value\":{\""
+                + valueType + "\":" + ("stringValue".equals(valueType)
+                        ? "\"" + escape(value) + "\""
+                        : value)
+                + "}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId()))
+                + ":runQuery?key=" + enc(config.apiKey())), query, idToken);
+        for (Document document : parseDocuments(json)) {
+            target.putIfAbsent(document.id, document);
+        }
+    }
+
+    private AppDataStore.BusinessRecord businessFrom(Document document) {
+        try {
             String fields = document.fields;
             String ownerId = ownerIdFromBusinessDocument(document);
             String approved = boolField(fields, "approved");
-            records.add(new AppDataStore.BusinessRecord(
+            return new AppDataStore.BusinessRecord(
                     document.id,
                     ownerId,
                     field(fields, "businessName"),
@@ -140,6 +217,15 @@ public final class FirestoreGateway {
                     field(fields, "category"),
                     field(fields, "description"),
                     field(fields, "location"),
+                    field(fields, "address"),
+                    field(fields, "area"),
+                    field(fields, "city"),
+                    firstNonBlank(field(fields, "latitude"), numberField(fields, "latitude"), field(fields, "lat"),
+                            numberField(fields, "lat")),
+                    firstNonBlank(field(fields, "longitude"), numberField(fields, "longitude"),
+                            field(fields, "lng"), numberField(fields, "lng"), field(fields, "lon"),
+                            numberField(fields, "lon")),
+                    field(fields, "locationUpdatedAt"),
                     field(fields, "mobile"),
                     field(fields, "email"),
                     firstNonBlank(field(fields, "operatingHours"), operatingHours(fields)),
@@ -147,9 +233,11 @@ public final class FirestoreGateway {
                     field(fields, "status"),
                     "true".equalsIgnoreCase(approved),
                     field(fields, "createdAt"),
-                    field(fields, "updatedAt")));
+                    field(fields, "updatedAt"));
+        } catch (RuntimeException exception) {
+            LOGGER.log(Level.WARNING, "Skipping malformed business document: " + document.id, exception);
         }
-        return records;
+        return null;
     }
 
     public List<AppDataStore.TransportOperatorRecord> loadTransportOperators(String idToken)
@@ -582,6 +670,12 @@ public final class FirestoreGateway {
                 fieldJson("mobile", account.mobile),
                 fieldJson("email", account.email),
                 fieldJson("location", account.location),
+                fieldJson("address", account.address),
+                fieldJson("area", account.area),
+                fieldJson("city", account.city),
+                fieldJson("latitude", account.latitude),
+                fieldJson("longitude", account.longitude),
+                fieldJson("locationUpdatedAt", account.locationUpdatedAt),
                 fieldJson("description", account.category + " service for Simhastha pilgrims"),
                 fieldJson("operatingHours", "Not provided"),
                 fieldJson("priceRange", "Not provided"),
@@ -613,18 +707,78 @@ public final class FirestoreGateway {
         String fields = extractFieldsObject(response.body());
         String resolvedOwnerId = valueOr(ownerId, field(fields, "ownerId"));
         return new BusinessProfile(ownerId, resolvedOwnerId, field(fields, "businessName"), field(fields, "ownerName"),
-                field(fields, "category"), field(fields, "location"), field(fields, "description"),
+                field(fields, "category"), field(fields, "location"), field(fields, "address"), field(fields, "area"),
+                field(fields, "city"), firstNonBlank(field(fields, "latitude"), numberField(fields, "latitude"),
+                        field(fields, "lat"), numberField(fields, "lat")),
+                firstNonBlank(field(fields, "longitude"), numberField(fields, "longitude"), field(fields, "lng"),
+                        numberField(fields, "lng"), field(fields, "lon"), numberField(fields, "lon")),
+                field(fields, "locationUpdatedAt"), field(fields, "description"), field(fields, "mobile"),
+                field(fields, "email"), firstNonBlank(field(fields, "operatingHours"), operatingHours(fields)),
+                field(fields, "priceRange"),
                 field(fields, "status"), boolField(fields, "approved"));
+    }
+
+    public void updateBusinessLocation(String businessId, BusinessLocation location, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String updatedAt = firstNonBlank(location.locationUpdatedAt(), now);
+        String json = fieldsJson(
+                fieldJson("location", location.displayText()),
+                fieldJson("address", location.address()),
+                fieldJson("area", location.area()),
+                fieldJson("city", location.city()),
+                fieldJson("latitude", location.latitude()),
+                fieldJson("longitude", location.longitude()),
+                fieldJson("locationUpdatedAt", updatedAt),
+                fieldJson("updatedAt", now));
+        sendAuthorizedPatch(URI.create(documentUrl("businesses", businessId)
+                        + "&updateMask.fieldPaths=location&updateMask.fieldPaths=address"
+                        + "&updateMask.fieldPaths=area&updateMask.fieldPaths=city"
+                        + "&updateMask.fieldPaths=latitude&updateMask.fieldPaths=longitude"
+                        + "&updateMask.fieldPaths=locationUpdatedAt&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void updateBusinessProfile(BusinessProfileUpdate update, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("businessName", update.businessName()),
+                fieldJson("description", update.description()),
+                fieldJson("mobile", update.mobile()),
+                fieldJson("email", update.email()),
+                fieldJson("address", update.address()),
+                fieldJson("area", update.area()),
+                fieldJson("city", update.city()),
+                fieldJson("location", joinLocation(update.address(), update.area(), update.city())),
+                fieldJson("operatingHours", update.operatingHours()),
+                fieldJson("priceRange", update.priceRange()),
+                fieldJson("updatedAt", now));
+        sendAuthorizedPatch(URI.create(documentUrl("businesses", update.businessId())
+                        + "&updateMask.fieldPaths=businessName&updateMask.fieldPaths=description"
+                        + "&updateMask.fieldPaths=mobile&updateMask.fieldPaths=email"
+                        + "&updateMask.fieldPaths=address&updateMask.fieldPaths=area"
+                        + "&updateMask.fieldPaths=city&updateMask.fieldPaths=location"
+                        + "&updateMask.fieldPaths=operatingHours&updateMask.fieldPaths=priceRange"
+                        + "&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
     }
 
     public List<BusinessInventoryItem> loadBusinessItems(String businessId, String ownerId, String idToken)
             throws IOException, InterruptedException {
-        // Use an owner-constrained Firestore query.  Listing the entire collection
-        // would be rejected by the owner-scoped security rule and could leak data.
+        if (!notBlank(businessId) || !notBlank(ownerId)) {
+            return List.of();
+        }
+        // Owner inventory must be scoped in Firestore by the canonical business doc id
+        // and the authenticated owner id. Rules reject broad owner-only collection reads.
         String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"businessItems\"}],"
-                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"ownerId\"},"
-                + "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + escape(ownerId) + "\"}}}}}";
-        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())), query, idToken);
+                + "\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"businessId\"},\"op\":\"EQUAL\","
+                + "\"value\":{\"stringValue\":\"" + escape(businessId) + "\"}}},"
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"ownerId\"},\"op\":\"EQUAL\","
+                + "\"value\":{\"stringValue\":\"" + escape(ownerId) + "\"}}}]}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId()))
+                + ":runQuery?key=" + enc(config.apiKey())), query, idToken);
         List<BusinessInventoryItem> result = new ArrayList<>();
         for (Document document : parseDocuments(json)) {
             String fields = document.fields;
@@ -637,6 +791,35 @@ public final class FirestoreGateway {
                     field(fields, "totalUnits"), field(fields, "availableUnits"), field(fields, "stock"),
                     field(fields, "facilities"), field(fields, "availability"),
                     "true".equalsIgnoreCase(boolField(fields, "active"))));
+        }
+        return result;
+    }
+
+    public List<BusinessInventoryItem> loadPublicBusinessItems(String businessId, String idToken)
+            throws IOException, InterruptedException {
+        if (businessId == null || businessId.isBlank()) return List.of();
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"businessItems\"}],"
+                + "\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"businessId\"},\"op\":\"EQUAL\","
+                + "\"value\":{\"stringValue\":\"" + escape(businessId) + "\"}}},"
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"active\"},\"op\":\"EQUAL\","
+                + "\"value\":{\"booleanValue\":true}}}]}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId()))
+                + ":runQuery?key=" + enc(config.apiKey())), query, idToken);
+        List<BusinessInventoryItem> result = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            String fields = document.fields;
+            if (!businessId.equals(field(fields, "businessId"))
+                    || !"true".equalsIgnoreCase(boolField(fields, "active"))) continue;
+            try {
+                result.add(new BusinessInventoryItem(document.id, field(fields, "businessId"),
+                        field(fields, "ownerId"), field(fields, "category"), field(fields, "itemType"),
+                        field(fields, "name"), field(fields, "description"), field(fields, "price"),
+                        field(fields, "capacity"), field(fields, "totalUnits"), field(fields, "availableUnits"),
+                        field(fields, "stock"), field(fields, "facilities"), field(fields, "availability"), true));
+            } catch (RuntimeException exception) {
+                LOGGER.log(Level.WARNING, "Skipping malformed public business item " + document.id, exception);
+            }
         }
         return result;
     }
@@ -839,7 +1022,12 @@ public final class FirestoreGateway {
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw new IOException("Firestore read failed: " + response.statusCode());
+            String detail = response.body() == null ? "" : response.body().replaceAll("\\s+", " ").trim();
+            if (detail.length() > 300) {
+                detail = detail.substring(0, 300);
+            }
+            throw new IOException("Firestore read failed: " + response.statusCode()
+                    + (detail.isBlank() ? "" : " - " + detail));
         }
         return response.body();
     }
@@ -851,7 +1039,7 @@ public final class FirestoreGateway {
                 .POST(HttpRequest.BodyPublishers.ofString(json))
                 .build(), HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw new IOException("Firestore query failed: " + response.statusCode());
+            throw new IOException("Firestore query failed: " + response.statusCode() + errorDetail(response.body()));
         }
         return response.body();
     }
@@ -900,8 +1088,16 @@ public final class FirestoreGateway {
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw new IOException("Firestore write failed: " + response.statusCode());
+            throw new IOException("Firestore write failed: " + response.statusCode() + errorDetail(response.body()));
         }
+    }
+
+    private String errorDetail(String body) {
+        String detail = body == null ? "" : body.replaceAll("\\s+", " ").trim();
+        if (detail.length() > 300) {
+            detail = detail.substring(0, 300);
+        }
+        return detail.isBlank() ? "" : " - " + detail;
     }
 
     private HttpRequest.Builder authorizedBuilder(URI uri, String idToken) {
@@ -1001,6 +1197,14 @@ public final class FirestoreGateway {
             }
         }
         return "";
+    }
+
+    private String joinLocation(String address, String area, String city) {
+        List<String> parts = new ArrayList<>();
+        if (notBlank(address)) parts.add(address.trim());
+        if (notBlank(area) && parts.stream().noneMatch(value -> value.equalsIgnoreCase(area.trim()))) parts.add(area.trim());
+        if (notBlank(city) && parts.stream().noneMatch(value -> value.equalsIgnoreCase(city.trim()))) parts.add(city.trim());
+        return String.join(", ", parts);
     }
 
     private int parseInt(String value, int fallback) {
@@ -1185,7 +1389,9 @@ public final class FirestoreGateway {
     }
 
     public record BusinessProfile(String businessId, String ownerId, String businessName, String ownerName,
-            String category, String location, String description, String status, String approved) {
+            String category, String location, String address, String area, String city, String latitude,
+            String longitude, String locationUpdatedAt, String description, String mobile, String email,
+            String operatingHours, String priceRange, String status, String approved) {
     }
 
     public record BusinessInventoryItem(String itemId, String businessId, String ownerId, String category,

@@ -14,12 +14,16 @@ import com.simhastha.dao.implementation.FirestoreOperatorDao;
 import com.simhastha.dao.implementation.FirestoreUserDao;
 import com.simhastha.gateway.firebase.FirebaseConfig;
 import com.simhastha.gateway.firebase.FirestoreGateway;
+import com.simhastha.model.BusinessMedia;
+import com.simhastha.model.PublicBusinessItem;
 import com.simhastha.util.AppSession;
 
+import java.util.LinkedHashMap;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -41,6 +45,9 @@ public final class AppDataStore {
     private static final List<TicketRecord> tickets = new ArrayList<>();
     private static final List<UserRecord> users = new ArrayList<>();
     private static final List<BusinessRecord> businesses = new ArrayList<>();
+    private static final Map<String, List<BusinessMedia>> businessMedia = new LinkedHashMap<>();
+    private static final Map<String, String> businessItemPhotos = new LinkedHashMap<>();
+    private static final Map<String, List<PublicBusinessItem>> businessItems = new LinkedHashMap<>();
     private static final List<TransportOperatorRecord> transportOperators = new ArrayList<>();
     private static final List<LostFoundCaseRecord> lostFoundCases = new ArrayList<>();
     private static final List<RouteRecord> transportRoutes = new ArrayList<>();
@@ -160,6 +167,59 @@ public final class AppDataStore {
 
     public static List<BusinessRecord> businesses() {
         return businesses;
+    }
+
+    public static void rememberBusinessMedia(String businessId, List<BusinessMedia> media) {
+        if (businessId == null || businessId.isBlank()) return;
+        businessMedia.put(businessId, media == null ? List.of() : List.copyOf(media));
+    }
+
+    public static List<BusinessMedia> businessMediaFor(String businessId) {
+        if (businessId == null || businessId.isBlank()) return List.of();
+        return businessMedia.getOrDefault(businessId, List.of());
+    }
+
+    public static void rememberBusinessItemPhoto(String itemId, String photoUrl) {
+        if (itemId == null || itemId.isBlank()) return;
+        if (photoUrl == null || photoUrl.isBlank()) businessItemPhotos.remove(itemId);
+        else businessItemPhotos.put(itemId, photoUrl);
+    }
+
+    public static String businessItemPhotoFor(String itemId) {
+        if (itemId == null || itemId.isBlank()) return "";
+        return businessItemPhotos.getOrDefault(itemId, "");
+    }
+
+    public static void rememberBusinessItem(PublicBusinessItem item) {
+        if (item == null || item.businessId() == null || item.businessId().isBlank()
+                || item.itemId() == null || item.itemId().isBlank()) return;
+        List<PublicBusinessItem> current = new ArrayList<>(businessItems.getOrDefault(item.businessId(), List.of()));
+        current.removeIf(existing -> item.itemId().equals(existing.itemId()));
+        current.add(item);
+        businessItems.put(item.businessId(), List.copyOf(current));
+    }
+
+    public static List<PublicBusinessItem> businessItemsFor(String businessId) {
+        if (businessId == null || businessId.isBlank()) return List.of();
+        return businessItems.getOrDefault(businessId, List.of());
+    }
+
+    public static void removeBusinessItem(String businessId, String itemId) {
+        if (businessId == null || businessId.isBlank() || itemId == null || itemId.isBlank()) return;
+        List<PublicBusinessItem> current = new ArrayList<>(businessItems.getOrDefault(businessId, List.of()));
+        current.removeIf(item -> itemId.equals(item.itemId()));
+        businessItems.put(businessId, List.copyOf(current));
+    }
+
+    public static void rememberPublicBusiness(com.simhastha.model.PublicBusinessListing listing) {
+        if (listing == null || listing.businessId() == null || listing.businessId().isBlank()) return;
+        businesses.removeIf(existing -> listing.businessId().equals(existing.businessId));
+        businesses.add(new BusinessRecord(listing.businessId(), listing.ownerId(), listing.name(), "", listing.category(),
+                listing.description(), listing.location(), listing.address(), listing.area(), listing.city(),
+                listing.latitude(), listing.longitude(), listing.locationUpdatedAt(), listing.mobile(), listing.email(),
+                listing.operatingHours(), listing.priceRange(), "active", true, "", ""));
+        rememberBusinessMedia(listing.businessId(), listing.media());
+        for (PublicBusinessItem item : listing.items()) rememberBusinessItem(item);
     }
 
     public static BusinessRecord businessForOwner(String ownerId) {
@@ -532,6 +592,12 @@ public final class AppDataStore {
         public final String category;
         public final String description;
         public final String location;
+        public final String address;
+        public final String area;
+        public final String city;
+        public final String latitude;
+        public final String longitude;
+        public final String locationUpdatedAt;
         public final String mobile;
         public final String email;
         public final String operatingHours;
@@ -544,6 +610,14 @@ public final class AppDataStore {
         public BusinessRecord(String businessId, String ownerId, String businessName, String ownerName, String category,
                 String description, String location, String mobile, String email, String operatingHours,
                 String priceRange, String status, boolean approved, String createdAt, String updatedAt) {
+            this(businessId, ownerId, businessName, ownerName, category, description, location, "", "", "", "", "",
+                    "", mobile, email, operatingHours, priceRange, status, approved, createdAt, updatedAt);
+        }
+
+        public BusinessRecord(String businessId, String ownerId, String businessName, String ownerName, String category,
+                String description, String location, String address, String area, String city, String latitude,
+                String longitude, String locationUpdatedAt, String mobile, String email, String operatingHours,
+                String priceRange, String status, boolean approved, String createdAt, String updatedAt) {
             this.businessId = clean(businessId);
             this.ownerId = clean(ownerId);
             this.businessName = clean(businessName);
@@ -551,6 +625,12 @@ public final class AppDataStore {
             this.category = clean(category);
             this.description = clean(description);
             this.location = clean(location);
+            this.address = clean(address);
+            this.area = clean(area);
+            this.city = clean(city);
+            this.latitude = clean(latitude);
+            this.longitude = clean(longitude);
+            this.locationUpdatedAt = clean(locationUpdatedAt);
             this.mobile = clean(mobile);
             this.email = clean(email);
             this.operatingHours = clean(operatingHours);
@@ -563,7 +643,8 @@ public final class AppDataStore {
 
         public BusinessRecord withStatus(String status, boolean approved) {
             return new BusinessRecord(businessId, ownerId, businessName, ownerName, category, description, location,
-                    mobile, email, operatingHours, priceRange, status, approved, createdAt,
+                    address, area, city, latitude, longitude, locationUpdatedAt, mobile, email, operatingHours,
+                    priceRange, status, approved, createdAt,
                     String.valueOf(System.currentTimeMillis()));
         }
     }
@@ -845,8 +926,9 @@ public final class AppDataStore {
                 // Keep the last known user snapshot if user listing is temporarily unavailable.
             }
             try {
+                List<BusinessRecord> latestBusinesses = businessDao.findAll(idToken);
                 businesses.clear();
-                businesses.addAll(businessDao.findAll(idToken));
+                businesses.addAll(latestBusinesses);
             } catch (Exception ignored) {
                 // Business registry is optional for general dashboard startup.
             }

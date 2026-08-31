@@ -1,6 +1,8 @@
 package com.simhastha.controller;
 
 import com.simhastha.gateway.firebase.FirestoreGateway;
+import com.simhastha.model.BusinessLocation;
+import com.simhastha.model.BusinessProfileUpdate;
 import com.simhastha.service.BusinessDashboardService;
 import com.simhastha.view.AppDataStore;
 
@@ -29,6 +31,16 @@ public final class BusinessDashboardController {
     public void saveInventoryItem(FirestoreGateway.BusinessInventoryItem item, String idToken)
             throws IOException, InterruptedException {
         service.saveInventoryItem(item, idToken);
+    }
+
+    public void updateBusinessProfile(BusinessProfileUpdate update, String idToken)
+            throws IOException, InterruptedException {
+        service.updateBusinessProfile(update, idToken);
+    }
+
+    public void updateBusinessLocation(String businessId, BusinessLocation location, String idToken)
+            throws IOException, InterruptedException {
+        service.updateBusinessLocation(businessId, location, idToken);
     }
 
     public List<AppDataStore.BookingRecord> findBookingsForBusiness(String businessId, String idToken)

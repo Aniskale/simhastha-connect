@@ -4,17 +4,22 @@ import com.simhastha.dao.BusinessDao;
 import com.simhastha.dao.implementation.FirestoreBusinessDao;
 import com.simhastha.gateway.firebase.FirebaseConfig;
 import com.simhastha.gateway.firebase.FirestoreGateway;
+import com.simhastha.model.BusinessMedia;
 import com.simhastha.model.PublicBusinessItem;
 import com.simhastha.model.PublicBusinessListing;
 import com.simhastha.view.AppDataStore;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class BusinessMarketplaceService {
-
+    private static final Logger LOGGER = Logger.getLogger(BusinessMarketplaceService.class.getName());
     private final FirestoreGateway gateway;
     private final BusinessDao businessDao;
 
@@ -32,50 +37,76 @@ public final class BusinessMarketplaceService {
     }
 
     public List<PublicBusinessListing> loadApprovedBusinesses(String idToken) throws IOException, InterruptedException {
-        List<AppDataStore.BusinessRecord> records = gateway.isEnabled()
-                ? businessDao.findAll(idToken)
-                : AppDataStore.businesses();
+        List<AppDataStore.BusinessRecord> records;
+        try {
+            records = gateway.isEnabled() ? businessDao.findPublic(idToken) : AppDataStore.businesses();
+        } catch (IOException | InterruptedException exception) {
+            LOGGER.log(Level.WARNING, "Approved business records could not be loaded.", exception);
+            if (exception instanceof InterruptedException) Thread.currentThread().interrupt();
+            records = AppDataStore.businesses();
+            if (records.isEmpty()) {
+                throw exception;
+            }
+        }
         List<PublicBusinessListing> listings = new ArrayList<>();
         for (AppDataStore.BusinessRecord business : records) {
-            if (!isPubliclyVisible(business)) {
-                continue;
+            try {
+                if (!isPubliclyVisible(business)) continue;
+                listings.add(new PublicBusinessListing(
+                        business.businessId, business.ownerId, valueOr(business.businessName, "Verified Business"),
+                        business.category, userCategory(business.category), business.description, business.location,
+                        business.address, business.area, business.city, business.latitude, business.longitude,
+                        business.locationUpdatedAt, business.mobile, business.email, business.operatingHours,
+                        business.priceRange, mediaFor(business),
+                        loadPublicItems(business, idToken)));
+            } catch (RuntimeException exception) {
+                LOGGER.log(Level.WARNING, "Skipping malformed business record: " + safeBusinessId(business), exception);
             }
-            listings.add(new PublicBusinessListing(
-                    business.businessId,
-                    valueOr(business.businessName, "Verified Business"),
-                    business.category,
-                    userCategory(business.category),
-                    business.description,
-                    business.location,
-                    business.operatingHours,
-                    business.priceRange,
-                    loadPublicItems(business, idToken)));
         }
         return listings;
     }
 
     private List<PublicBusinessItem> loadPublicItems(AppDataStore.BusinessRecord business, String idToken) {
-        if (!gateway.isEnabled() || business.businessId.isBlank() || business.ownerId.isBlank()) {
-            return List.of();
-        }
+        if (business == null || business.businessId == null || business.businessId.isBlank()) return List.of();
+        Map<String, PublicBusinessItem> merged = new LinkedHashMap<>();
         try {
-            return businessDao.findInventory(business.businessId, business.ownerId, idToken).stream()
+            if (gateway.isEnabled()) businessDao.findPublicInventory(business.businessId, idToken).stream()
                     .filter(FirestoreGateway.BusinessInventoryItem::active)
                     .map(item -> new PublicBusinessItem(item.itemId(), item.businessId(), item.name(),
                             item.itemType(), item.description(), item.price(), item.totalUnits(),
-                            item.availableUnits(), item.stock(), item.availability()))
-                    .toList();
-        } catch (Exception ignored) {
-            return List.of();
+                            item.availableUnits(), item.stock(), item.facilities(), item.availability(),
+                            AppDataStore.businessItemPhotoFor(item.itemId())))
+                    .forEach(item -> merged.put(item.itemId(), item));
+        } catch (Exception exception) {
+            LOGGER.log(Level.FINE, "Business inventory could not be loaded for " + business.businessId, exception);
         }
+        addLocalItems(merged, AppDataStore.businessItemsFor(business.businessId));
+        if (business.ownerId != null && !business.ownerId.equals(business.businessId)) {
+            addLocalItems(merged, AppDataStore.businessItemsFor(business.ownerId));
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private void addLocalItems(Map<String, PublicBusinessItem> merged, List<PublicBusinessItem> localItems) {
+        for (PublicBusinessItem item : localItems) {
+            PublicBusinessItem existing = merged.get(item.itemId());
+            if (existing == null || (!item.hasPhoto() && !existing.hasPhoto())) merged.put(item.itemId(), item);
+            else if (!existing.hasPhoto() && item.hasPhoto()) merged.put(item.itemId(), item);
+        }
+    }
+
+    private List<BusinessMedia> mediaFor(AppDataStore.BusinessRecord business) {
+        List<BusinessMedia> media = AppDataStore.businessMediaFor(business.businessId);
+        if (media.isEmpty() && business.ownerId != null && !business.ownerId.equals(business.businessId)) {
+            media = AppDataStore.businessMediaFor(business.ownerId);
+        }
+        return media;
     }
 
     private boolean isPubliclyVisible(AppDataStore.BusinessRecord business) {
         String status = clean(business.status).toLowerCase(Locale.ROOT);
-        return business.approved
-                && ("approved".equals(status) || "active".equals(status))
-                && !"suspended".equals(status)
-                && !"disabled".equals(status);
+        boolean approvedOrActive = business.approved || "approved".equals(status) || "active".equals(status);
+        return approvedOrActive && !"suspended".equals(status) && !"disabled".equals(status);
     }
 
     private static String userCategory(String value) {
@@ -105,5 +136,11 @@ public final class BusinessMarketplaceService {
 
     private static String clean(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private static String safeBusinessId(AppDataStore.BusinessRecord business) {
+        return business == null || business.businessId == null || business.businessId.isBlank()
+                ? "unknown"
+                : business.businessId;
     }
 }
