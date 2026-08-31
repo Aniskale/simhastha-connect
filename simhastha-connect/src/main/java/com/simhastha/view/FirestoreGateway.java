@@ -18,6 +18,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.logging.Logger;
 
+import com.simhastha.schedule.ScheduleAlert;
+import com.simhastha.schedule.ScheduleCategory;
+import com.simhastha.schedule.ScheduleEvent;
+
 public final class FirestoreGateway implements GhatRepository {
 
     private static final String ROOT = "https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents";
@@ -37,6 +41,65 @@ public final class FirestoreGateway implements GhatRepository {
     public boolean isEnabled() {
         return config.isEnabled();
     }
+
+    /** Schedule-specific persistence uses the existing authenticated Firestore gateway. */
+    public List<ScheduleEvent> loadScheduleEventsByDate(java.time.LocalDate date, String idToken) throws IOException, InterruptedException {
+        List<ScheduleEvent> result = new ArrayList<>();
+        for (Document document : loadScheduleCollection("schedule_events", idToken)) {
+            String fields = document.fields;
+            if (!date.toString().equals(field(fields, "date"))) continue;
+            try {
+                result.add(new ScheduleEvent(valueOr(document.id, field(fields, "eventId")), field(fields, "title"),
+                        ScheduleCategory.valueOf(valueOr("IMPORTANT", field(fields, "category")).toUpperCase(Locale.ROOT)),
+                        field(fields, "location"), date, java.time.LocalTime.parse(field(fields, "startTime")),
+                        java.time.LocalTime.parse(field(fields, "endTime")), field(fields, "description"), field(fields, "organizer"),
+                        "true".equals(boolField(fields, "important")), field(fields, "note"), "CANCELLED".equalsIgnoreCase(field(fields, "status")),
+                        nullableDouble(numberField(fields, "latitude")), nullableDouble(numberField(fields, "longitude")), field(fields, "locationId")));
+            } catch (RuntimeException ignored) { System.err.println("Skipping malformed schedule event " + document.id); }
+        }
+        return result.stream().sorted(java.util.Comparator.comparing(ScheduleEvent::startTime)).toList();
+    }
+
+    public List<ScheduleAlert> loadScheduleAlertsByDate(java.time.LocalDate date, String idToken) throws IOException, InterruptedException {
+        List<ScheduleAlert> result = new ArrayList<>();
+        for (Document document : loadScheduleCollection("schedule_alerts", idToken)) {
+            String fields = document.fields;
+            if (!date.toString().equals(field(fields, "date"))) continue;
+            try { result.add(new ScheduleAlert(valueOr(document.id, field(fields, "alertId")), field(fields, "title"), field(fields, "message"),
+                    field(fields, "location"), date, parseTime(field(fields, "startTime")), parseTime(field(fields, "endTime")),
+                    valueOr("INFO", field(fields, "severity")), !"false".equals(boolField(fields, "active"))));
+            } catch (RuntimeException ignored) { System.err.println("Skipping malformed schedule alert " + document.id); }
+        }
+        return result;
+    }
+
+    private List<Document> loadScheduleCollection(String collection, String idToken) throws IOException, InterruptedException {
+        try {
+            return loadCollectionDocuments(collection, idToken);
+        } catch (IOException exception) {
+            AppSession.User user = AppSession.currentUser();
+            System.err.println("Schedule Firestore read failed: collection=" + collection + ", status=" + exception.getMessage()
+                    + ", tokenPresent=" + (idToken != null && !idToken.isBlank())
+                    + ", role=" + (user == null ? "none" : user.role()));
+            throw exception;
+        }
+    }
+
+    public void saveScheduleEvent(ScheduleEvent event, String adminUid, String idToken) throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        sendAuthorizedPatch(documentUri("schedule_events", event.id()), fieldsJson(fieldJson("eventId", event.id()), fieldJson("title", event.title()),
+                fieldJson("category", event.category().name()), fieldJson("location", event.location()), fieldJson("date", event.date().toString()),
+                fieldJson("startTime", event.startTime().toString()), fieldJson("endTime", event.endTime().toString()), fieldJson("description", event.description()),
+                fieldJson("organizer", event.organizer()), boolFieldJson("important", event.important()), fieldJson("note", event.note()),
+                fieldJson("status", event.cancelled() ? "CANCELLED" : "SCHEDULED"), boolFieldJson("active", true), optionalNumberFieldJson("latitude", event.latitude()), optionalNumberFieldJson("longitude", event.longitude()), fieldJson("locationId", event.locationId()), fieldJson("updatedAt", now), fieldJson("updatedBy", adminUid), fieldJson("createdAt", now), fieldJson("createdBy", adminUid)), idToken);
+    }
+
+    public void deleteScheduleEvent(String eventId, String idToken) throws IOException, InterruptedException { sendAuthorizedDelete(documentUri("schedule_events", eventId), idToken); }
+    public void saveScheduleAlert(ScheduleAlert alert, String adminUid, String idToken) throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        sendAuthorizedPatch(documentUri("schedule_alerts", alert.id()), fieldsJson(fieldJson("alertId", alert.id()), fieldJson("title", alert.title()), fieldJson("message", alert.message()), fieldJson("location", alert.location()), fieldJson("date", alert.date().toString()), fieldJson("startTime", timeText(alert.startTime())), fieldJson("endTime", timeText(alert.endTime())), fieldJson("severity", alert.severity()), boolFieldJson("active", alert.active()), fieldJson("updatedAt", now), fieldJson("updatedBy", adminUid), fieldJson("createdAt", now), fieldJson("createdBy", adminUid)), idToken);
+    }
+    public void deleteScheduleAlert(String alertId, String idToken) throws IOException, InterruptedException { sendAuthorizedDelete(documentUri("schedule_alerts", alertId), idToken); }
 
     public List<AppDataStore.ServiceItem> loadItems() throws IOException, InterruptedException {
         return loadItems("");
@@ -1035,6 +1098,14 @@ public final class FirestoreGateway implements GhatRepository {
         return new IOException("Firestore " + method + " failed: HTTP " + response.statusCode() + " body=" + body);
     }
 
+    private void sendAuthorizedDelete(URI uri, String idToken) throws IOException, InterruptedException {
+        HttpResponse<String> response = client.send(authorizedBuilder(uri, idToken).timeout(Duration.ofSeconds(8)).DELETE().build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) throw new IOException("Firestore delete failed: " + response.statusCode());
+    }
+
+    private java.time.LocalTime parseTime(String value) { return value == null || value.isBlank() ? null : java.time.LocalTime.parse(value); }
+    private String timeText(java.time.LocalTime value) { return value == null ? "" : value.toString(); }
+
     private HttpRequest.Builder authorizedBuilder(URI uri, String idToken) {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri);
         if (idToken != null && !idToken.isBlank()) {
@@ -1135,6 +1206,9 @@ public final class FirestoreGateway implements GhatRepository {
                 .matcher(fieldsJson == null ? "" : fieldsJson);
         return matcher.find() ? matcher.group(1) : "";
     }
+
+    private Double nullableDouble(String value) { try { return value == null || value.isBlank() ? null : Double.valueOf(value); } catch (NumberFormatException ignored) { return null; } }
+    private String optionalNumberFieldJson(String name, Double value) { return value == null ? fieldJson(name, "") : "\"" + escape(name) + "\":{\"doubleValue\":" + value + "}"; }
 
     private String firstNonBlank(String... values) {
         for (String value : values) {

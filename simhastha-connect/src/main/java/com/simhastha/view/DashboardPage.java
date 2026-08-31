@@ -199,14 +199,19 @@ public class DashboardPage {
 
     private void showHomePage() {
         stopGhatRefresh();
+        stopScheduleRefresh();
         setActiveModule("home");
         root.setCenter(scroll(createHomePage()));
     }
 
     private void showModulePage(String module) {
-        if (!"ghat".equals(module)) {
-            stopGhatRefresh();
-        }
+    if (!"ghat".equals(module)) {
+        stopGhatRefresh();
+    }
+
+    if (!"schedule".equals(module)) {
+        stopScheduleRefresh();
+    }
         setActiveModule(module);
         Node page = switch (module) {
             case "packages" -> packagesPage();
