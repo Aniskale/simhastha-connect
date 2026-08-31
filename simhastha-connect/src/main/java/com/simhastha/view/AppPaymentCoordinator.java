@@ -14,6 +14,7 @@ import com.simhastha.payment.MoneyUtil;
 import com.simhastha.payment.PaymentCatalog;
 import com.simhastha.payment.PaymentCatalog.CatalogItem;
 import com.simhastha.payment.PaymentException;
+import com.simhastha.payment.PaymentModuleType;
 import com.simhastha.payment.PaymentRequest;
 import com.simhastha.payment.PaymentResult;
 import com.simhastha.payment.PaymentStatus;
@@ -28,6 +29,63 @@ public final class AppPaymentCoordinator {
 
     private final TicketService ticketService = new TicketService();
     private final BookingNotificationService notificationService = new NoOpBookingNotificationService();
+
+    // TEMPORARY RAZORPAY API TEST
+    // Remove after module payment integration is verified.
+    public void startDeveloperRazorpayTest(Window owner) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            showInfo("Login required", "Please login before testing the payment connection.");
+            return;
+        }
+
+        CatalogItem item = PaymentCatalog.find(PaymentCatalog.DEV_RAZORPAY_TEST_ITEM_ID).orElse(null);
+        if (item == null) {
+            showInfo("Payment test unavailable", "The temporary Razorpay test catalog item is not configured.");
+            return;
+        }
+
+        String bookingId = "DEV-RAZORPAY-TEST-" + System.currentTimeMillis();
+        try {
+            PaymentRequest request = PaymentRequest.builder()
+                    .userId(user.uid())
+                    .bookingId(bookingId)
+                    .moduleType(PaymentModuleType.BUSINESS)
+                    .itemId(item.id())
+                    .businessId(item.businessId())
+                    .title(item.title())
+                    .description(item.description())
+                    .amount(item.amount())
+                    .currency(item.currency())
+                    .customerName(displayName(user))
+                    .customerEmail(user.email())
+                    .metadata(PaymentCatalog.META_CATALOG_ITEM_ID, item.id())
+                    .metadata(PaymentCatalog.META_QUANTITY, "1")
+                    .metadata(PaymentCatalog.META_NIGHTS, "1")
+                    .metadata(PaymentCatalog.META_BOOKING_DATE, LocalDate.now().toString())
+                    .metadata(PaymentCatalog.META_LOCATION, item.location())
+                    .build();
+
+            new PaymentDialog(PaymentServiceFactory.get()).show(owner, request)
+                    .whenComplete((result, throwable) -> Platform.runLater(() -> {
+                        if (throwable != null) {
+                            showInfo("Payment test failed", "The Razorpay test flow could not be completed. Please check the payment backend.");
+                        } else if (result == null) {
+                            showInfo("Payment test failed", "No result was returned by the payment flow.");
+                        } else if (result.paymentStatus() == PaymentStatus.PAID
+                                || result.paymentStatus() == PaymentStatus.VERIFIED) {
+                            showInfo("Payment test completed", "Razorpay Test Mode payment verified.\nOrder: "
+                                    + result.razorpayOrderId());
+                        } else if (result.paymentStatus() == PaymentStatus.CANCELLED) {
+                            showInfo("Payment test cancelled", result.message());
+                        } else {
+                            showInfo("Payment test failed", result.message());
+                        }
+                    }));
+        } catch (RuntimeException exception) {
+            showInfo("Payment test unavailable", "The temporary payment request could not be prepared.");
+        }
+    }
 
     public void startPaidBooking(Window owner, String catalogItemId, int quantity, int nights) {
         AppSession.User user = AppSession.currentUser();
