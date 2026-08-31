@@ -1290,13 +1290,8 @@ public class AdminDashboardPage {
                 listPanel("Published Events", "schedule", "No schedule items published yet.", form));
     }
 
-    private VBox announcementsPage() {
-        VBox form = structuredForm("Title", "Category", "Priority", "Message", "Location optional",
-                "Start Time", "Expiry Time");
-        return pageShell("Announcements", "Compose and publish official notices.",
-                tabRow("General", "Traffic", "Ghat", "Emergency", "Event", "Weather/Operational"),
-                infoPanel("Announcement Composer", form, actionRow("announcement", form, "Save Draft", "Publish", "Expire")),
-                listPanel("Published Announcements", "announcement", "No announcements published yet.", form));
+    private Node announcementsPage() {
+        return new AdminAnnouncementView(page -> root.setCenter(scroll(page))).managementPage();
     }
 
     private VBox emergencyPage() {
