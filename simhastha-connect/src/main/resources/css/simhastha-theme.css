@@ -5139,6 +5139,7 @@
 .developer-payment-test-button:hover,
 .developer-payment-test-button:focused {
     -fx-background-color: rgba(201, 138, 44, 0.14);
+}
 /* UI-only announcement module */
 .announcement-critical,
 .announcement-high,
@@ -5253,3 +5254,82 @@
 .theme-dark .booking-metric-value, .theme-dark .booking-amount { -fx-text-fill: #f5c86b; }
 .theme-dark .booking-filter-button { -fx-text-fill: #d8c8aa; -fx-border-color: rgba(229,180,76,0.23); }
 .theme-dark .booking-filter-active { -fx-background-color: rgba(229,180,76,0.14); -fx-text-fill: #f5c86b; }
+/* Stay landing experience */
+.stay-search-panel {
+    -fx-background-color: rgba(255, 253, 248, 0.98);
+    -fx-background-radius: 14px;
+    -fx-border-color: rgba(184, 100, 6, 0.18);
+    -fx-border-radius: 14px;
+    -fx-padding: 14px 16px;
+    -fx-effect: dropshadow(gaussian, rgba(76, 27, 9, 0.10), 12, 0.12, 0, 3);
+}
+
+.stay-search-row { -fx-alignment: center-left; }
+.stay-search-row .combo-box, .stay-search-row .date-picker { -fx-min-width: 125px; -fx-pref-height: 38px; }
+.stay-choice-card { -fx-padding: 18px; -fx-background-radius: 14px; -fx-border-radius: 14px; }
+.stay-approved-card { -fx-border-color: rgba(191, 143, 30, 0.38); -fx-background-color: rgba(255, 250, 235, 0.98); }
+.stay-other-card { -fx-border-color: rgba(91, 112, 128, 0.28); -fx-background-color: rgba(250, 252, 252, 0.98); }
+.stay-choice-card:hover { -fx-effect: dropshadow(gaussian, rgba(77, 31, 12, 0.16), 15, 0.16, 0, 4); }
+.stay-choice-active { -fx-border-color: #a24606; -fx-border-width: 2px; -fx-effect: dropshadow(gaussian, rgba(122, 15, 18, 0.18), 15, 0.18, 0, 4); }
+.stay-top-bar { -fx-background-color: #fbf7ef; -fx-border-color: transparent transparent rgba(122, 15, 18, 0.10) transparent; }
+.stay-account-actions { -fx-padding: 2px 0 4px 0; }
+.stay-collection-row { -fx-padding: 10px; -fx-background-color: rgba(255, 253, 248, 0.94); -fx-background-radius: 10px; -fx-border-color: rgba(184, 100, 6, 0.16); -fx-border-radius: 10px; }
+.stay-empty-state { -fx-padding: 18px; -fx-background-color: rgba(255, 253, 248, 0.96); }
+
+.theme-dark .stay-search-panel,
+.theme-dark .stay-approved-card,
+.theme-dark .stay-other-card,
+.theme-dark .stay-empty-state { -fx-background-color: #17202b; -fx-border-color: rgba(229, 180, 76, 0.28); }
+
+/* Local stay discovery and booking-preview experience */
+.stay-results-panel {
+    -fx-padding: 18px;
+    -fx-background-color: rgba(255, 253, 248, 0.98);
+    -fx-background-radius: 14px;
+    -fx-border-color: rgba(184, 100, 6, 0.18);
+    -fx-border-radius: 14px;
+}
+
+.stay-results-controls { -fx-padding: 4px 0 2px 0; }
+.stay-results-controls .text-field { -fx-min-width: 155px; -fx-pref-width: 190px; }
+.stay-results-controls .combo-box { -fx-min-width: 118px; }
+.stay-results-grid { -fx-padding: 2px 0 4px 0; }
+
+.stay-property-card {
+    -fx-padding: 0 0 16px 0;
+    -fx-spacing: 9px;
+    -fx-background-color: #fffdf8;
+    -fx-border-color: rgba(179, 132, 30, 0.42);
+    -fx-border-radius: 14px;
+    -fx-background-radius: 14px;
+    -fx-effect: dropshadow(gaussian, rgba(61, 31, 12, 0.10), 12, 0.12, 0, 3);
+}
+
+.stay-property-card:hover {
+    -fx-border-color: rgba(122, 15, 18, 0.48);
+    -fx-effect: dropshadow(gaussian, rgba(76, 27, 9, 0.16), 16, 0.16, 0, 5);
+}
+
+.stay-property-card > .label:not(.stay-image-fallback),
+.stay-property-card > .flow-pane,
+.stay-property-card > .button,
+.stay-property-card > .hbox { -fx-translate-x: 16px; }
+.stay-property-card > .button { -fx-max-width: 350px; }
+.stay-cover { -fx-min-height: 190px; -fx-pref-height: 190px; -fx-background-color: #eee7dc; -fx-background-radius: 14px 14px 0 0; }
+.stay-cover .image-view { -fx-background-radius: 14px 14px 0 0; }
+.stay-image-fallback { -fx-text-fill: #806d5b; -fx-font-size: 12px; }
+.stay-property-name { -fx-text-fill: #751b1b; -fx-font-size: 17px; -fx-font-weight: bold; }
+.stay-active-filter { -fx-background-color: rgba(122, 15, 18, 0.08); -fx-text-fill: #7a0f12; -fx-font-size: 11px; -fx-padding: 5px 8px; -fx-background-radius: 12px; }
+.stay-option-card, .stay-booking-summary { -fx-padding: 12px; -fx-background-color: rgba(246, 237, 219, 0.72); -fx-background-radius: 10px; -fx-border-color: rgba(179, 132, 30, 0.24); -fx-border-radius: 10px; }
+.stay-dialog-scroll > .viewport { -fx-background-color: transparent; }
+.stay-dialog-scroll { -fx-background-color: transparent; -fx-border-color: transparent; }
+.dialog-pane .stay-booking-summary { -fx-padding: 18px; -fx-spacing: 12px; }
+.dialog-pane .stay-collection-row { -fx-padding: 12px; }
+
+.theme-dark .stay-results-panel,
+.theme-dark .stay-property-card { -fx-background-color: #17202b; -fx-border-color: rgba(229, 180, 76, 0.28); }
+.theme-dark .stay-property-name { -fx-text-fill: #f5c86b; }
+.theme-dark .stay-option-card,
+.theme-dark .stay-booking-summary { -fx-background-color: #202c3a; -fx-border-color: rgba(229, 180, 76, 0.22); }
+.theme-dark .stay-active-filter { -fx-background-color: rgba(229, 180, 76, 0.14); -fx-text-fill: #f5c86b; }
+.theme-dark .stay-top-bar, .theme-dark .stay-collection-row { -fx-background-color: #17202b; -fx-border-color: rgba(229, 180, 76, 0.20); }

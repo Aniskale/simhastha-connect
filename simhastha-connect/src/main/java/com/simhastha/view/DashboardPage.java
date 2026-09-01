@@ -95,6 +95,8 @@ public class DashboardPage {
     private String ghatSnanFilter = "All";
     private String ghatSort = "Live Crowd";
     private String ghatSearch = "";
+    private final java.util.LinkedHashMap<String, StayItem> stayWishlist = new java.util.LinkedHashMap<>();
+    private final java.util.LinkedHashMap<String, StayItem> recentlyViewedStays = new java.util.LinkedHashMap<>();
 
     public Scene createScene(Stage stage) {
         root = new BorderPane();
@@ -213,13 +215,16 @@ public class DashboardPage {
         stopScheduleRefresh();
     }
         setActiveModule(module);
+        if ("stay".equals(module)) {
+            root.setCenter(stayPageShell());
+            return;
+        }
         Node page = switch (module) {
             case "packages" -> packagesPage();
             case "transport" -> transportPage();
             case "puja" -> pujaPage();
             case "ghat" -> ghatsPage();
             case "emergency" -> emergencyPage();
-            case "stay" -> stayPage();
             case "lost" -> lostFoundPage();
             case "schedule" -> schedulePage();
             case "business" -> businessPage();
@@ -229,6 +234,20 @@ public class DashboardPage {
             default -> genericModulePage(module);
         };
         root.setCenter(scroll(page));
+    }
+
+    private BorderPane stayPageShell() {
+        Button back = new Button("← Back");
+        back.getStyleClass().add("pilgrim-small-action");
+        back.setOnAction(event -> showHomePage());
+        HBox header = new HBox(back);
+        header.setAlignment(Pos.CENTER_LEFT);
+        header.setPadding(new Insets(12, 22, 8, 22));
+        header.getStyleClass().add("stay-top-bar");
+        BorderPane shell = new BorderPane();
+        shell.setTop(header);
+        shell.setCenter(scroll(stayPage()));
+        return shell;
     }
 
     private void setActiveModule(String module) {
@@ -2420,14 +2439,491 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     }
 
     private VBox stayPage() {
-        if (!AppDataStore.items("stay").isEmpty()) {
-            return pageShell("Stay & Accommodation", "Hotels, dharamshalas and camp information.",
-                    filterRow("Area", "Type", "Budget"),
-                    adminControlledGrid("stay", "View Details"));
-        }
-        return pageShell("Stay & Accommodation", "Hotels, dharamshalas and camp information.",
-                infoPanel("No verified stays available yet", "Approved accommodation listings will appear here when they are available."));
+        VBox dynamic = new VBox(16);
+        Button approved = new Button("View Approved Stays");
+        approved.getStyleClass().add("primary-button");
+        Button other = new Button("Search Other Stays");
+        other.getStyleClass().add("pilgrim-small-action");
+        VBox approvedCard = stayChoiceCard("SIMHASTHA CONNECT", "Approved Stays", "Discover trusted accommodation connected with SIMHASTHA CONNECT.", "Trusted Stay Listings  •  Property Details  •  Real Location  •  Internal Booking Flow", approved, "stay-approved-card");
+        VBox otherCard = stayChoiceCard("EXPLORE NASHIK", "Other Stays", "Search hotels, OYO, lodges, dharamshalas, guest houses and homestays across Nashik.", "Hotels  •  OYO  •  Lodges  •  Dharamshalas  •  Guest Houses", other, "stay-other-card");
+        approved.setOnAction(event -> {
+            approvedCard.getStyleClass().add("stay-choice-active");
+            otherCard.getStyleClass().remove("stay-choice-active");
+            dynamic.getChildren().setAll(stayApprovedFlow(() -> dynamic.getChildren().setAll(stayOtherFlow())));
+        });
+        other.setOnAction(event -> {
+            otherCard.getStyleClass().add("stay-choice-active");
+            approvedCard.getStyleClass().remove("stay-choice-active");
+            dynamic.getChildren().setAll(stayOtherFlow());
+        });
+        HBox cards = new HBox(14, approvedCard, otherCard);
+        cards.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
+        return pageShell("Stay", "Find the right accommodation for your Simhastha journey.", stayHero(),
+                sectionTitle("How would you like to find your stay?"), cards, dynamic);
     }
+
+    private StackPane stayHero() {
+        ImageView image = createImage("/images/godavari_kumbh.jpg", 980, 170, 0.54, 0.47);
+        VBox copy = new VBox(7, badge("SIMHASTHA CONNECT  •  STAY"), label("Stay Close. Travel Easy. Experience Simhastha.", "pilgrim-hero-title"),
+                label("Choose trusted SIMHASTHA CONNECT stays or explore accommodation across Nashik.", "pilgrim-hero-detail"));
+        copy.setAlignment(Pos.CENTER_LEFT); copy.setPadding(new Insets(22, 28, 22, 28));
+        StackPane hero = new StackPane(image, copy); StackPane.setAlignment(copy, Pos.CENTER_LEFT); hero.getStyleClass().add("pilgrim-hero"); hero.setMinHeight(170); return hero;
+    }
+
+    private VBox stayChoiceCard(String eyebrow, String title, String detail, String features, Button action, String style) {
+        VBox card = new VBox(10, badge(eyebrow), strong(title), paragraph(detail), muted(features), action);
+        card.getStyleClass().addAll("pilgrim-rich-card", "stay-choice-card", style); card.setMinHeight(225); HBox.setHgrow(card, Priority.ALWAYS); return card;
+    }
+
+    private VBox stayApprovedFlow(Runnable exploreOther) {
+        ComboBox<String> location = stayCombo("Nearby Location", "All Nashik", "Panchavati", "Ramkund", "Tapovan", "Trimbakeshwar", "Nashik Road", "CBS", "Gangapur Road", "Ozar");
+        DatePicker checkIn = stayDatePicker("Check-in");
+        DatePicker checkOut = stayDatePicker("Check-out");
+        ComboBox<String> guests = stayGuestsCombo();
+        ComboBox<String> budget = stayCombo("Budget", "Any Budget", "Budget", "Standard", "Premium");
+        Label trip = badge("Select dates and guests to plan your stay");
+        Runnable updateTrip = () -> trip.setText(stayTripText(checkIn.getValue(), checkOut.getValue(), guests.getValue()));
+        checkIn.valueProperty().addListener((obs, oldValue, newValue) -> updateTrip.run());
+        checkOut.valueProperty().addListener((obs, oldValue, newValue) -> updateTrip.run());
+        guests.valueProperty().addListener((obs, oldValue, newValue) -> updateTrip.run());
+        VBox results = new VBox(14);
+        VBox searchPanel = new VBox(9);
+        Button find = new Button("Find Approved Stays"); find.getStyleClass().add("primary-button");
+        find.setOnAction(event -> {
+            if (!validStayDates(checkIn, checkOut)) return;
+            updateTrip.run();
+            results.getChildren().setAll(stayApprovedSection(stayCriteria(location, checkIn, checkOut, guests, budget), searchPanel::requestFocus, exploreOther));
+        });
+        FlowPane searchRow = new FlowPane(10, 10, location, checkIn, checkOut, guests, budget, find);
+        searchRow.getStyleClass().add("stay-search-row");
+        searchPanel.getChildren().setAll(strong("Find an Approved Stay"), muted("Choose your trip preferences to browse curated SIMHASTHA STAY listings."), searchRow, trip);
+        searchPanel.getStyleClass().add("stay-search-panel");
+        return new VBox(14, stayAccountActions(), searchPanel, results);
+    }
+
+    private VBox stayOtherFlow() {
+        ComboBox<String> location = stayCombo("Nearby Location", "All Nashik", "Panchavati", "Ramkund", "Tapovan", "Trimbakeshwar", "Nashik Road", "CBS", "Gangapur Road", "Ozar");
+        DatePicker checkIn = stayDatePicker("Check-in");
+        DatePicker checkOut = stayDatePicker("Check-out");
+        ComboBox<String> guests = stayGuestsCombo();
+        ComboBox<String> budget = stayCombo("Budget", "Any Budget", "Budget", "Standard", "Premium");
+        return stayOtherSection(location, checkIn, checkOut, guests, budget);
+    }
+
+    private HBox stayAccountActions() {
+        Button recent = new Button("Recently Viewed"); recent.getStyleClass().add("pilgrim-small-action"); recent.setOnAction(event -> showStayCollection("Recently Viewed Stays", recentlyViewedStays, false));
+        Button wishlist = new Button("♡ Wishlist"); wishlist.getStyleClass().add("pilgrim-small-action"); wishlist.setOnAction(event -> showStayCollection("Your Stay Wishlist", stayWishlist, true));
+        Button bookings = new Button("My Bookings"); bookings.getStyleClass().add("pilgrim-small-action"); bookings.setOnAction(event -> showStayBookings());
+        HBox actions = new HBox(9, recent, wishlist, bookings); actions.setAlignment(Pos.CENTER_LEFT); actions.getStyleClass().add("stay-account-actions"); return actions;
+    }
+
+    private void toggleStayWishlist(StayItem stay, Button button) {
+        String key = stay.stableId();
+        if (stayWishlist.remove(key) == null) { stayWishlist.put(key, stay); button.setText("♥ Saved"); }
+        else button.setText("♡ Wishlist");
+    }
+
+    private void rememberStayViewed(StayItem stay) {
+        String key = stay.stableId();
+        recentlyViewedStays.remove(key); recentlyViewedStays.put(key, stay);
+        while (recentlyViewedStays.size() > 8) recentlyViewedStays.remove(recentlyViewedStays.keySet().iterator().next());
+    }
+
+    private void showStayCollection(String title, java.util.LinkedHashMap<String, StayItem> collection, boolean removable) {
+        Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle(title); dialog.setHeaderText(null);
+        VBox content = new VBox(10);
+        if (collection.isEmpty()) {
+            content.getChildren().add(muted(removable ? "Your Stay wishlist is empty." : "You haven't viewed any stays yet."));
+        } else {
+            java.util.List<StayItem> items = new java.util.ArrayList<>(collection.values()); java.util.Collections.reverse(items);
+            for (StayItem stay : items) {
+                Button details = new Button("View Details"); details.getStyleClass().add("pilgrim-small-action"); details.setOnAction(event -> showStayDetails(stay, StayCriteria.empty()));
+                Button map = new Button("View on Map"); map.getStyleClass().add("pilgrim-small-action"); map.setOnAction(event -> openStayMap(stay));
+                Button book = new Button("Book Stay"); book.getStyleClass().add("primary-button"); book.setOnAction(event -> showStayDetails(stay, StayCriteria.empty()));
+                ImageView image = createImage(stay.localImagePath(), 116, 72, 0.54, 0.50);
+                VBox detailsCopy = new VBox(3, strong(stay.name()), muted(stay.category() + " • " + stay.area()),
+                        muted(stay.priceInfo().isBlank() ? "Price available during connected booking" : stay.priceInfo()));
+                HBox row = new HBox(10, image, detailsCopy, createSpacer(), details, map, book);
+                if (removable) { Button remove = new Button("Remove"); remove.getStyleClass().add("pilgrim-small-action"); remove.setOnAction(event -> { collection.remove(stay.stableId()); dialog.close(); }); row.getChildren().add(remove); }
+                row.setAlignment(Pos.CENTER_LEFT); row.getStyleClass().add("stay-collection-row"); content.getChildren().add(row);
+            }
+        }
+        ScrollPane scroll = new ScrollPane(content); scroll.setFitToWidth(true); scroll.setPrefViewportHeight(460);
+        dialog.getDialogPane().setContent(scroll); dialog.getDialogPane().setPrefSize(940, 560); dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); dialog.showAndWait();
+    }
+
+    private void showStayBookings() {
+        Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle("My Stay Bookings"); dialog.setHeaderText(null);
+        VBox content = new VBox(10);
+        java.util.List<AppDataStore.BookingRecord> stays = currentUserStayBookings();
+        VBox rows = new VBox(8);
+        Runnable render = () -> { rows.getChildren().setAll(stayBookingRows(stays, "all")); };
+        Button upcoming = new Button("Upcoming"); upcoming.getStyleClass().add("pilgrim-small-action"); upcoming.setOnAction(event -> rows.getChildren().setAll(stayBookingRows(stays, "upcoming")));
+        Button past = new Button("Completed / Past"); past.getStyleClass().add("pilgrim-small-action"); past.setOnAction(event -> rows.getChildren().setAll(stayBookingRows(stays, "past")));
+        Button cancelled = new Button("Cancelled"); cancelled.getStyleClass().add("pilgrim-small-action"); cancelled.setOnAction(event -> rows.getChildren().setAll(stayBookingRows(stays, "cancelled")));
+        if (stays.isEmpty()) {
+            Button explore = new Button("Find a Stay"); explore.getStyleClass().add("primary-button"); explore.setOnAction(event -> dialog.close());
+            content.getChildren().addAll(strong("Your Last Stay Booking"), muted("You haven't booked a stay yet."), explore);
+        } else {
+            AppDataStore.BookingRecord latest = stays.get(0);
+            content.getChildren().addAll(strong("Your Last Stay Booking"), stayBookingRow(latest), new HBox(8, upcoming, past, cancelled), rows);
+            render.run();
+        }
+        content.getStyleClass().add("stay-booking-summary"); dialog.getDialogPane().setContent(content); dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); dialog.showAndWait();
+    }
+
+    private java.util.List<AppDataStore.BookingRecord> currentUserStayBookings() {
+        AppSession.User currentUser = AppSession.currentUser();
+        String userId = currentUser == null ? "" : currentUser.uid();
+        return AppDataStore.bookings().stream()
+                .filter(booking -> "stay".equalsIgnoreCase(booking.moduleType) && (userId.isBlank() || userId.equals(booking.userId)))
+                .sorted(java.util.Comparator.comparing((AppDataStore.BookingRecord booking) -> booking.createdAt).reversed()).toList();
+    }
+
+    private java.util.List<Node> stayBookingRows(java.util.List<AppDataStore.BookingRecord> stays, String bucket) {
+        java.util.List<Node> rows = stays.stream().filter(booking -> stayBookingBucket(booking).equals(bucket) || "all".equals(bucket)).map(this::stayBookingRow).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+        if (rows.isEmpty()) rows.add(muted("No " + ("past".equals(bucket) ? "completed or past" : bucket) + " stay bookings."));
+        return rows;
+    }
+
+    private String stayBookingBucket(AppDataStore.BookingRecord booking) {
+        String status = booking.bookingStatus == null ? "" : booking.bookingStatus.toLowerCase();
+        if (status.contains("cancel")) return "cancelled";
+        if (status.contains("complete") || status.contains("past")) return "past";
+        return "upcoming";
+    }
+
+    private HBox stayBookingRow(AppDataStore.BookingRecord booking) {
+        Button map = new Button("View on Map"); map.getStyleClass().add("pilgrim-small-action");
+        map.setOnAction(event -> openUrl("https://www.google.com/maps/search/?api=1&query=" + java.net.URLEncoder.encode(booking.title + " " + booking.location, java.nio.charset.StandardCharsets.UTF_8)));
+        HBox row = new HBox(10, new VBox(3, strong(booking.title), muted(booking.location), muted(booking.dateText + " • " + booking.nights + " nights"), muted("Booking ID: " + booking.bookingId + " • " + booking.bookingStatus)), createSpacer(), map);
+        row.setAlignment(Pos.CENTER_LEFT); row.getStyleClass().add("stay-collection-row"); return row;
+    }
+
+    private VBox stayApprovedSection(StayCriteria criteria, Runnable changeSearch, Runnable exploreOther) {
+        TextField propertySearch = AppUi.textField("Search property");
+        ComboBox<String> type = stayCombo("Property Type", "All Types", "Hotel", "Lodge", "Guest House", "Dharamshala", "Homestay", "Tent / Camp", "Other Accommodation");
+        ComboBox<String> secondaryBudget = stayCombo("Budget", "Any Budget", "Budget", "Standard", "Premium");
+        ComboBox<String> facility = stayCombo("Facilities", "All Facilities", "Parking", "Family Friendly", "Meals", "Wi-Fi", "Hot Water", "Accessible");
+        ComboBox<String> sort = stayCombo("Sort by", "Recommended", "Property Name A-Z", "Budget First");
+        VBox results = new VBox(12);
+        Runnable[] refresh = new Runnable[1];
+        refresh[0] = () -> results.getChildren().setAll(stayResults(criteria.withBudget(secondaryBudget.getValue()), propertySearch.getText(), type.getValue(), facility.getValue(), sort.getValue(), exploreOther));
+        propertySearch.textProperty().addListener((obs, oldValue, newValue) -> refresh[0].run());
+        type.valueProperty().addListener((obs, oldValue, newValue) -> refresh[0].run());
+        secondaryBudget.valueProperty().addListener((obs, oldValue, newValue) -> refresh[0].run());
+        facility.valueProperty().addListener((obs, oldValue, newValue) -> refresh[0].run());
+        sort.valueProperty().addListener((obs, oldValue, newValue) -> refresh[0].run());
+        Button map = new Button("View Stays on Map");
+        map.getStyleClass().add("pilgrim-small-action");
+        map.setOnAction(event -> openStayAreaMap(criteria.location()));
+        Button clear = new Button("Clear Filters");
+        clear.getStyleClass().add("pilgrim-small-action");
+        clear.setOnAction(event -> { propertySearch.clear(); type.setValue(null); secondaryBudget.setValue(null); facility.setValue(null); sort.setValue(null); });
+        Button change = new Button("Change Search");
+        change.getStyleClass().add("pilgrim-small-action");
+        change.setOnAction(event -> changeSearch.run());
+        FlowPane controls = new FlowPane(9, 9, propertySearch, type, secondaryBudget, facility, sort, map, clear, change);
+        controls.setAlignment(Pos.CENTER_LEFT);
+        controls.getStyleClass().add("stay-results-controls");
+        VBox section = new VBox(10, strong("Approved Stays"), muted("Based on your selected location and travel dates."), controls, results);
+        section.getStyleClass().addAll("pilgrim-panel", "stay-results-panel");
+        refresh[0].run();
+        return section;
+    }
+
+    private Node stayResults(StayCriteria criteria, String text, String type, String facility, String sort, Runnable exploreOther) {
+        java.util.List<StayItem> matches = approvedStayItems().stream()
+                .filter(stay -> stayMatches(stay, criteria, text, type, facility))
+                .sorted(stayComparator(criteria.location(), sort)).toList();
+        String location = criteria.location() == null ? "Nashik" : criteria.location();
+        Label heading = strong(criteria.location() == null || "All Nashik".equals(criteria.location())
+                ? matches.size() + " approved stay options"
+                : matches.size() + " " + (matches.size() == 1 ? "stay" : "stays") + " found near " + location);
+        HBox summary = new HBox(8, badge(staySearchSummary(criteria)));
+        summary.setAlignment(Pos.CENTER_LEFT);
+        if (matches.isEmpty()) {
+            Button explore = new Button("Explore Other Stays"); explore.getStyleClass().add("pilgrim-small-action"); explore.setOnAction(event -> exploreOther.run());
+            VBox empty = new VBox(7, heading, muted("No stays match your current filters."), muted("Try another location, stay type or budget."), explore);
+            empty.getStyleClass().add("stay-empty-state");
+            return new VBox(10, summary, empty);
+        }
+        FlowPane cards = new FlowPane(14, 14);
+        cards.getStyleClass().add("stay-results-grid");
+        matches.forEach(stay -> cards.getChildren().add(createStayCard(stay, criteria)));
+        return new VBox(10, heading, summary, cards);
+    }
+
+    private VBox createStayCard(StayItem stay, StayCriteria criteria) {
+        ImageView image = createImage(stay.localImagePath(), 390, 190, 0.54, 0.50);
+        Label fallback = label("Representative accommodation image", "stay-image-fallback");
+        fallback.setVisible(image.getImage() == null);
+        StackPane cover = new StackPane(image, fallback, badge(stay.locallyApprovedSeed() ? "SIMHASTHA STAY" : "SIMHASTHA VERIFIED"));
+        StackPane.setAlignment(cover.getChildren().get(2), Pos.TOP_LEFT);
+        StackPane.setMargin(cover.getChildren().get(2), new Insets(10));
+        cover.getStyleClass().add("stay-cover");
+        FlowPane facilities = new FlowPane(6, 6);
+        stay.facilities().forEach(item -> facilities.getChildren().add(badge(item)));
+        Label trip = muted(criteria.hasDates() ? criteria.nights() + (criteria.nights() == 1 ? " night" : " nights") + " • " + criteria.guests()
+                : "Select dates and guests to plan this stay");
+        Button save = new Button(stayWishlist.containsKey(stay.stableId()) ? "♥ Saved" : "♡ Wishlist");
+        save.getStyleClass().add("pilgrim-small-action"); save.setOnAction(event -> toggleStayWishlist(stay, save));
+        Button details = new Button("View Details"); details.getStyleClass().add("pilgrim-small-action"); details.setOnAction(event -> showStayDetails(stay, criteria));
+        Button map = new Button("View on Map"); map.getStyleClass().add("pilgrim-small-action"); map.setOnAction(event -> openStayMap(stay));
+        Button book = new Button("Check Stay / Book"); book.getStyleClass().add("primary-button"); book.setOnAction(event -> showStayDetails(stay, criteria));
+        HBox secondary = new HBox(8, save, details, map);
+        VBox card = new VBox(9, cover, label(stay.name(), "stay-property-name"), muted(stay.category() + " • " + stay.area()), muted(stay.address()), facilities,
+                badge(stay.budgetCategory() + " Stay"), muted(stay.priceInfo().isBlank() ? "Price available during booking" : stay.priceInfo()), trip, secondary, book);
+        card.getStyleClass().addAll("pilgrim-rich-card", "stay-property-card");
+        card.setPrefWidth(390); card.setMaxWidth(420); card.setMinHeight(490);
+        return card;
+    }
+
+    private VBox stayOtherSection(ComboBox<String> location, DatePicker checkIn, DatePicker checkOut, ComboBox<String> guests, ComboBox<String> budget) {
+        ComboBox<String> type = stayCombo("Stay Type", "All Stays", "Hotels", "OYO", "Lodges", "Dharamshalas", "Guest Houses", "Homestays");
+        ComboBox<String> otherLocation = stayCombo("Nearby Location", "All Nashik", "Panchavati", "Ramkund", "Tapovan", "Trimbakeshwar", "Nashik Road", "CBS", "Gangapur Road", "Ozar");
+        ComboBox<String> otherBudget = stayCombo("Budget", "Any Budget", "Budget", "Standard", "Premium");
+        DatePicker otherCheckIn = new DatePicker(); otherCheckIn.setPromptText("Check-in"); otherCheckIn.getStyleClass().add("input-combo");
+        DatePicker otherCheckOut = new DatePicker(); otherCheckOut.setPromptText("Check-out"); otherCheckOut.getStyleClass().add("input-combo");
+        otherLocation.valueProperty().bindBidirectional(location.valueProperty()); otherBudget.valueProperty().bindBidirectional(budget.valueProperty());
+        otherCheckIn.valueProperty().bindBidirectional(checkIn.valueProperty()); otherCheckOut.valueProperty().bindBidirectional(checkOut.valueProperty());
+        Button google = new Button("Search Other Stays"); google.getStyleClass().add("primary-button");
+        google.setOnAction(event -> {
+            String place = location.getValue() == null ? "Nashik" : location.getValue() + " Nashik";
+            String kind = type.getValue() == null || "All Stays".equals(type.getValue()) ? "stays" : type.getValue();
+            String query = kind + " near " + place + (budget.getValue() == null || "Any Budget".equals(budget.getValue()) ? "" : " " + budget.getValue());
+            try { openUrl("https://www.google.com/search?q=" + java.net.URLEncoder.encode(query, java.nio.charset.StandardCharsets.UTF_8)); }
+            catch (Exception ignored) { showInfo("Search stays", "Unable to open browser search."); }
+        });
+        Button maps = new Button("Open Google Maps"); maps.getStyleClass().add("pilgrim-small-action"); maps.setOnAction(event -> openStayAreaMap(location.getValue()));
+        VBox panel = new VBox(10, strong("Explore Other Stays in Nashik"), muted("Search accommodation outside the SIMHASTHA CONNECT listings."),
+                gridPaneForStay(otherLocation, type, otherBudget, otherCheckIn, otherCheckOut, guests), new HBox(10, google, maps), muted("External results will open in your browser."));
+        panel.getStyleClass().add("pilgrim-panel"); return panel;
+    }
+
+    private GridPane gridPaneForStay(Node... nodes) { GridPane grid = new GridPane(); grid.setHgap(10); grid.setVgap(10); for (int i = 0; i < nodes.length; i++) { grid.add(nodes[i], i % 2, i / 2); GridPane.setHgrow(nodes[i], Priority.ALWAYS); } return grid; }
+    private ComboBox<String> stayCombo(String prompt, String... items) { ComboBox<String> combo = new ComboBox<>(); combo.setPromptText(prompt); combo.getItems().addAll(items); combo.getStyleClass().add("input-combo"); combo.setMaxWidth(Double.MAX_VALUE); return combo; }
+
+    private DatePicker stayDatePicker(String prompt) {
+        DatePicker picker = new DatePicker(); picker.setPromptText(prompt); picker.getStyleClass().add("input-combo");
+        picker.setDayCellFactory(factory -> new DateCell() {
+            @Override public void updateItem(java.time.LocalDate date, boolean empty) {
+                super.updateItem(date, empty);
+                setDisable(empty || date.isBefore(java.time.LocalDate.now()));
+            }
+        });
+        return picker;
+    }
+
+    private ComboBox<String> stayGuestsCombo() {
+        ComboBox<String> guests = new ComboBox<>(); guests.setPromptText("Guests & Rooms");
+        for (int adults = 1; adults <= 8; adults++) for (int children = 0; children <= 6; children++) for (int rooms = 1; rooms <= 5; rooms++) {
+            String value = adults + (adults == 1 ? " Adult" : " Adults");
+            if (children > 0) value += " • " + children + (children == 1 ? " Child" : " Children");
+            guests.getItems().add(value + " • " + rooms + (rooms == 1 ? " Room" : " Rooms"));
+        }
+        guests.setValue("2 Adults • 1 Room"); guests.getStyleClass().add("input-combo"); return guests;
+    }
+
+    private boolean validStayDates(DatePicker checkIn, DatePicker checkOut) {
+        if (checkIn.getValue() != null && checkOut.getValue() != null && !checkOut.getValue().isAfter(checkIn.getValue())) {
+            showInfo("Check-out date", "Check-out date must be after check-in date."); return false;
+        }
+        return true;
+    }
+
+    private String stayNightText(java.time.LocalDate checkIn, java.time.LocalDate checkOut) {
+        if (checkIn == null || checkOut == null) return "Select dates";
+        long nights = java.time.temporal.ChronoUnit.DAYS.between(checkIn, checkOut);
+        return nights <= 0 ? "Choose a later check-out" : nights + (nights == 1 ? "-night stay" : "-night stay");
+    }
+
+    private String stayTripText(java.time.LocalDate checkIn, java.time.LocalDate checkOut, String guests) {
+        String party = guests == null ? "2 Adults • 1 Room" : guests;
+        if (checkIn == null || checkOut == null) return party;
+        long nights = java.time.temporal.ChronoUnit.DAYS.between(checkIn, checkOut);
+        if (nights <= 0) return "Choose a later check-out";
+        return stayDate(checkIn) + " – " + stayDate(checkOut) + " • " + nights + (nights == 1 ? " night" : " nights") + " • " + party;
+    }
+
+    private StayCriteria stayCriteria(ComboBox<String> location, DatePicker checkIn, DatePicker checkOut, ComboBox<String> guests, ComboBox<String> budget) {
+        return new StayCriteria(location.getValue(), checkIn.getValue(), checkOut.getValue(), guests.getValue(), budget.getValue() == null ? "Any Budget" : budget.getValue());
+    }
+
+    private boolean stayMatches(StayItem stay, StayCriteria criteria, String text, String type, String facility) {
+        String haystack = (stay.name() + " " + stay.category() + " " + stay.area() + " " + stay.address()).toLowerCase();
+        boolean area = criteria.location() == null || "All Nashik".equals(criteria.location()) || haystack.contains(criteria.location().toLowerCase()) || ("Ramkund".equals(criteria.location()) && haystack.contains("panchavati"));
+        boolean search = text == null || text.isBlank() || haystack.contains(text.toLowerCase());
+        boolean kind = type == null || "All Types".equals(type) || stay.category().equalsIgnoreCase(type);
+        boolean budget = "Any Budget".equals(criteria.budget()) || stay.budgetCategory().equalsIgnoreCase(criteria.budget());
+        boolean hasFacility = facility == null || "All Facilities".equals(facility) || stay.facilities().stream().anyMatch(item -> item.equalsIgnoreCase(facility));
+        return area && search && kind && budget && hasFacility;
+    }
+
+    private java.util.List<StayItem> approvedStayItems() {
+        java.util.LinkedHashMap<String, StayItem> stays = new java.util.LinkedHashMap<>();
+        LOCAL_STAY_SEEDS.forEach(stay -> stays.put(stay.name().trim().toLowerCase(), stay));
+        try {
+            for (AppDataStore.BusinessRecord business : AppDataStore.businesses()) {
+                if (!isApprovedStayBusiness(business)) continue;
+                StayItem mapped = new StayItem(business.businessName, business.category, blankTo(business.location, "Nashik"),
+                        blankTo(business.location, "Location details available during connected booking."), "", "/images/welcome-light.png",
+                        business.businessName + " " + blankTo(business.location, "Nashik"), stayBudgetFrom(business.priceRange), List.of(),
+                        blankTo(business.description, "Approved accommodation listing."), false, business.priceRange, business.businessId);
+                stays.put(mapped.name().trim().toLowerCase(), mapped);
+            }
+        } catch (RuntimeException ignored) {
+            // Curated local stays remain available if the existing business store cannot be read.
+        }
+        return java.util.List.copyOf(stays.values());
+    }
+
+    private boolean isApprovedStayBusiness(AppDataStore.BusinessRecord business) {
+        if (business == null || !business.approved || !("approved".equalsIgnoreCase(business.status) || "active".equalsIgnoreCase(business.status))) return false;
+        String category = business.category == null ? "" : business.category.toLowerCase();
+        return java.util.List.of("hotel", "stay", "lodge", "dharamshala", "guest house", "homestay", "tent", "camp", "accommodation", "ashram").stream().anyMatch(category::contains);
+    }
+
+    private String stayBudgetFrom(String priceRange) {
+        String value = priceRange == null ? "" : priceRange.toLowerCase();
+        return value.contains("premium") ? "Premium" : value.contains("standard") ? "Standard" : "Budget";
+    }
+
+    private String blankTo(String value, String fallback) { return value == null || value.isBlank() ? fallback : value.trim(); }
+
+    private java.util.Comparator<StayItem> stayComparator(String location, String sort) {
+        if ("Property Name A-Z".equals(sort)) return java.util.Comparator.comparing(StayItem::name, String.CASE_INSENSITIVE_ORDER);
+        if ("Budget First".equals(sort)) return java.util.Comparator.comparingInt(stay -> budgetRank(stay.budgetCategory()));
+        if ("Near Selected Area".equals(sort) && location != null) return java.util.Comparator.comparingInt(stay -> stay.area().toLowerCase().contains(location.toLowerCase()) ? 0 : 1);
+        return java.util.Comparator.comparing((StayItem stay) -> !stay.locallyApprovedSeed()).thenComparing(StayItem::name, String.CASE_INSENSITIVE_ORDER);
+    }
+
+    private int budgetRank(String value) { return "Budget".equals(value) ? 0 : "Standard".equals(value) ? 1 : 2; }
+    private String staySearchSummary(StayCriteria criteria) { return (criteria.location() == null ? "Nashik" : criteria.location()) + " • " + (criteria.hasDates() ? criteria.checkIn().getDayOfMonth() + " " + criteria.checkIn().getMonth().toString().substring(0, 3) + "–" + criteria.checkOut().getDayOfMonth() + " " + criteria.checkOut().getMonth().toString().substring(0, 3) : "Choose dates") + " • " + criteria.guests(); }
+    private void openStayAreaMap(String location) { openUrl("https://www.google.com/maps/search/?api=1&query=" + java.net.URLEncoder.encode("stays near " + (location == null ? "Nashik" : location) + " Nashik", java.nio.charset.StandardCharsets.UTF_8)); }
+    private void openStayMap(StayItem stay) { openUrl("https://www.google.com/maps/search/?api=1&query=" + java.net.URLEncoder.encode(stay.mapQuery(), java.nio.charset.StandardCharsets.UTF_8)); }
+
+    private void showStayDetails(StayItem stay, StayCriteria criteria) {
+        rememberStayViewed(stay);
+        Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle("Stay Details"); dialog.setHeaderText(null);
+        ButtonType continueBooking = new ButtonType("Continue to Booking");
+        ImageView image = createImage(stay.localImagePath(), 650, 265, 0.54, 0.50);
+        FlowPane facilities = new FlowPane(6, 6); stay.facilities().forEach(item -> facilities.getChildren().add(badge(item)));
+        Button map = new Button("View on Google Maps"); map.getStyleClass().add("pilgrim-small-action"); map.setOnAction(event -> openStayMap(stay));
+        Button save = new Button(stayWishlist.containsKey(stay.stableId()) ? "♥ Saved" : "♡ Save to Wishlist");
+        save.getStyleClass().add("pilgrim-small-action"); save.setOnAction(event -> toggleStayWishlist(stay, save));
+        Button select = new Button("Select"); select.getStyleClass().add("pilgrim-small-action");
+        select.setOnAction(event -> { dialog.setResult(continueBooking); dialog.close(); });
+        VBox option = new VBox(5, strong("Stay Option"), muted("Standard Accommodation"), muted("Suitable for selected guests"),
+                muted(stay.priceInfo().isBlank() ? "Live price and availability are verified before payment." : stay.priceInfo()), select);
+        option.getStyleClass().add("stay-option-card");
+        VBox content = new VBox(12, image, label(stay.name(), "stay-property-name"), muted(stay.category() + " • " + stay.area()), muted(stay.address()),
+                paragraph(stay.shortDescription()), sectionTitle("Stay Overview"), muted(staySearchSummary(criteria)), muted("Budget: " + stay.budgetCategory()), muted(stay.priceInfo().isBlank() ? "Price available during booking" : stay.priceInfo()), sectionTitle("Facilities"), facilities,
+                sectionTitle("Location"), new HBox(8, save, map), option);
+        content.setPadding(new Insets(4));
+        ScrollPane scroll = new ScrollPane(content); scroll.setFitToWidth(true); scroll.setPrefViewportHeight(560); scroll.getStyleClass().add("stay-dialog-scroll");
+        dialog.getDialogPane().setContent(scroll); dialog.getDialogPane().setPrefSize(900, 650); dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CLOSE, continueBooking);
+        dialog.showAndWait().filter(choice -> choice == continueBooking).ifPresent(choice -> showStayBookingDetails(stay, criteria));
+    }
+
+    private void showStayBookingDetails(StayItem stay, StayCriteria criteria) {
+        if (!criteria.hasDates()) { showInfo("Select dates", "Choose a valid check-in and check-out date before continuing to booking."); return; }
+        Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle("Complete Your Stay Booking"); dialog.setHeaderText(null);
+        TextField name = AppUi.textField("Full Name");
+        TextField mobile = AppUi.textField("Mobile Number");
+        TextField email = AppUi.textField("Email Address");
+        TextField request = AppUi.textField("Special Request (optional)");
+        ImageView image = createImage(stay.localImagePath(), 170, 105, 0.54, 0.50);
+        VBox property = new VBox(4, strong(stay.name()), muted(stay.category() + " • " + stay.area()), muted(stay.address()));
+        HBox propertySummary = new HBox(14, image, property); propertySummary.setAlignment(Pos.CENTER_LEFT);
+        VBox content = new VBox(14, propertySummary, sectionTitle("Trip Details"), muted(staySearchSummary(criteria)),
+                sectionTitle("Guest Details"), name, mobile, email, request,
+                muted("Personal details are used only for this booking request and are not logged by the Stay page."));
+        content.getStyleClass().add("stay-booking-summary"); dialog.getDialogPane().setContent(content); dialog.getDialogPane().setPrefSize(760, 620);
+        ButtonType back = new ButtonType("Back", javafx.scene.control.ButtonBar.ButtonData.BACK_PREVIOUS);
+        ButtonType review = new ButtonType("Review Booking"); dialog.getDialogPane().getButtonTypes().addAll(back, review);
+        dialog.showAndWait().filter(choice -> choice == review).ifPresent(choice -> {
+            StayGuestDetails guest = new StayGuestDetails(name.getText(), mobile.getText(), email.getText(), request.getText());
+            if (!validStayGuest(guest)) { showStayBookingDetails(stay, criteria); return; }
+            showStayBookingSummary(stay, criteria, guest);
+        });
+    }
+
+    private boolean validStayGuest(StayGuestDetails guest) {
+        if (guest.name().isBlank()) { showInfo("Guest details", "Enter the guest's full name."); return false; }
+        if (!guest.mobile().replaceAll("[\\s-]", "").matches("\\d{10,15}")) { showInfo("Guest details", "Enter a valid mobile number."); return false; }
+        if (!guest.email().matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) { showInfo("Guest details", "Enter a valid email address."); return false; }
+        return true;
+    }
+
+    private void showStayBookingSummary(StayItem stay, StayCriteria criteria, StayGuestDetails guest) {
+        Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle("Review Your Booking"); dialog.setHeaderText(null);
+        ImageView image = createImage(stay.localImagePath(), 180, 108, 0.54, 0.50);
+        VBox property = new VBox(4, strong(stay.name()), muted(stay.area() + ", Nashik"), muted(stay.category()));
+        HBox propertySummary = new HBox(14, image, property); propertySummary.setAlignment(Pos.CENTER_LEFT);
+        VBox summary = new VBox(11, sectionTitle("Review Your Booking"), propertySummary, sectionTitle("Your Trip"),
+                muted("Check-in: " + stayDate(criteria.checkIn()) + "     Check-out: " + stayDate(criteria.checkOut())),
+                muted(criteria.nights() + (criteria.nights() == 1 ? " night" : " nights") + " • " + criteria.guests()),
+                sectionTitle("Accommodation"), muted("Standard Accommodation"),
+                muted(stay.priceInfo().isBlank() ? "Price is not configured for this stay yet." : stay.priceInfo()),
+                sectionTitle("Guest"), muted(guest.name() + " • " + guest.mobile()),
+                muted("Online payment is available only after the booking server resolves an approved stay option, live price and availability."));
+        summary.getStyleClass().add("stay-booking-summary"); dialog.getDialogPane().setContent(summary); dialog.getDialogPane().setPrefSize(760, 650);
+        ButtonType back = new ButtonType("Back", javafx.scene.control.ButtonBar.ButtonData.BACK_PREVIOUS);
+        ButtonType proceed = new ButtonType("Proceed to Payment"); dialog.getDialogPane().getButtonTypes().addAll(back, proceed);
+        Button paymentButton = (Button) dialog.getDialogPane().lookupButton(proceed);
+        boolean trustedPayment = com.simhastha.payment.PaymentCatalog.find(stay.stableId())
+                .map(item -> item.moduleType() == com.simhastha.payment.PaymentModuleType.STAY).orElse(false);
+        paymentButton.setDisable(!trustedPayment);
+        if (!trustedPayment) paymentButton.setTooltip(new javafx.scene.control.Tooltip("Live price and availability must be verified by the booking server."));
+        dialog.showAndWait().filter(choice -> choice == proceed).ifPresent(choice -> {
+            paymentButton.setDisable(true);
+            paymentCoordinator.startPaidBooking(root.getScene() == null ? null : root.getScene().getWindow(), stay.stableId(), stayRooms(criteria), (int) criteria.nights());
+        });
+    }
+
+    private int stayRooms(StayCriteria criteria) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d+)\\s+Rooms?").matcher(criteria.guests() == null ? "" : criteria.guests());
+        return matcher.find() ? Math.max(1, Integer.parseInt(matcher.group(1))) : 1;
+    }
+
+    private String stayDate(java.time.LocalDate date) { return date == null ? "Not selected" : date.getDayOfMonth() + " " + date.getMonth().toString().substring(0, 3); }
+
+    private record StayCriteria(String location, java.time.LocalDate checkIn, java.time.LocalDate checkOut, String guests, String budget) {
+        private boolean hasDates() { return checkIn != null && checkOut != null && checkOut.isAfter(checkIn); }
+        private long nights() { return hasDates() ? java.time.temporal.ChronoUnit.DAYS.between(checkIn, checkOut) : 0; }
+        private StayCriteria withBudget(String secondaryBudget) { return new StayCriteria(location, checkIn, checkOut, guests, secondaryBudget == null ? "Any Budget" : secondaryBudget); }
+    }
+
+    private record StayGuestDetails(String name, String mobile, String email, String specialRequest) { }
+
+    private record StayItem(String name, String category, String area, String address, String imageUrl, String localImagePath, String mapQuery,
+            String budgetCategory, java.util.List<String> facilities, String shortDescription, boolean locallyApprovedSeed, String priceInfo,
+            String stableId) {
+        private StayItem(String name, String category, String area, String address, String imageUrl, String localImagePath, String mapQuery,
+                String budgetCategory, java.util.List<String> facilities, String shortDescription, boolean locallyApprovedSeed) {
+            this(name, category, area, address, imageUrl, localImagePath, mapQuery, budgetCategory, facilities, shortDescription, locallyApprovedSeed, "", "");
+        }
+
+        private StayItem(String name, String category, String area, String address, String imageUrl, String localImagePath, String mapQuery,
+                String budgetCategory, java.util.List<String> facilities, String shortDescription, boolean locallyApprovedSeed, String priceInfo) {
+            this(name, category, area, address, imageUrl, localImagePath, mapQuery, budgetCategory, facilities, shortDescription, locallyApprovedSeed, priceInfo, "");
+        }
+
+        public String stableId() {
+            return stableId == null || stableId.isBlank() ? "seed:" + name.trim().toLowerCase(java.util.Locale.ROOT) : stableId;
+        }
+    }
+
+    private static final java.util.List<StayItem> LOCAL_STAY_SEEDS = java.util.List.of(
+            new StayItem("Hotel Panchavati Yatri", "Hotel", "Panchavati / Raviwar Karanja", "Panchavati, Nashik", "", "/images/ramkund_sunrise.jpg", "Hotel Panchavati Yatri Panchavati Nashik", "Standard", java.util.List.of("Parking", "Family Friendly"), "A local stay option near Panchavati.", true),
+            new StayItem("Shree Balaji Guest House", "Guest House", "Panchavati", "Panchavati, Nashik", "", "/images/godavari_kumbh.jpg", "Shree Balaji Guest House Panchavati Nashik", "Budget", java.util.List.of("Family Friendly", "Hot Water"), "A local guest house option in Panchavati.", true),
+            new StayItem("FabHotel Vaishnav Bairagi Yatriniwas", "Lodge", "Ramkund / Panchavati", "Ramkund, Panchavati, Nashik", "", "/images/ramkund_sunrise.jpg", "FabHotel Vaishnav Bairagi Yatriniwas Ramkund Panchavati Nashik", "Standard", java.util.List.of("Wi-Fi", "Family Friendly"), "A lodge option near Ramkund.", true),
+            new StayItem("Hotel Sanket Lodge", "Lodge", "Panchavati", "Panchavati, Nashik", "", "/images/godavari_kumbh.jpg", "Hotel Sanket Lodge Panchavati Nashik", "Budget", java.util.List.of("Hot Water"), "A local lodge option in Panchavati.", true),
+            new StayItem("Shri Sant Gadge Maharaj Dharamshala Trust Nashik", "Dharamshala", "Panchavati", "Panchavati, Nashik", "", "/images/ramkund_sunrise.jpg", "Shri Sant Gadge Maharaj Dharamshala Trust Panchavati Nashik", "Budget", java.util.List.of("Meals", "Accessible"), "A dharamshala option in the Panchavati area.", true),
+            new StayItem("Ladka Bhuvan Dharamshala", "Dharamshala", "Dindori Naka / Panchavati", "Dindori Naka, Nashik", "", "/images/godavari_kumbh.jpg", "Ladka Bhuvan Dharamshala Dindori Naka Nashik", "Budget", java.util.List.of("Family Friendly"), "A dharamshala option near Dindori Naka.", true),
+            new StayItem("Hotel Three Leaves", "Hotel", "Trimbakeshwar", "Trimbakeshwar, Nashik", "", "/images/trimbakeshwar.jpg", "Hotel Three Leaves Trimbakeshwar Nashik", "Premium", java.util.List.of("Parking", "Wi-Fi", "Hot Water"), "A hotel option in Trimbakeshwar.", true),
+            new StayItem("Tulsi Inn", "Homestay", "Trimbakeshwar", "Trimbakeshwar, Nashik", "", "/images/trimbakeshwar.jpg", "Tulsi Inn Trimbakeshwar Nashik", "Standard", java.util.List.of("Family Friendly", "Meals", "Hot Water"), "A homestay option near Trimbakeshwar Temple.", true));
 
     private VBox lostFoundPage() {
         HBox actions = new HBox(12,
