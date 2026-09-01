@@ -1,6 +1,7 @@
 {
     "version": "0.2.0",
     "configurations": [
+
         {
             "type": "java",
             "name": "ReferencePaymentBackendServer",
@@ -25,8 +26,7 @@
             "request": "launch",
             "mainClass": "com.simhastha.Main",
             "projectName": "simhastha-connect",
-            "vmArgs": "--module-path \"D://SuperX//javafx-sdk-21.0.12//lib\" --add-modules javafx.controls,javafx.fxml,javafx.web",
-            "env": {
+"vmArgs": "--module-path \"C://JAVA2026//javafx-sdk-21.0.12//lib\" --add-modules javafx.controls,javafx.fxml",            "env": {
                 "PAYMENTS_ENABLED": "true",
                 "PAYMENTS_BACKEND_BASE_URL": "http://localhost:8080"
             }
