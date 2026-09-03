@@ -348,6 +348,58 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // ================= PUJA MODULE =================
+
+    match /pujaBookings/{bookingId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.bookingStatus in ["PENDING", "PAYMENT_PENDING"]
+        && request.resource.data.paymentStatus == "PENDING"
+        && exists(/databases/$(database)/documents/pujaServices/$(request.resource.data.serviceId))
+        && get(/databases/$(database)/documents/pujaServices/$(request.resource.data.serviceId)).data.published == true
+        && get(/databases/$(database)/documents/pujaServices/$(request.resource.data.serviceId)).data.enabled == true
+        && get(/databases/$(database)/documents/pujaServices/$(request.resource.data.serviceId)).data.verificationStatus == "VERIFIED";
+
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.serviceId == resource.data.serviceId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'bookingStatus', 'paymentStatus', 'internalPaymentId', 'razorpayOrderId',
+          'razorpayPaymentId', 'paymentMethod', 'paymentCreatedAt',
+          'paymentCompletedAt', 'paymentFailureReason', 'qrTicketId',
+          'qrVerificationToken', 'updatedAt'
+        ])
+        && request.resource.data.paymentStatus in [
+          'PENDING', 'PAID', 'FAILED', 'CANCELLED', 'REFUND_PENDING', 'REFUNDED'
+        ]
+        && request.resource.data.bookingStatus in [
+          'PAYMENT_PENDING', 'CONFIRMED', 'CANCELLED', 'REFUNDED'
+        ];
+
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.serviceId == resource.data.serviceId
+        && request.resource.data.paymentStatus == resource.data.paymentStatus
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'bookingStatus', 'updatedAt'
+        ])
+        && resource.data.bookingStatus in ['PENDING', 'CONFIRMED']
+        && request.resource.data.bookingStatus in ['CANCELLED', 'DISPUTED'];
+
+      allow update, delete: if isAdmin();
+    }
+
+    match /fraudReports/{reportId} {
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isAdmin();
+    }
+
     // ================= PUBLIC MODULES =================
 
     match /{collection}/{id} {

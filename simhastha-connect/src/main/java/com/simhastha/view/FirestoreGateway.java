@@ -170,6 +170,144 @@ public final class FirestoreGateway {
         return records;
     }
 
+    public List<AppDataStore.PujaProviderRecord> loadPujaProviders(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.PujaProviderRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("pujaProviders", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.PujaProviderRecord(
+                    document.id,
+                    field(fields, "fullName"),
+                    field(fields, "profilePhoto"),
+                    firstNonBlank(field(fields, "phone"), field(fields, "mobile")),
+                    field(fields, "email"),
+                    field(fields, "address"),
+                    field(fields, "experience"),
+                    field(fields, "specialization"),
+                    field(fields, "languages"),
+                    firstNonBlank(field(fields, "templeOrganization"), field(fields, "temple"), field(fields, "organization")),
+                    field(fields, "identityDocument"),
+                    field(fields, "supportingCertificates"),
+                    field(fields, "servicesOffered"),
+                    field(fields, "serviceLocations"),
+                    firstNonBlank(field(fields, "status"), "pending"),
+                    "true".equalsIgnoreCase(boolField(fields, "approved")),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.PujaServiceRecord> loadPujaServices(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.PujaServiceRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("pujaServices", idToken)) {
+            records.add(pujaServiceFrom(document));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.PujaServiceRecord> loadPublicPujaServices(String idToken)
+            throws IOException, InterruptedException {
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"pujaServices\"}],"
+                + "\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"published\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}},"
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"enabled\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}},"
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"verificationStatus\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"VERIFIED\"}}}"
+                + "]}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())),
+                query, idToken);
+        List<AppDataStore.PujaServiceRecord> records = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            AppDataStore.PujaServiceRecord service = pujaServiceFrom(document);
+            if (service.published && service.enabled && "VERIFIED".equalsIgnoreCase(service.verificationStatus)) {
+                records.add(service);
+            }
+        }
+        return records;
+    }
+
+    private AppDataStore.PujaServiceRecord pujaServiceFrom(Document document) {
+        String fields = document.fields;
+        return new AppDataStore.PujaServiceRecord(
+                document.id,
+                firstNonBlank(field(fields, "name"), field(fields, "pujaName"), field(fields, "title")),
+                field(fields, "description"),
+                field(fields, "pujaType"),
+                firstNonBlank(field(fields, "templeOrGhat"), field(fields, "templeGhat")),
+                field(fields, "price"),
+                field(fields, "duration"),
+                field(fields, "providerId"),
+                firstNonBlank(field(fields, "providerName"), field(fields, "provider")),
+                firstNonBlank(field(fields, "verificationStatus"), "PENDING"),
+                field(fields, "availableSlots"),
+                field(fields, "mode"),
+                field(fields, "languages"),
+                firstNonBlank(field(fields, "imageUrl"), field(fields, "image")),
+                field(fields, "imagePublicId"),
+                firstNonBlank(field(fields, "bookingStatus"), "OPEN"),
+                firstNonBlank(field(fields, "status"), "draft"),
+                "true".equalsIgnoreCase(boolField(fields, "published")),
+                !"false".equalsIgnoreCase(boolField(fields, "enabled"))
+                        && !"false".equalsIgnoreCase(boolField(fields, "active")),
+                "true".equalsIgnoreCase(boolField(fields, "adminApproved"))
+                        || "true".equalsIgnoreCase(boolField(fields, "approved")),
+                field(fields, "createdAt"),
+                field(fields, "updatedAt"),
+                field(fields, "createdBy"),
+                firstNonBlank(field(fields, "updatedBy"), field(fields, "updatedByAdminId")),
+                field(fields, "verifiedAt"),
+                field(fields, "verifiedBy"));
+    }
+
+    public List<AppDataStore.PujaBookingRecord> loadPujaBookings(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.PujaBookingRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("pujaBookings", idToken)) {
+            records.add(pujaBookingFrom(document));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.PujaBookingRecord> loadPujaBookingsForUser(String userId, String idToken)
+            throws IOException, InterruptedException {
+        if (!notBlank(userId)) {
+            return List.of();
+        }
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"pujaBookings\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"userId\"},"
+                + "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + escape(userId) + "\"}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())),
+                query, idToken);
+        List<AppDataStore.PujaBookingRecord> records = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            records.add(pujaBookingFrom(document));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.FraudReportRecord> loadFraudReports(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.FraudReportRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("fraudReports", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.FraudReportRecord(
+                    document.id,
+                    field(fields, "userId"),
+                    field(fields, "userName"),
+                    field(fields, "bookingId"),
+                    field(fields, "serviceId"),
+                    field(fields, "serviceName"),
+                    field(fields, "providerId"),
+                    field(fields, "providerName"),
+                    field(fields, "issue"),
+                    firstNonBlank(field(fields, "status"), "OPEN"),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
     public List<AppDataStore.BookingRecord> loadBookings(String idToken) throws IOException, InterruptedException {
         List<AppDataStore.BookingRecord> records = new ArrayList<>();
         for (Document document : loadCollectionDocuments("bookings", idToken)) {
@@ -342,6 +480,52 @@ public final class FirestoreGateway {
                 firstNonBlank(field(fields, "paymentStatus"), "UNPAID"),
                 field(fields, "internalPaymentId"),
                 field(fields, "razorpayPaymentId"));
+    }
+
+    private AppDataStore.PujaBookingRecord pujaBookingFrom(Document document) {
+        String fields = document.fields;
+        return new AppDataStore.PujaBookingRecord(
+                valueOr(document.id, field(fields, "bookingId")),
+                field(fields, "userId"),
+                field(fields, "userName"),
+                field(fields, "userPhone"),
+                field(fields, "userEmail"),
+                field(fields, "serviceId"),
+                field(fields, "serviceName"),
+                firstNonBlank(field(fields, "serviceType"), field(fields, "pujaType")),
+                field(fields, "providerId"),
+                field(fields, "providerName"),
+                field(fields, "templeOrGhat"),
+                firstNonBlank(field(fields, "date"), field(fields, "bookingDate")),
+                firstNonBlank(field(fields, "time"), field(fields, "bookingTime")),
+                firstNonBlank(field(fields, "location"), field(fields, "locationName")),
+                parseInt(numberField(fields, "devoteesCount"), 1),
+                field(fields, "language"),
+                field(fields, "mode"),
+                parseLong(firstNonBlank(numberField(fields, "amount"), numberField(fields, "totalAmount")), 0),
+                firstNonBlank(field(fields, "bookingStatus"), "PENDING"),
+                firstNonBlank(field(fields, "paymentStatus"), "UNPAID"),
+                field(fields, "createdAt"),
+                field(fields, "updatedAt"),
+                field(fields, "locationId"),
+                field(fields, "locationName"),
+                "true".equalsIgnoreCase(boolField(fields, "samagriSelected")),
+                parseLong(numberField(fields, "samagriAmount"), 0),
+                "true".equalsIgnoreCase(boolField(fields, "prasadSelected")),
+                parseLong(numberField(fields, "prasadAmount"), 0),
+                parseLong(numberField(fields, "basePrice"), 0),
+                parseLong(numberField(fields, "serviceFee"), 0),
+                parseLong(firstNonBlank(numberField(fields, "totalAmount"), numberField(fields, "amount")), 0),
+                field(fields, "specialRequirements"),
+                field(fields, "internalPaymentId"),
+                field(fields, "razorpayOrderId"),
+                field(fields, "razorpayPaymentId"),
+                field(fields, "paymentMethod"),
+                field(fields, "paymentCreatedAt"),
+                field(fields, "paymentCompletedAt"),
+                field(fields, "paymentFailureReason"),
+                field(fields, "qrTicketId"),
+                field(fields, "qrVerificationToken"));
     }
 
     public void updateApprovalRequestStatus(String requestId, String status, String idToken)
@@ -749,6 +933,201 @@ public final class FirestoreGateway {
         sendAuthorizedPatch(documentUri("transportRoutes", route.routeId), json, idToken);
     }
 
+    public void savePujaProvider(AppDataStore.PujaProviderRecord provider, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("fullName", provider.fullName),
+                fieldJson("profilePhoto", provider.profilePhoto),
+                fieldJson("phone", provider.phone),
+                fieldJson("email", provider.email),
+                fieldJson("address", provider.address),
+                fieldJson("experience", provider.experience),
+                fieldJson("specialization", provider.specialization),
+                fieldJson("languages", provider.languages),
+                fieldJson("templeOrganization", provider.templeOrganization),
+                fieldJson("identityDocument", provider.identityDocument),
+                fieldJson("supportingCertificates", provider.supportingCertificates),
+                fieldJson("servicesOffered", provider.servicesOffered),
+                fieldJson("serviceLocations", provider.serviceLocations),
+                fieldJson("status", provider.status),
+                boolFieldJson("approved", provider.approved),
+                boolFieldJson("verified", provider.approved),
+                fieldJson("createdAt", valueOr(now, provider.createdAt)),
+                fieldJson("updatedAt", now));
+        sendAuthorizedPatch(documentUri("pujaProviders", provider.providerId), json, idToken);
+    }
+
+    public void savePujaService(AppDataStore.PujaServiceRecord service, String idToken)
+            throws IOException, InterruptedException {
+        String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("serviceId", service.serviceId),
+                fieldJson("name", service.name),
+                fieldJson("pujaName", service.name),
+                fieldJson("description", service.description),
+                fieldJson("pujaType", service.pujaType),
+                fieldJson("templeOrGhat", service.templeOrGhat),
+                fieldJson("templeGhat", service.templeOrGhat),
+                fieldJson("price", service.price),
+                fieldJson("duration", service.duration),
+                fieldJson("providerId", service.providerId),
+                fieldJson("providerName", service.providerName),
+                fieldJson("provider", service.providerName),
+                fieldJson("verificationStatus", service.verificationStatus),
+                fieldJson("availableSlots", service.availableSlots),
+                fieldJson("mode", service.mode),
+                fieldJson("languages", service.languages),
+                fieldJson("imageUrl", service.imageUrl),
+                fieldJson("imagePublicId", service.imagePublicId),
+                fieldJson("bookingStatus", service.bookingStatus),
+                fieldJson("status", service.status),
+                boolFieldJson("published", service.published),
+                boolFieldJson("enabled", service.enabled),
+                boolFieldJson("active", service.enabled),
+                boolFieldJson("adminApproved", service.adminApproved),
+                boolFieldJson("approved", service.adminApproved),
+                boolFieldJson("verified", "VERIFIED".equalsIgnoreCase(service.verificationStatus)),
+                fieldJson("createdAt", valueOr(now, service.createdAt)),
+                fieldJson("updatedAt", now),
+                fieldJson("createdBy", valueOr(adminUid, service.createdBy)),
+                fieldJson("updatedBy", adminUid),
+                fieldJson("updatedByAdminId", adminUid),
+                fieldJson("verifiedAt", "VERIFIED".equalsIgnoreCase(service.verificationStatus)
+                        ? valueOr(now, service.verifiedAt)
+                        : service.verifiedAt),
+                fieldJson("verifiedBy", "VERIFIED".equalsIgnoreCase(service.verificationStatus)
+                        ? valueOr(adminUid, service.verifiedBy)
+                        : service.verifiedBy));
+        sendAuthorizedPatch(documentUri("pujaServices", service.serviceId), json, idToken);
+    }
+
+    public void deletePujaService(String serviceId, String idToken) throws IOException, InterruptedException {
+        sendAuthorizedDelete(documentUri("pujaServices", serviceId), idToken);
+    }
+
+    public void savePujaBooking(AppDataStore.PujaBookingRecord booking, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("bookingId", booking.bookingId),
+                fieldJson("userId", booking.userId),
+                fieldJson("userName", booking.userName),
+                fieldJson("userPhone", booking.userPhone),
+                fieldJson("userEmail", booking.userEmail),
+                fieldJson("serviceId", booking.serviceId),
+                fieldJson("serviceName", booking.serviceName),
+                fieldJson("serviceType", booking.serviceType),
+                fieldJson("providerId", booking.providerId),
+                fieldJson("providerName", booking.providerName),
+                fieldJson("templeOrGhat", booking.templeOrGhat),
+                fieldJson("date", booking.date),
+                fieldJson("bookingDate", booking.date),
+                fieldJson("time", booking.time),
+                fieldJson("bookingTime", booking.time),
+                fieldJson("locationId", booking.locationId),
+                fieldJson("location", booking.location),
+                fieldJson("locationName", booking.locationName),
+                numberFieldJson("devoteesCount", booking.devoteesCount),
+                fieldJson("language", booking.language),
+                fieldJson("mode", booking.mode),
+                numberFieldJson("amount", booking.amount),
+                boolFieldJson("samagriSelected", booking.samagriSelected),
+                numberFieldJson("samagriAmount", booking.samagriAmount),
+                boolFieldJson("prasadSelected", booking.prasadSelected),
+                numberFieldJson("prasadAmount", booking.prasadAmount),
+                numberFieldJson("basePrice", booking.basePrice),
+                numberFieldJson("serviceFee", booking.serviceFee),
+                numberFieldJson("totalAmount", booking.totalAmount),
+                fieldJson("specialRequirements", booking.specialRequirements),
+                fieldJson("bookingStatus", booking.bookingStatus),
+                fieldJson("paymentStatus", booking.paymentStatus),
+                fieldJson("internalPaymentId", booking.internalPaymentId),
+                fieldJson("razorpayOrderId", booking.razorpayOrderId),
+                fieldJson("razorpayPaymentId", booking.razorpayPaymentId),
+                fieldJson("paymentMethod", booking.paymentMethod),
+                fieldJson("paymentCreatedAt", booking.paymentCreatedAt),
+                fieldJson("paymentCompletedAt", booking.paymentCompletedAt),
+                fieldJson("paymentFailureReason", booking.paymentFailureReason),
+                fieldJson("qrTicketId", booking.qrTicketId),
+                fieldJson("qrVerificationToken", booking.qrVerificationToken),
+                fieldJson("createdAt", valueOr(now, booking.createdAt)),
+                fieldJson("updatedAt", now));
+        sendAuthorizedPatch(documentUri("pujaBookings", booking.bookingId), json, idToken);
+    }
+
+    public void updatePujaBookingStatus(String bookingId, String bookingStatus, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("bookingStatus", bookingStatus),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("pujaBookings", bookingId)
+                        + "&updateMask.fieldPaths=bookingStatus&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void updatePujaBookingQrTicket(String bookingId, String qrTicketId, String qrVerificationToken,
+            String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("qrTicketId", qrTicketId),
+                fieldJson("qrVerificationToken", qrVerificationToken),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("pujaBookings", bookingId)
+                        + "&updateMask.fieldPaths=qrTicketId"
+                        + "&updateMask.fieldPaths=qrVerificationToken"
+                        + "&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void updatePujaBookingPayment(String bookingId, String bookingStatus, String paymentStatus,
+            String internalPaymentId, String razorpayOrderId, String razorpayPaymentId, String paymentMethod,
+            String paymentCreatedAt, String paymentCompletedAt, String paymentFailureReason, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("bookingStatus", bookingStatus),
+                fieldJson("paymentStatus", paymentStatus),
+                fieldJson("internalPaymentId", internalPaymentId),
+                fieldJson("razorpayOrderId", razorpayOrderId),
+                fieldJson("razorpayPaymentId", razorpayPaymentId),
+                fieldJson("paymentMethod", paymentMethod),
+                fieldJson("paymentCreatedAt", paymentCreatedAt),
+                fieldJson("paymentCompletedAt", paymentCompletedAt),
+                fieldJson("paymentFailureReason", paymentFailureReason),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("pujaBookings", bookingId)
+                        + "&updateMask.fieldPaths=bookingStatus"
+                        + "&updateMask.fieldPaths=paymentStatus"
+                        + "&updateMask.fieldPaths=internalPaymentId"
+                        + "&updateMask.fieldPaths=razorpayOrderId"
+                        + "&updateMask.fieldPaths=razorpayPaymentId"
+                        + "&updateMask.fieldPaths=paymentMethod"
+                        + "&updateMask.fieldPaths=paymentCreatedAt"
+                        + "&updateMask.fieldPaths=paymentCompletedAt"
+                        + "&updateMask.fieldPaths=paymentFailureReason"
+                        + "&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void saveFraudReport(AppDataStore.FraudReportRecord report, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("reportId", report.reportId),
+                fieldJson("userId", report.userId),
+                fieldJson("userName", report.userName),
+                fieldJson("bookingId", report.bookingId),
+                fieldJson("serviceId", report.serviceId),
+                fieldJson("serviceName", report.serviceName),
+                fieldJson("providerId", report.providerId),
+                fieldJson("providerName", report.providerName),
+                fieldJson("issue", report.issue),
+                fieldJson("status", report.status),
+                fieldJson("createdAt", valueOr(now, report.createdAt)),
+                fieldJson("updatedAt", now));
+        sendAuthorizedPatch(documentUri("fraudReports", report.reportId), json, idToken);
+    }
+
     public void updateRouteFlags(String routeId, boolean published, boolean active, String idToken)
             throws IOException, InterruptedException {
         String json = fieldsJson(
@@ -895,7 +1274,20 @@ public final class FirestoreGateway {
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw new IOException("Firestore write failed: " + response.statusCode());
+            throw new IOException("Firestore write failed: HTTP " + response.statusCode()
+                    + " " + compactError(response.body()));
+        }
+    }
+
+    private void sendAuthorizedDelete(URI uri, String idToken) throws IOException, InterruptedException {
+        HttpRequest request = authorizedBuilder(uri, idToken)
+                .timeout(Duration.ofSeconds(8))
+                .DELETE()
+                .build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400 && response.statusCode() != 404) {
+            throw new IOException("Firestore delete failed: HTTP " + response.statusCode()
+                    + " " + compactError(response.body()));
         }
     }
 
@@ -1155,6 +1547,14 @@ public final class FirestoreGateway {
 
     private String valueOr(String fallback, String value) {
         return notBlank(value) ? value : fallback;
+    }
+
+    private String compactError(String body) {
+        if (body == null || body.isBlank()) {
+            return "";
+        }
+        String compact = body.replaceAll("\\s+", " ").trim();
+        return compact.length() > 360 ? compact.substring(0, 360) + "..." : compact;
     }
 
     private boolean notBlank(String value) {
