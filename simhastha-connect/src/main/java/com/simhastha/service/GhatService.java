@@ -30,13 +30,10 @@ public final class GhatService {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 List<Ghat> backendGhats = gateway.loadGhats(idToken);
-                backendGhats.forEach(ghat -> System.out.println("BACKEND RELOADED IMAGE = " + ghat.id() + " -> " + ghat.imageUrl()));
-                List<Ghat> userGhats = userVisibleGhats(backendGhats);
-                userGhats.forEach(ghat -> System.out.println("USER SERVICE IMAGE = " + ghat.id() + " -> " + ghat.imageUrl()));
-                return userGhats;
+                return userVisibleGhats(backendGhats);
             }
             catch (Exception exception) {
-                LOGGER.log(Level.WARNING, "Unable to load published ghats from Firestore", exception);
+                logLoadFallback("published ghats", exception);
                 return userVisibleGhats(List.of());
             }
         });
@@ -47,7 +44,7 @@ public final class GhatService {
         return CompletableFuture.supplyAsync(() -> {
             try { return resolvedGhats(gateway.loadAdminGhats(idToken)); }
             catch (Exception exception) {
-                LOGGER.log(Level.WARNING, "Unable to load admin ghat records from Firestore", exception);
+                logLoadFallback("admin ghat records", exception);
                 return resolvedGhats(List.of());
             }
         });
@@ -61,13 +58,7 @@ public final class GhatService {
                     throw new IllegalArgumentException("A local image must be copied into managed Ghat media before it can be saved.");
                 }
                 gateway.saveGhat(ghat, idToken);
-                System.out.println("ADMIN SAVED GHAT ID = " + ghat.id());
-                System.out.println("ADMIN SAVED IMAGE = " + ghat.imageUrl());
-                Ghat reloaded = gateway.loadGhat(ghat.id(), idToken);
-                System.out.println("BACKEND RELOADED IMAGE = " + reloaded.id() + " -> " + reloaded.imageUrl());
-                if (!Objects.equals(ghat.imageUrl(), reloaded.imageUrl())) {
-                    throw new IllegalStateException("Saved Ghat image reference did not persist.");
-                }
+                LOGGER.info("Ghat save accepted by Firestore: ghatId=" + ghat.id());
             }
             catch (Exception exception) {
                 if (permissionDenied(exception)) {
@@ -88,10 +79,7 @@ public final class GhatService {
                     throw new IllegalArgumentException("A local image must be copied into managed Ghat media before it can be saved.");
                 }
                 gateway.updateGhatImage(ghat.id(), imageUrl, idToken);
-                System.out.println("ADMIN SAVED GHAT ID = " + ghat.id());
-                System.out.println("ADMIN SAVED IMAGE = " + imageUrl);
                 Ghat reloaded = gateway.loadGhat(ghat.id(), idToken);
-                System.out.println("BACKEND RELOADED IMAGE = " + reloaded.id() + " -> " + reloaded.imageUrl());
                 if (!Objects.equals(imageUrl, reloaded.imageUrl())) {
                     throw new IllegalStateException("Saved Ghat image reference did not persist.");
                 }
@@ -99,12 +87,45 @@ public final class GhatService {
             } catch (Exception exception) {
                 if (permissionDenied(exception)) {
                     try {
-                        Ghat local = withImage(ghat, imageUrl);
+                        Ghat local = new Ghat(ghat.id(), ghat.name(), ghat.area(), ghat.description(), ghat.latitude(),
+                                ghat.longitude(), ghat.entryLatitude(), ghat.entryLongitude(), imageUrl,
+                                ghat.operationalStatus(), ghat.crowdLevel(), ghat.estimatedWaitMinutes(),
+                                ghat.bathingAvailable(), ghat.walking(), ghat.facilities(), ghat.weather(),
+                                ghat.history(), ghat.lastUpdated(), ghat.operationalState(), ghat.published(), ghat.active());
                         localOverrides.save(local);
-                        System.out.println("LOCAL FALLBACK RESULT = saved " + localOverrides.file());
+                        LOGGER.info("Saved legacy Ghat image locally because Firestore write is unavailable: " + localOverrides.file());
                         return new GhatUpdateResult(local, true);
                     } catch (Exception localFailure) { exception.addSuppressed(localFailure); }
                 }
+                throw new GhatLoadException(exception);
+            }
+        });
+    }
+
+    public CompletableFuture<GhatUpdateResult> updateGhatImage(Ghat ghat, String imageUrl, String imagePublicId, String idToken) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                if (imageUrl == null || imageUrl.isBlank()) throw new IllegalArgumentException("An image reference is required.");
+                if (!imageUrl.startsWith("https://")) {
+                    throw new IllegalArgumentException("Ghat image updates must use a persisted HTTPS Cloudinary URL.");
+                }
+                if (imagePublicId == null || imagePublicId.isBlank()) {
+                    throw new IllegalArgumentException("A Cloudinary publicId is required for Ghat image updates.");
+                }
+                LOGGER.info("Ghat image Firestore update started: ghatId=" + ghat.id()
+                        + ", secureUrlPresent=true, publicIdPresent=true");
+                Ghat accepted = new Ghat(ghat.id(), ghat.name(), ghat.area(), ghat.description(), ghat.latitude(),
+                        ghat.longitude(), ghat.entryLatitude(), ghat.entryLongitude(), imageUrl, imagePublicId,
+                        ghat.operationalStatus(), ghat.crowdLevel(), ghat.estimatedWaitMinutes(),
+                        ghat.bathingAvailable(), ghat.walking(), ghat.facilities(), ghat.weather(),
+                        ghat.history(), String.valueOf(System.currentTimeMillis()), ghat.operationalState(),
+                        true, true);
+                gateway.saveGhat(accepted, idToken);
+                LOGGER.info("Ghat image Firestore update accepted: ghatId=" + ghat.id()
+                        + ", secureUrlPresent=true, publicIdPresent=true");
+                return new GhatUpdateResult(accepted, false);
+            } catch (Exception exception) {
+                LOGGER.log(Level.WARNING, "Ghat image Firestore update failed: ghatId=" + ghat.id(), exception);
                 throw new GhatLoadException(exception);
             }
         });
@@ -117,7 +138,11 @@ public final class GhatService {
      */
     List<Ghat> resolvedGhats(List<Ghat> remote) {
         List<Ghat> liveRecords = remote == null ? List.of() : remote;
-        Map<String, Ghat> localById = new HashMap<>(localOverrides.load());
+        Map<String, Ghat> localByIdOrName = new HashMap<>();
+        for (Ghat local : localOverrides.load().values()) {
+            localByIdOrName.put(key(local.id()), local);
+            localByIdOrName.putIfAbsent(key(local.name()), local);
+        }
         Map<String, Ghat> liveByIdOrName = new HashMap<>();
         for (Ghat live : liveRecords) {
             liveByIdOrName.put(key(live.id()), live);
@@ -126,17 +151,18 @@ public final class GhatService {
 
         List<Ghat> result = new ArrayList<>();
         for (Ghat catalogueGhat : catalogue.catalogue()) {
-            Ghat local = localById.remove(catalogueGhat.id());
+            Ghat local = localByIdOrName.remove(key(catalogueGhat.id()));
+            if (local == null) local = localByIdOrName.remove(key(catalogueGhat.name()));
             Ghat base = local == null ? catalogueGhat : merge(catalogueGhat, local);
             Ghat live = liveByIdOrName.remove(key(catalogueGhat.id()));
             if (live == null) live = liveByIdOrName.remove(key(catalogueGhat.name()));
             result.add(live == null ? base : merge(base, live));
         }
-        for (Ghat local : localById.values()) {
-            if (!result.stream().anyMatch(ghat -> ghat.id().equals(local.id()))) result.add(local);
+        for (Ghat local : localByIdOrName.values()) {
+            if (!result.stream().anyMatch(ghat -> sameGhat(ghat, local))) result.add(local);
         }
         for (Ghat live : liveRecords) {
-            if (!result.stream().anyMatch(ghat -> ghat.id().equals(live.id()) || key(ghat.name()).equals(key(live.name())))) {
+            if (!result.stream().anyMatch(ghat -> sameGhat(ghat, live))) {
                 result.add(live);
             }
         }
@@ -149,32 +175,74 @@ public final class GhatService {
     }
 
     private Ghat merge(Ghat catalogueGhat, Ghat live) {
-        Ghat merged = new Ghat(catalogueGhat.id(), first(live.name(), catalogueGhat.name()), first(live.area(), catalogueGhat.area()),
+        return new Ghat(catalogueGhat.id(), first(live.name(), catalogueGhat.name()), first(live.area(), catalogueGhat.area()),
                 first(live.description(), catalogueGhat.description()), value(live.latitude(), catalogueGhat.latitude()),
                 value(live.longitude(), catalogueGhat.longitude()), value(live.entryLatitude(), catalogueGhat.entryLatitude()),
                 value(live.entryLongitude(), catalogueGhat.entryLongitude()), first(live.imageUrl(), catalogueGhat.imageUrl()),
-                live.operationalStatus(), live.crowdLevel(), live.estimatedWaitMinutes(), live.bathingAvailable(),
-                live.walking(), live.facilities().isEmpty() ? catalogueGhat.facilities() : live.facilities(),
+                first(live.imagePublicId(), catalogueGhat.imagePublicId()),
+                operationalStatus(live, catalogueGhat), crowdLevel(live, catalogueGhat),
+                value(live.estimatedWaitMinutes(), catalogueGhat.estimatedWaitMinutes()),
+                hasLiveBathing(live) ? live.bathingAvailable() : catalogueGhat.bathingAvailable(),
+                hasWalkingDetails(live) ? live.walking() : catalogueGhat.walking(),
+                live.facilities().isEmpty() ? catalogueGhat.facilities() : live.facilities(),
                 live.weather().available() ? live.weather() : catalogueGhat.weather(),
                 live.history().available() ? live.history() : catalogueGhat.history(),
-                first(live.lastUpdated(), catalogueGhat.lastUpdated()), live.operationalState(), live.published(), live.active());
-        System.out.println("MERGED USER IMAGE = " + merged.id() + " -> " + merged.imageUrl());
-        return merged;
+                first(live.lastUpdated(), catalogueGhat.lastUpdated()), operationalState(live, catalogueGhat),
+                live.published(), live.active());
+    }
+
+    private void logLoadFallback(String label, Exception exception) {
+        if (permissionDenied(exception)) {
+            LOGGER.info("Firestore access denied while loading " + label + "; using local/catalogue fallback.");
+        } else if (timeout(exception)) {
+            LOGGER.info("Firestore timed out while loading " + label + "; using local/catalogue fallback.");
+        } else {
+            LOGGER.log(Level.WARNING, "Unable to load " + label + " from Firestore", exception);
+        }
     }
 
     private static String first(String preferred, String fallback) { return preferred == null || preferred.isBlank() ? fallback : preferred; }
     private static <T> T value(T preferred, T fallback) { return preferred == null ? fallback : preferred; }
     private static String key(String value) { return value == null ? "" : value.trim().toLowerCase(Locale.ROOT); }
+    private static Ghat.OperationalStatus operationalStatus(Ghat live, Ghat fallback) {
+        return live.operationalStatus() == Ghat.OperationalStatus.INFORMATION_ONLY ? fallback.operationalStatus() : live.operationalStatus();
+    }
+    private static Ghat.CrowdLevel crowdLevel(Ghat live, Ghat fallback) {
+        return live.crowdLevel() == Ghat.CrowdLevel.UNKNOWN ? fallback.crowdLevel() : live.crowdLevel();
+    }
+    private static boolean hasLiveBathing(Ghat live) {
+        return live.operationalState().bathingStatus() != com.simhastha.model.GhatOperationalState.BathingStatus.UNAVAILABLE;
+    }
+    private static boolean hasWalkingDetails(Ghat ghat) {
+        return ghat.walking().approximateSteps() != null || ghat.walking().distanceMeters() != null
+                || ghat.walking().seniorFriendly() || ghat.walking().wheelchairAccessible();
+    }
+    private static com.simhastha.model.GhatOperationalState operationalState(Ghat live, Ghat fallback) {
+        return hasLiveBathing(live) || !live.operationalState().lastUpdated().isBlank()
+                ? live.operationalState() : fallback.operationalState();
+    }
+    private static boolean sameGhat(Ghat first, Ghat second) {
+        return first != null && second != null
+                && ((!key(first.id()).isBlank() && key(first.id()).equals(key(second.id())))
+                || (!key(first.name()).isBlank() && key(first.name()).equals(key(second.name()))));
+    }
     private static boolean permissionDenied(Exception exception) {
         String message = String.valueOf(exception.getMessage());
         Throwable cause = exception.getCause();
         while (cause != null) { message += " " + cause.getMessage(); cause = cause.getCause(); }
-        return message.contains("HTTP 403") || message.contains("PERMISSION_DENIED") || message.contains("Missing or insufficient permissions");
+        return message.contains("HTTP 401") || message.contains("HTTP 403")
+                || message.contains("PERMISSION_DENIED")
+                || message.contains("Missing or insufficient permissions");
     }
-    private static Ghat withImage(Ghat ghat, String imageUrl) {
-        return new Ghat(ghat.id(), ghat.name(), ghat.area(), ghat.description(), ghat.latitude(), ghat.longitude(), ghat.entryLatitude(), ghat.entryLongitude(), imageUrl,
-                ghat.operationalStatus(), ghat.crowdLevel(), ghat.estimatedWaitMinutes(), ghat.bathingAvailable(), ghat.walking(), ghat.facilities(), ghat.weather(),
-                ghat.history(), ghat.lastUpdated(), ghat.operationalState(), ghat.published(), ghat.active());
+    private static boolean timeout(Exception exception) {
+        Throwable current = exception;
+        while (current != null) {
+            if (current instanceof java.net.http.HttpTimeoutException) return true;
+            String message = String.valueOf(current.getMessage()).toLowerCase(Locale.ROOT);
+            if (message.contains("timed out") || message.contains("timeout")) return true;
+            current = current.getCause();
+        }
+        return false;
     }
     public static final class GhatLoadException extends RuntimeException { public GhatLoadException(Throwable cause) { super(cause); } }
     public record GhatUpdateResult(Ghat ghat, boolean locallySaved) { }

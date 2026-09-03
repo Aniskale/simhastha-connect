@@ -5,7 +5,7 @@ import java.util.List;
 /** Admin-controlled ghat information shown to pilgrims. Optional live values stay nullable. */
 public record Ghat(
         String id, String name, String area, String description, Double latitude, Double longitude,
-        Double entryLatitude, Double entryLongitude, String imageUrl, OperationalStatus operationalStatus,
+        Double entryLatitude, Double entryLongitude, String imageUrl, String imagePublicId, OperationalStatus operationalStatus,
         CrowdLevel crowdLevel, Integer estimatedWaitMinutes, boolean bathingAvailable, Walking walking,
         List<String> facilities, Weather weather, History history, String lastUpdated, GhatOperationalState operationalState,
         boolean published, boolean active) {
@@ -13,10 +13,20 @@ public record Ghat(
     public Ghat(String id, String name, String area, String description, Double latitude, Double longitude,
             Double entryLatitude, Double entryLongitude, String imageUrl, OperationalStatus operationalStatus,
             CrowdLevel crowdLevel, Integer estimatedWaitMinutes, boolean bathingAvailable, Walking walking,
+            List<String> facilities, Weather weather, History history, String lastUpdated, GhatOperationalState operationalState,
+            boolean published, boolean active) {
+        this(id, name, area, description, latitude, longitude, entryLatitude, entryLongitude, imageUrl, "",
+                operationalStatus, crowdLevel, estimatedWaitMinutes, bathingAvailable, walking, facilities,
+                weather, history, lastUpdated, operationalState, published, active);
+    }
+
+    public Ghat(String id, String name, String area, String description, Double latitude, Double longitude,
+            Double entryLatitude, Double entryLongitude, String imageUrl, OperationalStatus operationalStatus,
+            CrowdLevel crowdLevel, Integer estimatedWaitMinutes, boolean bathingAvailable, Walking walking,
             List<String> facilities, Weather weather, History history, String lastUpdated) {
         this(id, name, area, description, latitude, longitude, entryLatitude, entryLongitude, imageUrl,
-                operationalStatus, crowdLevel, estimatedWaitMinutes, bathingAvailable, walking, facilities,
-                weather, history, lastUpdated, GhatOperationalState.unavailable());
+                "", operationalStatus, crowdLevel, estimatedWaitMinutes, bathingAvailable, walking, facilities,
+                weather, history, lastUpdated, GhatOperationalState.unavailable(), true, true);
     }
 
     /** Backward-compatible shared Ghat constructor; catalogue records are visible and active by default. */
@@ -25,7 +35,7 @@ public record Ghat(
             CrowdLevel crowdLevel, Integer estimatedWaitMinutes, boolean bathingAvailable, Walking walking,
             List<String> facilities, Weather weather, History history, String lastUpdated, GhatOperationalState operationalState) {
         this(id, name, area, description, latitude, longitude, entryLatitude, entryLongitude, imageUrl,
-                operationalStatus, crowdLevel, estimatedWaitMinutes, bathingAvailable, walking, facilities,
+                "", operationalStatus, crowdLevel, estimatedWaitMinutes, bathingAvailable, walking, facilities,
                 weather, history, lastUpdated, operationalState, true, true);
     }
 
@@ -35,6 +45,7 @@ public record Ghat(
         area = safe(area);
         description = safe(description);
         imageUrl = safe(imageUrl);
+        imagePublicId = safe(imagePublicId);
         operationalStatus = operationalStatus == null ? OperationalStatus.INFORMATION_ONLY : operationalStatus;
         crowdLevel = crowdLevel == null ? CrowdLevel.UNKNOWN : crowdLevel;
         walking = walking == null ? Walking.unknown() : walking;

@@ -3,12 +3,18 @@ package com.simhastha.view;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.control.Tooltip;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -18,8 +24,12 @@ import javafx.scene.layout.VBox;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import javafx.stage.Stage;
+import javafx.stage.Window;
+
+import java.net.URL;
 
 public final class AppUi {
+    private static final String NOTIFICATION_BELL_GLYPH = "\uEA8F";
 
     private AppUi() {
     }
@@ -29,6 +39,51 @@ public final class AppUi {
         ThemeManager.addTheme(scene, owner);
         ThemeManager.addListener(() -> ThemeManager.applyTo(root));
         return scene;
+    }
+
+    public static void styleDialog(Dialog<?> dialog, Window owner, String styleClass, ButtonType primaryAction) {
+        if (owner != null && dialog.getOwner() == null) {
+            dialog.initOwner(owner);
+        }
+        URL css = AppUi.class.getResource("/css/simhastha-theme.css");
+        if (css != null && !dialog.getDialogPane().getStylesheets().contains(css.toExternalForm())) {
+            dialog.getDialogPane().getStylesheets().add(css.toExternalForm());
+        }
+        ThemeManager.applyTo(dialog.getDialogPane());
+        if (!dialog.getDialogPane().getStyleClass().contains("simhastha-dialog-pane")) {
+            dialog.getDialogPane().getStyleClass().add("simhastha-dialog-pane");
+        }
+        if (styleClass != null && !styleClass.isBlank()
+                && !dialog.getDialogPane().getStyleClass().contains(styleClass)) {
+            dialog.getDialogPane().getStyleClass().add(styleClass);
+        }
+        for (ButtonType buttonType : dialog.getDialogPane().getButtonTypes()) {
+            Node button = dialog.getDialogPane().lookupButton(buttonType);
+            if (button == null) {
+                continue;
+            }
+            button.getStyleClass().add(buttonType == primaryAction
+                    ? "simhastha-dialog-primary-button"
+                    : "simhastha-dialog-secondary-button");
+        }
+    }
+
+    public static void showInfo(String title, String message, Window owner) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle(title);
+        alert.setHeaderText(title);
+        alert.setContentText(message);
+        styleDialog(alert, owner, "simhastha-info-dialog", ButtonType.OK);
+        alert.showAndWait();
+    }
+
+    public static boolean confirm(String title, String message, Window owner) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle(title);
+        alert.setHeaderText(title);
+        alert.setContentText(message);
+        styleDialog(alert, owner, "simhastha-confirm-dialog", ButtonType.OK);
+        return alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK;
     }
 
     public static BorderPane createHeader(Stage stage, String titleText, String subtitleText, Runnable backAction) {
@@ -53,14 +108,40 @@ public final class AppUi {
         HBox toggle = createThemeToggle();
         toggle.setAlignment(Pos.CENTER_RIGHT);
 
+        ImageView logo = new ImageView();
+        URL logoUrl = AppUi.class.getResource("/images/sclogo.png");
+        if (logoUrl != null) {
+            logo.setImage(new Image(logoUrl.toExternalForm()));
+        }
+        logo.setFitWidth(54);
+        logo.setFitHeight(54);
+        logo.setPreserveRatio(true);
+        logo.getStyleClass().add("header-brand-logo");
+
+        Label brandName = new Label("SIMHASTHA CONNECT");
+        brandName.getStyleClass().add("header-brand-name");
+        Label eventName = new Label("Nashik Simhastha 2027");
+        eventName.getStyleClass().add("header-brand-event");
+        HBox brandLockup = new HBox(8, logo, new VBox(1, brandName, eventName));
+        brandLockup.getStyleClass().add("header-brand-lockup");
+        brandLockup.setAlignment(Pos.CENTER_LEFT);
+
+        VBox leftActions = new VBox(8, brandLockup, backButton);
+        leftActions.setAlignment(Pos.TOP_LEFT);
+        leftActions.getStyleClass().add("header-side-slot");
+
+        HBox rightActions = new HBox(toggle);
+        rightActions.getStyleClass().add("header-side-slot");
+        rightActions.setAlignment(Pos.TOP_RIGHT);
+
         BorderPane header = new BorderPane();
         header.getStyleClass().add("top-header");
-        header.setLeft(backButton);
+        header.setLeft(leftActions);
         header.setCenter(titleBox);
-        header.setRight(toggle);
+        header.setRight(rightActions);
         header.setPadding(new Insets(18, 38, 8, 38));
-        BorderPane.setAlignment(backButton, Pos.TOP_LEFT);
-        BorderPane.setAlignment(toggle, Pos.TOP_RIGHT);
+        BorderPane.setAlignment(leftActions, Pos.TOP_LEFT);
+        BorderPane.setAlignment(rightActions, Pos.TOP_RIGHT);
         return header;
     }
 
@@ -117,6 +198,52 @@ public final class AppUi {
         return icon;
     }
 
+    public static String notificationBellGlyph() {
+        return NOTIFICATION_BELL_GLYPH;
+    }
+
+    public static Button createProfileChip(String displayName, Runnable action) {
+        Button button = new Button(compactName(displayName));
+        button.setGraphic(profileAvatar(26));
+        button.getStyleClass().add("pilgrim-profile-chip");
+        button.setAccessibleText("Profile");
+        button.setTooltip(new Tooltip("Profile"));
+        button.setOnAction(event -> {
+            if (action != null) {
+                action.run();
+            }
+        });
+        return button;
+    }
+
+    private static Node profileAvatar(double size) {
+        StackPane avatar = new StackPane();
+        avatar.getStyleClass().add("profile-chip-avatar");
+        avatar.setMinSize(size, size);
+        avatar.setPrefSize(size, size);
+        avatar.setMaxSize(size, size);
+
+        AppSession.User user = AppSession.currentUser();
+        String photoUrl = user == null ? "" : user.profilePhotoUrl();
+        if (photoUrl != null && !photoUrl.isBlank()) {
+            ImageView image = ImageMediaHelper.imageView(photoUrl, size, size);
+            image.setFitWidth(size);
+            image.setFitHeight(size);
+            image.setPreserveRatio(false);
+            image.setClip(new Circle(size / 2, size / 2, size / 2));
+            image.getStyleClass().add("profile-chip-avatar-image");
+            avatar.getChildren().add(image);
+        } else {
+            avatar.getChildren().add(symbolIcon("\uE77B", "pilgrim-profile-icon"));
+        }
+        return avatar;
+    }
+
+    private static String compactName(String displayName) {
+        String name = displayName == null || displayName.isBlank() ? "Profile" : displayName.trim();
+        return name.length() > 18 ? name.substring(0, 17) + "..." : name;
+    }
+
     public static TextField textField(String prompt) {
         TextField textField = new TextField();
         textField.setPromptText(prompt);
@@ -136,6 +263,9 @@ public final class AppUi {
         visibleField.promptTextProperty().bind(passwordField.promptTextProperty());
         visibleField.textProperty().bindBidirectional(passwordField.textProperty());
         visibleField.getStyleClass().add("input-field");
+        visibleField.setOnAction(event -> {
+            if (passwordField.getOnAction() != null) passwordField.getOnAction().handle(event);
+        });
         visibleField.setManaged(false);
         visibleField.setVisible(false);
 

@@ -1,19 +1,25 @@
 package com.simhastha.view;
 
+import com.simhastha.config.CloudinaryFolders;
+import com.simhastha.model.CloudinaryUploadResult;
+import com.simhastha.service.CloudinaryService;
+
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
 import com.simhastha.service.GhatCatalogueService;
 import com.simhastha.service.GhatImageService;
-import com.simhastha.service.GhatImageStorageService;
 import com.simhastha.service.GhatService;
 import java.net.URL;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.HashSet;
 
@@ -29,12 +35,10 @@ import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.DatePicker;
-import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
-import javafx.scene.control.MenuItem;
 import javafx.scene.control.ScrollPane;
-import javafx.scene.control.SeparatorMenuItem;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
@@ -46,7 +50,6 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
-import javafx.stage.FileChooser;
 
 import com.simhastha.schedule.ScheduleCategory;
 import com.simhastha.schedule.ScheduleEvent;
@@ -56,10 +59,11 @@ import com.simhastha.schedule.ScheduleService;
 public class AdminDashboardPage {
 
     private static final DateTimeFormatter ADMIN_TIME = DateTimeFormatter.ofPattern("dd MMM yyyy | hh:mm a");
+    private static final DateTimeFormatter GHAT_ROW_TIME = DateTimeFormatter.ofPattern("d MMM yyyy\nhh:mm a");
     private static final List<String> SECTIONS = List.of(
             "Dashboard", "Live Operations", "Users", "Business Approvals", "Businesses", "Bookings",
             "Transport", "Transport Operators", "Kumbh Packages", "Puja Services", "Ghats & Snan", "Stay", "Lost & Found",
-            "Schedule & Events", "Announcements", "Emergency", "Reports & Analytics", "System");
+            "Schedule & Events", "Announcements", "FAQs / Help Center", "Emergency", "Reports & Analytics", "System");
 
     private final Map<String, Button> navButtons = new LinkedHashMap<>();
     private BorderPane root;
@@ -72,9 +76,13 @@ public class AdminDashboardPage {
     private final GhatService ghatService = new GhatService(new FirestoreGateway(FirebaseConfig.load()));
     private final GhatCatalogueService ghatCatalogueService = new GhatCatalogueService();
     private final GhatImageService ghatImageService = new GhatImageService();
-    private final GhatImageStorageService ghatImageStorageService = new GhatImageStorageService();
     private List<Ghat> managedGhats = List.of();
     private VBox managedGhatRows;
+    private String ghatSearchQuery = "";
+    private String ghatLocationFilter = "All Locations";
+    private String ghatStatusFilter = "All Status";
+    private String ghatTypeFilter = "All Types";
+    private String ghatSort = "Name A-Z";
     private final ScheduleService scheduleService = new ScheduleService();
 
     public Scene createScene(Stage stage) {
@@ -222,6 +230,7 @@ public class AdminDashboardPage {
             case "Lost & Found" -> lostFoundPage();
             case "Schedule & Events" -> schedulePage();
             case "Announcements" -> announcementsPage();
+            case "FAQs / Help Center" -> faqManagementPage();
             case "Emergency" -> emergencyPage();
             case "Reports & Analytics" -> reportsPage();
             case "System" -> systemPage();
@@ -279,77 +288,73 @@ public class AdminDashboardPage {
         Label title = new Label("Admin Dashboard");
         title.getStyleClass().add("pilgrim-page-title");
 
-        List<AdminNotification> notificationItems = notifications();
+        List<NotificationCenter.NotificationItem> notificationItems = notifications();
         long notificationCount = notificationItems.stream().filter(item -> !readNotifications.contains(item.id())).count();
-        Button notifications = roundButton(notificationCount > 0 ? "\uE7F4 " + notificationCount : "\uE7F4",
-                "Notifications");
-        notifications.setOnAction(event -> showNotificationCenter(notifications, notificationItems));
         HBox actions = new HBox(10, title, createSpacer(), AppUi.createThemeToggle(),
-                notifications, roundButton("\uE77B", "Admin Profile"));
+                NotificationCenter.bell((int) notificationCount, () -> showNotificationCenter(notificationItems)),
+                AppUi.createProfileChip(adminDisplayName(),
+                        () -> showInfo("Admin Profile", "Admin profile panel will open here.")));
         actions.getStyleClass().add("pilgrim-top-actions");
         actions.setAlignment(Pos.CENTER_LEFT);
         return actions;
     }
 
-    private List<AdminNotification> notifications() {
-        List<AdminNotification> items = new java.util.ArrayList<>();
+    private String adminDisplayName() {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            return "Admin";
+        }
+        if (user.displayName() != null && !user.displayName().isBlank()) {
+            return user.displayName();
+        }
+        return user.email() == null || user.email().isBlank() ? "Admin" : user.email();
+    }
+
+    private List<NotificationCenter.NotificationItem> notifications() {
+        List<NotificationCenter.NotificationItem> items = new java.util.ArrayList<>();
         for (AppDataStore.ApprovalRequest request : AppDataStore.pendingApprovals()) {
-            items.add(new AdminNotification("approval-" + request.ownerId, "New Business Registration",
-                    request.title + " is waiting for review.", "Business Approvals"));
+            String section = "transport".equalsIgnoreCase(request.targetModule) ? "Transport Operators"
+                    : "Business Approvals";
+            items.add(new NotificationCenter.NotificationItem("approval-" + request.ownerId,
+                    request.type + " Pending", request.title + " is waiting for review.",
+                    "Approval", "pending", section));
         }
         for (AppDataStore.TransportOperatorRecord operator : AppDataStore.transportOperators()) {
             if (!"suspended".equalsIgnoreCase(operator.status) && !"disabled".equalsIgnoreCase(operator.status)) {
-                items.add(new AdminNotification("operator-" + operator.operatorId, "Transport Operator Registration",
+                items.add(new NotificationCenter.NotificationItem("operator-" + operator.operatorId,
+                        "Transport Operator Registration",
                         valueOr(operator.operatorId, operator.organizationName) + " is in the operator registry.",
-                        "Transport Operators"));
+                        "Transport", operator.status, "Transport Operators"));
             }
         }
         for (AppDataStore.RouteRecord route : AppDataStore.transportRoutes()) {
             if (!route.published) {
-                items.add(new AdminNotification("route-" + route.routeId, "Transport Route Submission",
-                        valueOr(route.routeId, route.routeName) + " is not published yet.", "Transport"));
+                items.add(new NotificationCenter.NotificationItem("route-" + route.routeId,
+                        "Transport Route Submission", valueOr(route.routeId, route.routeName) + " is not published yet.",
+                        "Route", "pending", "Transport"));
             }
         }
         for (AppDataStore.LostFoundCaseRecord lostCase : AppDataStore.lostFoundCases()) {
             if ("high".equalsIgnoreCase(lostCase.priority) || "urgent".equalsIgnoreCase(lostCase.priority)) {
-                items.add(new AdminNotification("lost-" + lostCase.caseId, "High Priority Lost & Found",
-                        valueOr(lostCase.caseId, lostCase.name) + " needs attention.", "Lost & Found"));
+                items.add(new NotificationCenter.NotificationItem("lost-" + lostCase.caseId,
+                        "High Priority Lost & Found", valueOr(lostCase.caseId, lostCase.name) + " needs attention.",
+                        "Safety", lostCase.priority, "Lost & Found"));
             }
         }
         AppDataStore.bookings().stream()
                 .filter(booking -> "PENDING".equalsIgnoreCase(booking.bookingStatus)
                         || "FAILED".equalsIgnoreCase(booking.paymentStatus))
                 .limit(6)
-                .forEach(booking -> items.add(new AdminNotification("booking-" + booking.bookingId,
-                        "Booking Activity", booking.bookingId + " | " + booking.title, "Bookings")));
+                .forEach(booking -> items.add(new NotificationCenter.NotificationItem("booking-" + booking.bookingId,
+                        "Booking Activity", booking.bookingId + " | " + booking.title,
+                        "Bookings", booking.paymentStatus, "Bookings")));
         return items.stream().distinct().toList();
     }
 
-    private void showNotificationCenter(Button anchor, List<AdminNotification> items) {
-        ContextMenu menu = new ContextMenu();
-        if (items.isEmpty()) {
-            MenuItem empty = new MenuItem("No new operational notifications");
-            empty.setDisable(true);
-            menu.getItems().add(empty);
-        } else {
-            for (AdminNotification item : items) {
-                MenuItem menuItem = new MenuItem((readNotifications.contains(item.id()) ? "" : "* ")
-                        + item.title() + " - " + item.detail());
-                menuItem.setOnAction(event -> {
-                    readNotifications.add(item.id());
-                    showSection(item.targetSection());
-                });
-                menu.getItems().add(menuItem);
-            }
-            menu.getItems().add(new SeparatorMenuItem());
-            MenuItem readAll = new MenuItem("Mark all read");
-            readAll.setOnAction(event -> {
-                items.forEach(item -> readNotifications.add(item.id()));
-                showSection(selectedSection);
-            });
-            menu.getItems().add(readAll);
-        }
-        menu.show(anchor, javafx.geometry.Side.BOTTOM, 0, 0);
+    private void showNotificationCenter(List<NotificationCenter.NotificationItem> items) {
+        NotificationCenter.show(root.getScene() == null ? null : root.getScene().getWindow(),
+                "Admin Notifications", "Approvals, bookings and safety operations",
+                items, readNotifications, this::showSection);
     }
 
     private StackPane photoHeader() {
@@ -998,17 +1003,78 @@ public class AdminDashboardPage {
     }
 
     private VBox ghatsPage() {
-        VBox rows = new VBox(10);
+        VBox rows = new VBox(8);
         managedGhatRows = rows;
         List<Ghat> initial = managedGhats.isEmpty() ? ghatCatalogueService.catalogue() : managedGhats;
         renderManagedGhats(rows, initial);
-        Button add = new Button("Add New Ghat"); add.getStyleClass().add("primary-button"); add.setOnAction(event -> showGhatEditor(null));
-        Button refresh = smallButton("Refresh"); refresh.setOnAction(event -> refreshManagedGhats(rows));
-        HBox actions = new HBox(8, add, refresh); actions.setAlignment(Pos.CENTER_LEFT);
+        Button add = new Button("+  Add New Ghat");
+        add.getStyleClass().addAll("primary-button", "ghat-primary-action");
+        add.setOnAction(event -> showGhatEditor(null));
+        Button refresh = smallButton("Refresh");
+        refresh.getStyleClass().add("ghat-refresh-action");
+        refresh.setOnAction(event -> refreshManagedGhats(rows));
+
+        VBox actionStack = new VBox(8, add, refresh);
+        actionStack.setAlignment(Pos.CENTER_RIGHT);
+        actionStack.setMinWidth(166);
+
+        HBox metrics = new HBox(0,
+                ghatMetric("\uE707", "Total Ghats", String.valueOf(initial.size()), "Published: " + initial.stream().filter(Ghat::published).count(), "orange"),
+                ghatMetric("\uE802", "Active for Snan", String.valueOf(initial.stream().filter(Ghat::isRecommendedForSnan).count()), "Draft: " + initial.stream().filter(ghat -> !ghat.published()).count(), "blue"),
+                ghatMetric("\uE73E", "Information Only", String.valueOf(initial.stream().filter(ghat -> ghat.operationalStatus() == Ghat.OperationalStatus.INFORMATION_ONLY).count()), "Unavailable: " + initial.stream().filter(ghat -> !ghat.active()).count(), "green"),
+                ghatMetric("\uE890", "Crowd Alerts", String.valueOf(initial.stream().filter(this::ghatNeedsAttention).count()), "Live watch", "purple"));
+        HBox.setHgrow(metrics, Priority.ALWAYS);
+
+        HBox overview = new HBox(14, metrics, actionStack);
+        overview.getStyleClass().add("ghat-overview-card");
+        overview.setAlignment(Pos.CENTER_LEFT);
+
+        TextField search = AppUi.textField("Search ghats by name, location...");
+        search.setText(ghatSearchQuery);
+        search.getStyleClass().add("ghat-search-field");
+        ComboBox<String> location = combo("All Locations", "Panchavati", "Nashik", "Trimbakeshwar");
+        location.setValue(ghatLocationFilter);
+        ComboBox<String> status = combo("All Status", "Published", "Draft", "Active", "Inactive", "Snan Available", "Wait High");
+        status.setValue(ghatStatusFilter);
+        ComboBox<String> type = combo("All Types", "Bathing Ghat", "Information Only");
+        type.setValue(ghatTypeFilter);
+        ComboBox<String> sort = combo("Name A-Z", "Name Z-A", "Wait High", "Crowd High");
+        sort.setValue(ghatSort);
+        Button filter = smallButton("Filter");
+        filter.getStyleClass().add("ghat-filter-button");
+
+        Runnable applyFilters = () -> {
+            ghatSearchQuery = search.getText() == null ? "" : search.getText().trim();
+            ghatLocationFilter = location.getValue() == null ? "All Locations" : location.getValue();
+            ghatStatusFilter = status.getValue() == null ? "All Status" : status.getValue();
+            ghatTypeFilter = type.getValue() == null ? "All Types" : type.getValue();
+            ghatSort = sort.getValue() == null ? "Name A-Z" : sort.getValue();
+            renderManagedGhats(rows, managedGhats.isEmpty() ? ghatCatalogueService.catalogue() : managedGhats);
+        };
+        search.textProperty().addListener((observable, oldValue, newValue) -> applyFilters.run());
+        location.valueProperty().addListener((observable, oldValue, newValue) -> applyFilters.run());
+        status.valueProperty().addListener((observable, oldValue, newValue) -> applyFilters.run());
+        type.valueProperty().addListener((observable, oldValue, newValue) -> applyFilters.run());
+        sort.valueProperty().addListener((observable, oldValue, newValue) -> applyFilters.run());
+        filter.setOnAction(event -> applyFilters.run());
+
+        VBox locationControl = ghatFilterControl("Location", location);
+        VBox statusControl = ghatFilterControl("Status", status);
+        VBox typeControl = ghatFilterControl("Type", type);
+        VBox sortControl = ghatFilterControl("Sort By", sort);
+        HBox filters = new HBox(10, search, locationControl, statusControl, typeControl, createSpacer(), sortControl, filter);
+        filters.getStyleClass().add("ghat-filter-card");
+        filters.setAlignment(Pos.CENTER_LEFT);
+        search.setMinWidth(230);
+        search.setPrefWidth(270);
+        search.setMaxWidth(310);
+        HBox.setHgrow(search, Priority.ALWAYS);
+
+        VBox table = new VBox(0, ghatTableHeader(), rows, ghatTableFooter(initial.size()));
+        table.getStyleClass().add("ghat-table-card");
         refreshManagedGhats(rows);
-        return pageShell("Ghats & Snan", "Manage the same Ghat records and live operational state used by pilgrims.",
-                infoPanel("Shared Ghat Management", new VBox(8,
-                        muted("Catalogue information is available immediately. Published backend records override the matching catalogue Ghat on the User page."), actions, rows)));
+        return pageShell("Ghats & Snan Management", "Manage ghats, snan points and their operational status for pilgrims.",
+                overview, filters, table);
     }
 
     private void refreshManagedGhats(VBox rows) {
@@ -1022,50 +1088,290 @@ public class AdminDashboardPage {
 
     private void renderManagedGhats(VBox rows, List<Ghat> ghats) {
         rows.getChildren().clear();
-        for (Ghat ghat : ghats) rows.getChildren().add(managedGhatRow(ghat));
+        List<Ghat> visible = ghats.stream()
+                .filter(this::matchesGhatFilters)
+                .sorted(this::compareManagedGhats)
+                .toList();
+        if (visible.isEmpty()) {
+            rows.getChildren().add(ghatEmptyRow());
+            return;
+        }
+        for (Ghat ghat : visible) rows.getChildren().add(managedGhatRow(ghat));
     }
 
-    private HBox managedGhatRow(Ghat ghat) {
-        ImageView image = ghatImageService.createView(ghat, 74, 52);
-        Button edit = smallButton("Edit"); edit.setOnAction(event -> showGhatEditor(ghat));
-        Button live = smallButton("Update Live Status"); live.setOnAction(event -> showGhatEditor(ghat, true));
-        Button imageAction = smallButton("Change Image"); imageAction.setOnAction(event -> chooseGhatImage(ghat));
-        Button publish = smallButton(ghat.published() ? "Unpublish" : "Publish"); publish.setOnAction(event -> saveGhat(withFlags(ghat, !ghat.published(), ghat.active())));
-        Button active = smallButton(ghat.active() ? "Deactivate" : "Activate"); active.setOnAction(event -> saveGhat(withFlags(ghat, ghat.published(), !ghat.active())));
-        VBox summary = new VBox(2, strong(ghat.name()), muted(ghat.area() + " | " + ghat.crowdLevel() + " | " + ghat.operationalStatus()
-                + " | Bathing " + ghat.operationalState().bathingStatus() + " | Water " + ghat.operationalState().waterSafety()
-                + " | Wait " + ghat.waitLabel() + " | " + (ghat.published() ? "Published" : "Draft") + " | " + (ghat.active() ? "Active" : "Inactive")));
-        HBox row = new HBox(9, image, summary, createSpacer(), edit, live, imageAction, publish, active);
-        HBox.setHgrow(summary, Priority.ALWAYS); row.getStyleClass().add("pilgrim-data-row"); row.setAlignment(Pos.CENTER_LEFT); return row;
+    private GridPane managedGhatRow(Ghat ghat) {
+        ImageView image = ghatImageService.createView(ghat, 112, 68);
+        image.getStyleClass().add("ghat-row-image");
+        VBox name = new VBox(5, strong(ghat.name()), muted(valueOr("Nashik", ghat.area())), ghatTypeBadge(ghat));
+        name.setAlignment(Pos.CENTER_LEFT);
+        name.setMaxWidth(150);
+        HBox nameCell = new HBox(11, image, name);
+        nameCell.setAlignment(Pos.CENTER_LEFT);
+
+        Button edit = ghatRowAction("Edit"); edit.getStyleClass().add("ghat-action-edit"); edit.setOnAction(event -> showGhatEditor(ghat));
+        Button live = ghatRowAction("Update Live"); live.setOnAction(event -> showGhatEditor(ghat, true));
+        Button imageAction = ghatRowAction("Change Image"); imageAction.setOnAction(event -> chooseGhatImage(ghat, imageAction));
+        Button publish = ghatRowAction(ghat.published() ? "Unpublish" : "Publish"); publish.setOnAction(event -> saveGhat(withFlags(ghat, !ghat.published(), ghat.active())));
+        Button active = ghatRowAction(ghat.active() ? "Deactivate" : "Activate"); active.setOnAction(event -> saveGhat(withFlags(ghat, ghat.published(), !ghat.active())));
+        VBox actions = new VBox(5, edit, live, imageAction, publish, active);
+        actions.setAlignment(Pos.CENTER_LEFT);
+
+        GridPane row = new GridPane();
+        row.getStyleClass().add("ghat-table-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.setHgap(0);
+        addGhatCell(row, nameCell, 0, 304);
+        addGhatCell(row, ghatInfoCell("\uE707", locationPrimary(ghat), "Nashik"), 1, 118);
+        addGhatCell(row, ghatInfoCell("\uE946", ghatTypeText(ghat), ghat.operationalStatus() == Ghat.OperationalStatus.INFORMATION_ONLY ? "Info" : "Managed"), 2, 120);
+        addGhatCell(row, ghatStatusCell(ghat), 3, 108);
+        addGhatCell(row, ghatSnanCell(ghat), 4, 144);
+        addGhatCell(row, ghatUpdatedCell(ghat), 5, 116);
+        addGhatCell(row, actions, 6, 154);
+        return row;
     }
 
-    private void chooseGhatImage(Ghat ghat) {
-        System.out.println("CHANGE IMAGE clicked for ghatId = " + ghat.id());
-        System.out.println("GHAT ID = " + ghat.id());
-        System.out.println("OLD IMAGE = " + ghat.imageUrl());
-        FileChooser chooser = new FileChooser(); chooser.setTitle("Choose Ghat image");
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Images", "*.png", "*.jpg", "*.jpeg", "*.webp"));
-        java.io.File file = chooser.showOpenDialog(stage);
+    private HBox ghatMetric(String glyph, String title, String value, String detail, String tone) {
+        Label icon = AppUi.symbolIcon(glyph, "ghat-metric-icon");
+        icon.getStyleClass().add("ghat-metric-icon-" + tone);
+        VBox copy = new VBox(1, label(title, "ghat-metric-title"), label(value, "ghat-metric-value"), label(detail, "ghat-metric-detail"));
+        HBox metric = new HBox(12, icon, copy);
+        metric.getStyleClass().add("ghat-metric-card");
+        metric.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(metric, Priority.ALWAYS);
+        return metric;
+    }
+
+    private VBox ghatFilterControl(String title, Node control) {
+        Label label = label(title, "ghat-filter-label");
+        VBox box = new VBox(5, label, control);
+        box.setMinWidth(126);
+        box.setPrefWidth(142);
+        box.setMaxWidth(156);
+        return box;
+    }
+
+    private GridPane ghatTableHeader() {
+        GridPane header = new GridPane();
+        header.getStyleClass().add("ghat-table-header");
+        header.setAlignment(Pos.CENTER_LEFT);
+        addGhatHeader(header, "Ghat Name", 0, 304);
+        addGhatHeader(header, "Location", 1, 118);
+        addGhatHeader(header, "Type", 2, 120);
+        addGhatHeader(header, "Status", 3, 108);
+        addGhatHeader(header, "Snan Status", 4, 144);
+        addGhatHeader(header, "Last Updated", 5, 116);
+        addGhatHeader(header, "Actions", 6, 154);
+        return header;
+    }
+
+    private Button ghatRowAction(String text) {
+        Button button = smallButton(text);
+        button.getStyleClass().add("ghat-row-action");
+        button.setMaxWidth(Double.MAX_VALUE);
+        return button;
+    }
+
+    private HBox ghatTableFooter(int total) {
+        Label count = muted("Showing 1 to " + Math.min(10, Math.max(total, 0)) + " of " + total + " ghats");
+        Button previous = smallButton("\uE76B");
+        previous.getStyleClass().add("ghat-page-button");
+        previous.setDisable(true);
+        Button one = smallButton("1");
+        one.getStyleClass().add("ghat-page-button-active");
+        Button two = smallButton("2");
+        two.getStyleClass().add("ghat-page-button");
+        Button three = smallButton("3");
+        three.getStyleClass().add("ghat-page-button");
+        Button next = smallButton("\uE76C");
+        next.getStyleClass().add("ghat-page-button");
+        ComboBox<String> pageSize = combo("10", "20", "50");
+        pageSize.getStyleClass().add("ghat-page-size");
+        HBox pages = new HBox(8, previous, one, two, three, next);
+        pages.setAlignment(Pos.CENTER);
+        HBox footer = new HBox(12, count, createSpacer(), pages, createSpacer(), muted("Rows per page"), pageSize);
+        footer.getStyleClass().add("ghat-table-footer");
+        footer.setAlignment(Pos.CENTER_LEFT);
+        return footer;
+    }
+
+    private void addGhatHeader(GridPane grid, String text, int column, double width) {
+        Label label = label(text, "ghat-table-heading");
+        addGhatCell(grid, label, column, width);
+    }
+
+    private void addGhatCell(GridPane grid, Node node, int column, double width) {
+        StackPane wrapper = new StackPane(node);
+        wrapper.getStyleClass().add("ghat-table-cell");
+        wrapper.setAlignment(Pos.CENTER_LEFT);
+        wrapper.setMinWidth(width);
+        wrapper.setPrefWidth(width);
+        wrapper.setMaxWidth(width);
+        grid.add(wrapper, column, 0);
+    }
+
+    private VBox ghatInfoCell(String glyph, String primary, String secondary) {
+        Label icon = AppUi.symbolIcon(glyph, "ghat-cell-icon");
+        VBox copy = new VBox(2, label(primary, "ghat-cell-primary"), label(secondary, "ghat-cell-secondary"));
+        HBox row = new HBox(9, icon, copy);
+        row.setAlignment(Pos.CENTER_LEFT);
+        return new VBox(row);
+    }
+
+    private VBox ghatStatusCell(Ghat ghat) {
+        Label dot = label("\uE73E", "ghat-status-dot");
+        Label status = label(ghat.published() ? "Published" : "Draft", "ghat-cell-primary");
+        Label audience = label(ghat.published() ? "Public" : "Private", "ghat-cell-secondary");
+        HBox top = new HBox(8, dot, new VBox(2, status, audience));
+        top.setAlignment(Pos.CENTER_LEFT);
+        VBox cell = new VBox(top);
+        if (!ghat.active()) cell.getStyleClass().add("ghat-status-inactive");
+        return cell;
+    }
+
+    private VBox ghatSnanCell(Ghat ghat) {
+        String title = ghat.operationalState().bathingStatus() == GhatOperationalState.BathingStatus.AVAILABLE
+                ? "Snan Available"
+                : "Wait Time High";
+        String detail = ghat.operationalState().bathingStatus() == GhatOperationalState.BathingStatus.AVAILABLE
+                ? "5:00 AM - 10:00 PM"
+                : "7:00 AM - 12:00 PM";
+        String glyph = ghat.operationalState().bathingStatus() == GhatOperationalState.BathingStatus.AVAILABLE ? "\uEC92" : "\uE916";
+        return ghatInfoCell(glyph, title, detail);
+    }
+
+    private VBox ghatUpdatedCell(Ghat ghat) {
+        Label date = label(formatGhatUpdated(ghat.lastUpdated()), "ghat-cell-primary");
+        Label admin = label("by Admin", "ghat-cell-secondary");
+        return new VBox(2, date, admin);
+    }
+
+    private String formatGhatUpdated(String raw) {
+        if (raw == null || raw.isBlank()) return "9 Sep 2026\n02:30 PM";
+        String value = raw.trim();
+        if (value.matches("\\d{11,}")) {
+            try {
+                return LocalDateTime.ofInstant(Instant.ofEpochMilli(Long.parseLong(value)), ZoneId.systemDefault())
+                        .format(GHAT_ROW_TIME);
+            } catch (RuntimeException ignored) {
+                return value;
+            }
+        }
+        return value.replace(" | ", "\n");
+    }
+
+    private Label ghatTypeBadge(Ghat ghat) {
+        Label badge = label(ghatTypeText(ghat), "ghat-type-badge");
+        badge.getStyleClass().add(ghat.operationalStatus() == Ghat.OperationalStatus.INFORMATION_ONLY ? "ghat-type-info" : "ghat-type-bathing");
+        return badge;
+    }
+
+    private String ghatTypeText(Ghat ghat) {
+        return ghat.operationalStatus() == Ghat.OperationalStatus.INFORMATION_ONLY ? "Information Only" : "Bathing Ghat";
+    }
+
+    private String locationPrimary(Ghat ghat) {
+        String area = valueOr("Panchavati", ghat.area());
+        int comma = area.indexOf(',');
+        return comma > 0 ? area.substring(0, comma).trim() : area;
+    }
+
+    private boolean ghatNeedsAttention(Ghat ghat) {
+        return ghat.crowdLevel() == Ghat.CrowdLevel.HIGH
+                || ghat.crowdLevel() == Ghat.CrowdLevel.CRITICAL
+                || (ghat.estimatedWaitMinutes() != null && ghat.estimatedWaitMinutes() >= 30)
+                || ghat.operationalState().waterSafety() != GhatOperationalState.WaterSafety.NORMAL;
+    }
+
+    private boolean matchesGhatFilters(Ghat ghat) {
+        boolean queryMatch = matches(ghatSearchQuery, ghat.name(), ghat.area(), ghat.description(), ghatTypeText(ghat));
+        boolean locationMatch = "All Locations".equals(ghatLocationFilter) || valueOr("", ghat.area()).contains(ghatLocationFilter);
+        boolean typeMatch = "All Types".equals(ghatTypeFilter) || ghatTypeText(ghat).equals(ghatTypeFilter);
+        boolean statusMatch = switch (ghatStatusFilter) {
+            case "Published" -> ghat.published();
+            case "Draft" -> !ghat.published();
+            case "Active" -> ghat.active();
+            case "Inactive" -> !ghat.active();
+            case "Snan Available" -> ghat.operationalState().bathingStatus() == GhatOperationalState.BathingStatus.AVAILABLE;
+            case "Wait High" -> ghat.estimatedWaitMinutes() != null && ghat.estimatedWaitMinutes() >= 30;
+            default -> true;
+        };
+        return queryMatch && locationMatch && typeMatch && statusMatch;
+    }
+
+    private int compareManagedGhats(Ghat left, Ghat right) {
+        return switch (ghatSort) {
+            case "Name Z-A" -> right.name().compareToIgnoreCase(left.name());
+            case "Wait High" -> Integer.compare(right.estimatedWaitMinutes() == null ? -1 : right.estimatedWaitMinutes(),
+                    left.estimatedWaitMinutes() == null ? -1 : left.estimatedWaitMinutes());
+            case "Crowd High" -> Integer.compare(crowdRank(right.crowdLevel()), crowdRank(left.crowdLevel()));
+            default -> left.name().compareToIgnoreCase(right.name());
+        };
+    }
+
+    private int crowdRank(Ghat.CrowdLevel level) {
+        return switch (level) {
+            case CRITICAL -> 4;
+            case HIGH -> 3;
+            case MODERATE -> 2;
+            case LOW -> 1;
+            default -> 0;
+        };
+    }
+
+    private HBox ghatEmptyRow() {
+        HBox row = new HBox(10, moduleIcon("Ghats & Snan", "pilgrim-row-icon"),
+                new VBox(2, strong("No ghats match these filters"), muted("Clear the search or choose All filters to see every record.")));
+        row.getStyleClass().add("ghat-table-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private void chooseGhatImage(Ghat ghat, Button trigger) {
+        java.util.logging.Logger.getLogger(AdminDashboardPage.class.getName())
+                .info("Ghat image picker opened: ghatId=" + ghat.id()
+                        + ", existingImageUrlPresent=" + (ghat.imageUrl() != null && !ghat.imageUrl().isBlank())
+                        + ", existingPublicIdPresent=" + (ghat.imagePublicId() != null && !ghat.imagePublicId().isBlank()));
+        java.io.File file = ImageMediaHelper.chooseImage(stage, "Choose Ghat image");
         if (file == null) return;
         try {
-            System.out.println("FILE CHOSEN = " + file.getAbsolutePath());
-            System.out.println("FILE EXISTS = " + file.isFile() + ", readable = " + file.canRead());
-            System.out.println("FILE SIZE = " + file.length());
-            String managedImageUrl = ghatImageStorageService.store(file.toPath(), ghat.id());
-            System.out.println("NEW IMAGE REFERENCE = " + managedImageUrl);
-            System.out.println("NEW IMAGE = " + managedImageUrl);
-            Ghat previewGhat = copyGhat(ghat, ghat.name(), ghat.area(), ghat.description(), managedImageUrl, ghat.crowdLevel(), ghat.estimatedWaitMinutes(),
+            ImageMediaHelper.validateImage(file);
+            Ghat previewGhat = copyGhat(ghat, ghat.name(), ghat.area(), ghat.description(), file.toURI().toString(), ghat.crowdLevel(), ghat.estimatedWaitMinutes(),
                     ghat.operationalStatus(), ghat.operationalState().bathingStatus(), ghat.operationalState().waterSafety(), ghat.published(), ghat.active());
             Alert preview = new Alert(Alert.AlertType.CONFIRMATION, "Preview updated. Save this image to the shared Ghat record?", ButtonType.OK, ButtonType.CANCEL);
             preview.setTitle("Save Ghat image");
             preview.setHeaderText(ghat.name());
             preview.setGraphic(ghatImageService.createView(previewGhat, 210, 130));
+            AppUi.styleDialog(preview, stage, "ghat-image-dialog", ButtonType.OK);
             if (preview.showAndWait().orElse(ButtonType.CANCEL) != ButtonType.OK) return;
-            ghatImageService.invalidate(ghat.imageUrl());
-            ghatImageService.invalidate(managedImageUrl);
-            updateGhatImage(previewGhat);
-        } catch (java.io.IOException exception) {
-            showInfo("Image update failed", "The selected image could not be copied into durable Ghat media. No Ghat record was changed.");
+            setGhatImageBusy(trigger, "Uploading...");
+            java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                try {
+                    java.util.logging.Logger.getLogger(AdminDashboardPage.class.getName())
+                            .info("Ghat Cloudinary upload started: ghatId=" + ghat.id());
+                    CloudinaryUploadResult uploaded = new CloudinaryService().uploadImage(file, CloudinaryFolders.GHAT_SNAN);
+                    java.util.logging.Logger.getLogger(AdminDashboardPage.class.getName())
+                            .info("Ghat Cloudinary upload success: ghatId=" + ghat.id()
+                                    + ", secureUrlPresent=" + (uploaded.getSecureUrl() != null && uploaded.getSecureUrl().startsWith("https://"))
+                                    + ", publicIdPresent=" + (uploaded.getPublicId() != null && !uploaded.getPublicId().isBlank()));
+                    return uploaded;
+                } catch (Exception exception) {
+                    java.util.logging.Logger.getLogger(AdminDashboardPage.class.getName())
+                            .log(java.util.logging.Level.WARNING, "Ghat Cloudinary upload failed: ghatId=" + ghat.id(), exception);
+                    throw new java.util.concurrent.CompletionException(exception);
+                }
+            }).whenComplete((uploaded, error) -> Platform.runLater(() -> {
+                if (error != null) {
+                    setGhatImageReady(trigger);
+                    showInfo("Image update failed", "The selected image could not be uploaded. No Ghat record was changed.");
+                    return;
+                }
+                ghatImageService.invalidate(ghat.imageUrl());
+                setGhatImageBusy(trigger, "Saving...");
+                updateGhatImage(ghat, uploaded, trigger);
+            }));
+        } catch (IllegalArgumentException exception) {
+            setGhatImageReady(trigger);
+            showInfo("Image update failed", exception.getMessage());
         }
     }
 
@@ -1073,8 +1379,15 @@ public class AdminDashboardPage {
 
     private void showGhatEditor(Ghat source, boolean liveOnly) {
         Ghat ghat = source == null ? newGhatDraft() : source;
-        Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle(liveOnly ? "Update Live Ghat Status" : source == null ? "Add New Ghat" : "Edit Ghat");
-        VBox form = new VBox(8); form.setPadding(new Insets(10));
+        String titleText = liveOnly ? "Update Live Ghat Status" : source == null ? "Add New Ghat" : "Edit Ghat";
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(titleText);
+        dialog.initOwner(stage);
+        dialog.getDialogPane().getStyleClass().add("ghat-editor-dialog-pane");
+        dialog.getDialogPane().setPrefWidth(liveOnly ? 640 : 760);
+        VBox form = new VBox(14);
+        form.getStyleClass().add("ghat-editor-form");
+        form.setPadding(new Insets(14));
         TextField name = editorField(ghat.name(), "Ghat Name"); TextField area = editorField(ghat.area(), "Area / Region");
         TextField description = editorField(ghat.description(), "Description"); TextField imageUrl = editorField(ghat.imageUrl(), "Image URL / shared media reference");
         TextField latitude = editorField(numberText(ghat.latitude()), "Latitude"); TextField longitude = editorField(numberText(ghat.longitude()), "Longitude");
@@ -1084,9 +1397,11 @@ public class AdminDashboardPage {
         TextField wait = editorField(numberText(ghat.estimatedWaitMinutes()), "Estimated Wait (minutes)"); TextField restriction = editorField(ghat.operationalState().restrictionReason(), "Restriction reason");
         TextField gates = editorField(gateText(ghat), "Gates: Name|STATUS, ..."); TextField zones = editorField(zoneText(ghat), "Zones: Name|STATUS, ...");
         TextField hazards = editorField(hazardText(ghat), "Hazards: TYPE|message, ..."); TextField alert = editorField(ghat.operationalState().priorityAlert().message(), "Priority alert");
+        TextField weatherTemp = editorField(numberText(ghat.weather().temperatureCelsius()), "Weather Temperature (C)");
+        TextField weatherCondition = editorField(ghat.weather().condition(), "Weather Condition");
         ComboBox<Ghat.WalkingDifficulty> walking = enumBox(Ghat.WalkingDifficulty.values(), ghat.walking().difficulty());
-        ComboBox<Ghat.CrowdLevel> crowd = enumBox(Ghat.CrowdLevel.values(), ghat.crowdLevel());
-        ComboBox<Ghat.OperationalStatus> operational = enumBox(Ghat.OperationalStatus.values(), ghat.operationalStatus());
+        ComboBox<Ghat.CrowdLevel> crowd = ghatCrowdBox(ghat.crowdLevel());
+        ComboBox<Ghat.OperationalStatus> operational = ghatOperationalBox(ghat.operationalStatus());
         ComboBox<GhatOperationalState.BathingStatus> bathing = enumBox(GhatOperationalState.BathingStatus.values(), ghat.operationalState().bathingStatus());
         ComboBox<GhatOperationalState.WaterSafety> water = enumBox(GhatOperationalState.WaterSafety.values(), ghat.operationalState().waterSafety());
         ComboBox<GhatOperationalState.AlertPriority> priority = enumBox(GhatOperationalState.AlertPriority.values(), ghat.operationalState().priorityAlert().priority());
@@ -1094,21 +1409,61 @@ public class AdminDashboardPage {
         CheckBox wheelchair = new CheckBox("Wheelchair Accessible"); wheelchair.setSelected(ghat.walking().wheelchairAccessible());
         CheckBox published = new CheckBox("Published"); published.setSelected(ghat.published());
         CheckBox active = new CheckBox("Active"); active.setSelected(ghat.active());
-        if (liveOnly) form.getChildren().addAll(labeled("Crowd Level", crowd), wait, labeled("Operational Status", operational), labeled("Bathing Status", bathing),
-                labeled("Water Safety", water), restriction, gates, zones, hazards, labeled("Alert Priority", priority), alert, published, active);
-        else form.getChildren().addAll(name, area, description, imageUrl, latitude, longitude, history, significance, simhastha, labeled("Walking Difficulty", walking), steps, distance,
-                senior, wheelchair, facilities, labeled("Crowd Level", crowd), wait, labeled("Operational Status", operational), labeled("Bathing Status", bathing), labeled("Water Safety", water),
-                restriction, gates, zones, hazards, labeled("Alert Priority", priority), alert, published, active);
-        ScrollPane scroll = new ScrollPane(form); scroll.setFitToWidth(true); scroll.setPrefViewportHeight(520); dialog.getDialogPane().setContent(scroll);
+        senior.getStyleClass().add("ghat-editor-check");
+        wheelchair.getStyleClass().add("ghat-editor-check");
+        published.getStyleClass().add("ghat-editor-check");
+        active.getStyleClass().add("ghat-editor-check");
+        HBox flags = new HBox(14, senior, wheelchair, published, active);
+        flags.getStyleClass().add("ghat-editor-flags");
+        flags.setAlignment(Pos.CENTER_LEFT);
+        if (liveOnly) {
+            form.getChildren().addAll(
+                    ghatEditorHeader(titleText, ghat.name().isBlank() ? "Create operational state for this Ghat." : ghat.name()),
+                    ghatEditorSection("Live Operations", ghatEditorGrid(labeled("Crowd Level", crowd), labeled("Estimated Wait (minutes)", wait),
+                            labeled("Operational Status", operational), labeled("Snan Status", bathing), labeled("Water Safety", water),
+                            labeled("Walking Difficulty", walking))),
+                    ghatEditorSection("Access & Conditions", ghatEditorGrid(labeled("Steps", steps), labeled("Walking Distance (m)", distance),
+                            labeled("Weather Temperature (C)", weatherTemp), labeled("Weather Condition", weatherCondition),
+                            labeled("Restriction reason", restriction), labeled("Priority alert", alert))),
+                    ghatEditorSection("Zones & Flags", ghatEditorGrid(labeled("Gates: Name|STATUS, ...", gates), labeled("Zones: Name|STATUS, ...", zones),
+                            labeled("Hazards: TYPE|message, ...", hazards), labeled("Alert Priority", priority)), flags));
+        } else {
+            form.getChildren().addAll(
+                    ghatEditorHeader(titleText, "Manage the public Ghat profile and live pilgrim-facing details."),
+                    ghatEditorSection("Basic Details", ghatEditorGrid(labeled("Ghat Name", name), labeled("Area / Region", area),
+                            labeled("Description", description), labeled("Image URL / shared media reference", imageUrl),
+                            labeled("Latitude", latitude), labeled("Longitude", longitude))),
+                    ghatEditorSection("History & Facilities", ghatEditorGrid(labeled("History", history), labeled("Religious Significance", significance),
+                            labeled("Simhastha Connection", simhastha), labeled("Facilities (comma separated)", facilities))),
+                    ghatEditorSection("Operations", ghatEditorGrid(labeled("Walking Difficulty", walking), labeled("Steps", steps),
+                            labeled("Walking Distance (m)", distance), labeled("Crowd Level", crowd), labeled("Estimated Wait (minutes)", wait),
+                            labeled("Weather Temperature (C)", weatherTemp), labeled("Weather Condition", weatherCondition),
+                            labeled("Operational Status", operational), labeled("Snan Status", bathing), labeled("Water Safety", water))),
+                    ghatEditorSection("Safety & Publishing", ghatEditorGrid(labeled("Restriction reason", restriction), labeled("Priority alert", alert),
+                            labeled("Gates: Name|STATUS, ...", gates), labeled("Zones: Name|STATUS, ...", zones),
+                            labeled("Hazards: TYPE|message, ...", hazards), labeled("Alert Priority", priority)), flags));
+        }
+        ScrollPane scroll = new ScrollPane(form);
+        scroll.getStyleClass().add("ghat-editor-scroll");
+        scroll.setFitToWidth(true);
+        scroll.setPrefViewportHeight(liveOnly ? 520 : 560);
+        dialog.getDialogPane().setContent(scroll);
         ButtonType save = new ButtonType(source == null ? "Save Draft / Publish" : "Save", ButtonType.OK.getButtonData()); dialog.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+        AppUi.styleDialog(dialog, stage, "ghat-editor-dialog-pane", save);
+        Node saveButton = dialog.getDialogPane().lookupButton(save);
+        Node cancelButton = dialog.getDialogPane().lookupButton(ButtonType.CANCEL);
+        if (saveButton != null) saveButton.getStyleClass().add("ghat-editor-save");
+        if (cancelButton != null) cancelButton.getStyleClass().add("ghat-editor-cancel");
         if (dialog.showAndWait().orElse(ButtonType.CANCEL) != save) return;
         if (!liveOnly && name.getText().trim().isBlank()) { showInfo("Ghat name required", "Enter a Ghat name before saving."); return; }
+        Ghat.Walking updatedWalking = new Ghat.Walking(walking.getValue(), parseInteger(steps.getText()), parseInteger(distance.getText()), senior.isSelected(), wheelchair.isSelected());
+        Ghat.Weather updatedWeather = new Ghat.Weather(parseInteger(weatherTemp.getText()), weatherCondition.getText());
         Ghat result = copyGhat(ghat, liveOnly ? ghat.name() : name.getText(), liveOnly ? ghat.area() : area.getText(), liveOnly ? ghat.description() : description.getText(),
                 liveOnly ? ghat.imageUrl() : imageUrl.getText(), crowd.getValue(), parseInteger(wait.getText()), operational.getValue(), bathing.getValue(), water.getValue(), published.isSelected(), active.isSelected(),
                 liveOnly ? ghat.latitude() : parseDouble(latitude.getText()), liveOnly ? ghat.longitude() : parseDouble(longitude.getText()),
                 liveOnly ? ghat.history() : new Ghat.History(history.getText(), significance.getText(), simhastha.getText(), ghat.history().associatedSacredPlaces(), ghat.history().rituals(), ghat.history().didYouKnow(), ghat.history().imageUrl()),
-                liveOnly ? ghat.walking() : new Ghat.Walking(walking.getValue(), parseInteger(steps.getText()), parseInteger(distance.getText()), senior.isSelected(), wheelchair.isSelected()),
-                liveOnly ? ghat.facilities() : split(facilities.getText()), parseOperationalState(bathing.getValue(), water.getValue(), restriction.getText(), priority.getValue(), alert.getText(), gates.getText(), zones.getText(), hazards.getText()));
+                updatedWalking, liveOnly ? ghat.facilities() : split(facilities.getText()), updatedWeather,
+                parseOperationalState(bathing.getValue(), water.getValue(), restriction.getText(), priority.getValue(), alert.getText(), gates.getText(), zones.getText(), hazards.getText()));
         saveGhat(result);
     }
 
@@ -1116,54 +1471,123 @@ public class AdminDashboardPage {
 
     private void saveGhat(Ghat ghat, boolean imageUpdate) {
         String token = AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken();
-        if (imageUpdate) System.out.println("SAVE CALLED = ghatId=" + ghat.id() + ", imageUrl=" + ghat.imageUrl());
         ghatService.saveGhat(ghat, token).whenComplete((ignored, error) -> Platform.runLater(() -> {
             if (error != null) {
-                if (imageUpdate) System.out.println("SAVE RESULT = failed: " + error.getClass().getSimpleName());
                 showInfo(imageUpdate ? "Image update failed" : "Ghat save failed",
                         imageUpdate ? "The shared backend did not accept this image update. No successful save was assumed."
                                 : "The shared backend did not accept this Ghat change. No successful save was assumed.");
                 return;
             }
-            if (imageUpdate) System.out.println("SAVE RESULT = success");
             if (imageUpdate) applySavedGhat(ghat);
             else refreshManagedGhats(managedGhatRows);
         }));
     }
 
-    private void updateGhatImage(Ghat ghat) {
+    private void updateGhatImage(Ghat ghat, CloudinaryUploadResult uploaded, Button trigger) {
         AppSession.User user = AppSession.currentUser();
         String token = user == null ? "" : user.idToken();
-        System.out.println("AUTH UID = " + (user == null ? "" : user.uid()));
-        System.out.println("AUTH ROLE = " + (user == null ? "" : user.role()));
-        System.out.println("SAVE CALLED = image-only ghatId=" + ghat.id() + ", imageUrl=" + ghat.imageUrl());
-        ghatService.updateGhatImage(ghat, ghat.imageUrl(), token).whenComplete((result, error) -> Platform.runLater(() -> {
+        java.util.logging.Logger.getLogger(AdminDashboardPage.class.getName())
+                .info("Ghat image save requested: ghatId=" + ghat.id()
+                        + ", authUidPresent=" + (user != null && user.uid() != null && !user.uid().isBlank())
+                        + ", secureUrlPresent=" + (uploaded.getSecureUrl() != null && uploaded.getSecureUrl().startsWith("https://"))
+                        + ", publicIdPresent=" + (uploaded.getPublicId() != null && !uploaded.getPublicId().isBlank()));
+        String oldPublicId = ghat.imagePublicId();
+        ghatService.updateGhatImage(ghat, uploaded.getSecureUrl(), uploaded.getPublicId(), token).whenComplete((result, error) -> Platform.runLater(() -> {
             if (error != null) {
-                System.out.println("EXCEPTION = " + error);
+                java.util.concurrent.CompletableFuture.runAsync(() -> {
+                    try { new CloudinaryService().deleteImage(uploaded.getPublicId()); }
+                    catch (java.io.IOException cleanupFailure) {
+                        java.util.logging.Logger.getLogger(AdminDashboardPage.class.getName())
+                                .log(java.util.logging.Level.INFO, "New Ghat Cloudinary image cleanup failed after Firestore rejection: ghatId=" + ghat.id(), cleanupFailure);
+                    }
+                });
+                setGhatImageReady(trigger);
                 showInfo("Image update failed", "The shared backend rejected this image update. Check the application log for the Firebase status and response.");
                 return;
             }
-            System.out.println("SAVE RESULT = " + (result.locallySaved() ? "local fallback" : "backend success"));
+            java.util.logging.Logger.getLogger(AdminDashboardPage.class.getName())
+                    .info("Ghat image save accepted by Firestore: ghatId=" + ghat.id());
             applySavedGhat(result.ghat());
-            showInfo(result.locallySaved() ? "Saved locally" : "Image updated successfully",
-                    result.locallySaved() ? "Cloud sync is currently unavailable. This Ghat image was saved locally and will remain available on this device."
-                            : "The shared Ghat record was updated and verified from the backend.");
+            if (oldPublicId != null && !oldPublicId.isBlank() && !oldPublicId.equals(uploaded.getPublicId())) {
+                java.util.concurrent.CompletableFuture.runAsync(() -> {
+                    try { new CloudinaryService().deleteImage(oldPublicId); }
+                    catch (java.io.IOException cleanupFailure) {
+                        java.util.logging.Logger.getLogger(AdminDashboardPage.class.getName())
+                                .log(java.util.logging.Level.INFO, "Old Ghat Cloudinary image cleanup failed after successful save: ghatId=" + ghat.id(), cleanupFailure);
+                    }
+                });
+            }
+            setGhatImageReady(trigger);
+            showInfo("Image updated successfully", "The shared Ghat record was updated in Firestore.");
         }));
+    }
+
+    private void setGhatImageBusy(Button button, String text) {
+        if (button == null) return;
+        button.setText(text);
+        button.setDisable(true);
+    }
+
+    private void setGhatImageReady(Button button) {
+        if (button == null) return;
+        button.setText("Change Image");
+        button.setDisable(false);
     }
 
     /** Keeps the Admin row in sync with the exact model that the backend accepted. */
     private void applySavedGhat(Ghat saved) {
         if (managedGhatRows == null) return;
+        String savedId = ghatKey(saved.id());
+        String savedName = ghatKey(saved.name());
         managedGhats = java.util.stream.Stream.concat(
-                        managedGhats.stream().filter(existing -> !existing.id().equals(saved.id())), java.util.stream.Stream.of(saved))
+                        managedGhats.stream().filter(existing -> {
+                            String existingId = ghatKey(existing.id());
+                            String existingName = ghatKey(existing.name());
+                            return !existingId.equals(savedId) && (savedName.isBlank() || !existingName.equals(savedName));
+                        }), java.util.stream.Stream.of(saved))
                 .toList();
         renderManagedGhats(managedGhatRows, managedGhats);
     }
 
+    private String ghatKey(String value) {
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private String adminGhatSummary(Ghat ghat) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        if (ghat.area() != null && !ghat.area().isBlank()) parts.add(ghat.area());
+        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) parts.add("Crowd " + enumTitle(ghat.crowdLevel()));
+        if (ghat.operationalStatus() != Ghat.OperationalStatus.INFORMATION_ONLY) parts.add("Status " + enumTitle(ghat.operationalStatus()));
+        parts.add("Snan " + enumTitle(ghat.operationalState().bathingStatus()));
+        parts.add("Water " + enumTitle(ghat.operationalState().waterSafety()));
+        if (ghat.estimatedWaitMinutes() != null && ghat.estimatedWaitMinutes() >= 0) parts.add("Wait " + ghat.waitLabel());
+        parts.add("Walk " + enumTitle(ghat.walking().difficulty()));
+        if (ghat.walking().approximateSteps() != null && ghat.walking().approximateSteps() >= 0) parts.add("Steps " + ghat.walking().approximateSteps());
+        if (ghat.weather().temperatureCelsius() != null) parts.add("Weather " + ghat.weather().temperatureCelsius() + "C");
+        parts.add(ghat.published() ? "Published" : "Draft");
+        parts.add(ghat.active() ? "Active" : "Inactive");
+        return String.join(" | ", parts);
+    }
+
+    private String enumTitle(Enum<?> value) {
+        if (value == null) return "";
+        String text = value.name().toLowerCase(java.util.Locale.ROOT).replace('_', ' ');
+        StringBuilder title = new StringBuilder();
+        for (String word : text.split(" ")) {
+            if (word.isBlank()) continue;
+            if (!title.isEmpty()) title.append(' ');
+            title.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1));
+        }
+        return title.toString();
+    }
+
     private Ghat newGhatDraft() {
         return new Ghat("ghat-" + java.util.UUID.randomUUID(), "", "", "", null, null, null, null, "",
-                Ghat.OperationalStatus.INFORMATION_ONLY, Ghat.CrowdLevel.UNKNOWN, null, false, Ghat.Walking.unknown(), List.of(),
-                Ghat.Weather.unavailable(), Ghat.History.unavailable(), "", GhatOperationalState.unavailable(), false, true);
+                Ghat.OperationalStatus.OPEN, Ghat.CrowdLevel.MODERATE, 15, true, new Ghat.Walking(Ghat.WalkingDifficulty.MODERATE, 32, null, false, false), List.of(),
+                new Ghat.Weather(27, "Clear"), Ghat.History.unavailable(), "",
+                new GhatOperationalState(GhatOperationalState.BathingStatus.AVAILABLE, GhatOperationalState.WaterSafety.NORMAL,
+                        List.of(), List.of(), List.of(), List.of(), List.of(), GhatOperationalState.CleaningStatus.NORMAL, "",
+                        GhatOperationalState.PriorityAlert.none(), ""), false, true);
     }
 
     private Ghat withFlags(Ghat ghat, boolean published, boolean active) {
@@ -1175,6 +1599,7 @@ public class AdminDashboardPage {
             Ghat.OperationalStatus operational, GhatOperationalState.BathingStatus bathing, GhatOperationalState.WaterSafety water, boolean published, boolean active) {
         return copyGhat(base, name, area, description, imageUrl, crowd, wait, operational, bathing, water, published, active,
                 base.latitude(), base.longitude(), base.history(), base.walking(), base.facilities(),
+                base.weather(),
                 new GhatOperationalState(bathing, water, base.operationalState().hazards(), base.operationalState().zones(), base.operationalState().gates(),
                         base.operationalState().facilities(), base.operationalState().accessWindows(), base.operationalState().cleaningStatus(), base.operationalState().restrictionReason(),
                         base.operationalState().priorityAlert(), base.operationalState().lastUpdated()));
@@ -1182,14 +1607,79 @@ public class AdminDashboardPage {
 
     private Ghat copyGhat(Ghat base, String name, String area, String description, String imageUrl, Ghat.CrowdLevel crowd, Integer wait,
             Ghat.OperationalStatus operational, GhatOperationalState.BathingStatus bathing, GhatOperationalState.WaterSafety water, boolean published, boolean active,
-            Double latitude, Double longitude, Ghat.History history, Ghat.Walking walking, List<String> facilities, GhatOperationalState state) {
-        return new Ghat(base.id(), name, area, description, latitude, longitude, base.entryLatitude(), base.entryLongitude(), imageUrl, operational, crowd, wait,
-                bathing == GhatOperationalState.BathingStatus.AVAILABLE, walking, facilities, base.weather(), history, String.valueOf(System.currentTimeMillis()), state, published, active);
+            Double latitude, Double longitude, Ghat.History history, Ghat.Walking walking, List<String> facilities, Ghat.Weather weather, GhatOperationalState state) {
+        return new Ghat(base.id(), name, area, description, latitude, longitude, base.entryLatitude(), base.entryLongitude(), imageUrl,
+                base.imagePublicId(), operational, crowd, wait, bathing == GhatOperationalState.BathingStatus.AVAILABLE, walking, facilities, weather, history,
+                String.valueOf(System.currentTimeMillis()), state, published, active);
     }
 
-    private TextField editorField(String value, String prompt) { TextField field = new TextField(value == null ? "" : value); field.setPromptText(prompt); return field; }
-    private <T> ComboBox<T> enumBox(T[] values, T selected) { ComboBox<T> box = new ComboBox<>(); box.getItems().addAll(values); box.setValue(selected); return box; }
-    private Node labeled(String text, Node control) { return new VBox(3, muted(text), control); }
+    private TextField editorField(String value, String prompt) {
+        TextField field = new TextField(value == null ? "" : value);
+        field.setPromptText(prompt);
+        field.getStyleClass().add("ghat-editor-input");
+        return field;
+    }
+    private <T> ComboBox<T> enumBox(T[] values, T selected) {
+        ComboBox<T> box = new ComboBox<>();
+        box.getItems().addAll(values);
+        box.setValue(selected);
+        box.getStyleClass().add("ghat-editor-input");
+        box.setMaxWidth(Double.MAX_VALUE);
+        return box;
+    }
+    private ComboBox<Ghat.CrowdLevel> ghatCrowdBox(Ghat.CrowdLevel selected) {
+        ComboBox<Ghat.CrowdLevel> box = new ComboBox<>();
+        box.getItems().addAll(Ghat.CrowdLevel.LOW, Ghat.CrowdLevel.MODERATE, Ghat.CrowdLevel.HIGH, Ghat.CrowdLevel.CRITICAL);
+        box.setValue(selected == null || selected == Ghat.CrowdLevel.UNKNOWN ? Ghat.CrowdLevel.MODERATE : selected);
+        box.getStyleClass().add("ghat-editor-input");
+        box.setMaxWidth(Double.MAX_VALUE);
+        return box;
+    }
+    private ComboBox<Ghat.OperationalStatus> ghatOperationalBox(Ghat.OperationalStatus selected) {
+        ComboBox<Ghat.OperationalStatus> box = new ComboBox<>();
+        box.getItems().addAll(Ghat.OperationalStatus.OPEN, Ghat.OperationalStatus.PARTIALLY_RESTRICTED, Ghat.OperationalStatus.RESTRICTED,
+                Ghat.OperationalStatus.TEMPORARILY_CLOSED, Ghat.OperationalStatus.EMERGENCY_CLOSED);
+        box.setValue(selected == null || selected == Ghat.OperationalStatus.INFORMATION_ONLY ? Ghat.OperationalStatus.OPEN : selected);
+        box.getStyleClass().add("ghat-editor-input");
+        box.setMaxWidth(Double.MAX_VALUE);
+        return box;
+    }
+    private Node ghatEditorHeader(String title, String detail) {
+        Label icon = moduleIcon("Ghats & Snan", "ghat-editor-header-icon");
+        VBox copy = new VBox(2, label(title, "ghat-editor-title"), label(detail, "ghat-editor-subtitle"));
+        HBox header = new HBox(12, icon, copy);
+        header.getStyleClass().add("ghat-editor-header");
+        header.setAlignment(Pos.CENTER_LEFT);
+        return header;
+    }
+
+    private VBox ghatEditorSection(String title, Node... content) {
+        VBox section = new VBox(10, label(title, "ghat-editor-section-title"));
+        section.getChildren().addAll(content);
+        section.getStyleClass().add("ghat-editor-section");
+        return section;
+    }
+
+    private GridPane ghatEditorGrid(Node... nodes) {
+        GridPane grid = new GridPane();
+        grid.getStyleClass().add("ghat-editor-grid");
+        grid.setHgap(12);
+        grid.setVgap(10);
+        for (int i = 0; i < nodes.length; i++) {
+            grid.add(nodes[i], i % 2, i / 2);
+            GridPane.setHgrow(nodes[i], Priority.ALWAYS);
+        }
+        return grid;
+    }
+
+    private Node labeled(String text, Node control) {
+        VBox box = new VBox(4, label(text, "ghat-editor-field-label"), control);
+        box.getStyleClass().add("ghat-editor-field");
+        if (control instanceof Region region) {
+            region.setMaxWidth(Double.MAX_VALUE);
+        }
+        return box;
+    }
     private String numberText(Number number) { return number == null ? "" : String.valueOf(number); }
     private Integer parseInteger(String value) { try { return value == null || value.isBlank() ? null : Integer.valueOf(value.trim()); } catch (NumberFormatException ignored) { return null; } }
     private Double parseDouble(String value) { try { return value == null || value.isBlank() ? null : Double.valueOf(value.trim()); } catch (NumberFormatException ignored) { return null; } }
@@ -1328,7 +1818,7 @@ public class AdminDashboardPage {
         ComboBox<ScheduleCategory> category = new ComboBox<>(); category.getItems().setAll(ScheduleCategory.values()); category.setPromptText("Category"); DatePicker date = new DatePicker(defaultDate); CheckBox important = new CheckBox("Important");
         if (existing != null) { title.setText(existing.title()); location.setText(existing.location()); start.setText(existing.startTime().toString()); end.setText(existing.endTime().toString()); organizer.setText(existing.organizer()); description.setText(existing.description()); note.setText(existing.note()); category.setValue(existing.category()); date.setValue(existing.date()); important.setSelected(existing.important()); }
         VBox form = new VBox(9, title, category, date, start, end, label("Location", "pilgrim-small-gold"), location, organizer, description, note, important); form.setPadding(new Insets(14));
-        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle(existing == null ? "Add Event" : "Edit Event"); dialog.getDialogPane().setContent(form); ButtonType save = new ButtonType(existing == null ? "Save Event" : "Save Changes"); dialog.getButtonTypes().addAll(ButtonType.CANCEL, save);
+        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle(existing == null ? "Add Event" : "Edit Event"); dialog.getDialogPane().setContent(form); ButtonType save = new ButtonType(existing == null ? "Save Event" : "Save Changes"); dialog.getButtonTypes().addAll(ButtonType.CANCEL, save); AppUi.styleDialog(dialog, stage, "schedule-admin-dialog", save);
         dialog.showAndWait().ifPresent(result -> { if (result != save) return; try { saveScheduleEvent(new ScheduleEvent(existing == null ? "" : existing.id(), title.getText().trim(), category.getValue(), location.getText().trim(), date.getValue(), LocalTime.parse(start.getText().trim()), LocalTime.parse(end.getText().trim()), description.getText().trim(), organizer.getText().trim(), important.isSelected(), note.getText().trim(), existing != null && existing.cancelled(), existing == null ? null : existing.latitude(), existing == null ? null : existing.longitude(), existing == null ? "" : existing.locationId())); } catch (Exception exception) { showInfo("Event not saved", exception.getMessage()); } });
     }
 
@@ -1340,13 +1830,13 @@ public class AdminDashboardPage {
         DatePicker date = new DatePicker(defaultDate); ComboBox<String> severity = new ComboBox<>(); severity.getItems().addAll("INFO", "WARNING", "CRITICAL"); severity.setValue("WARNING"); CheckBox active = new CheckBox("Active"); active.setSelected(true);
         if (existing != null) { title.setText(existing.title()); message.setText(existing.message()); location.setText(existing.location()); date.setValue(existing.date()); start.setText(existing.startTime() == null ? "" : existing.startTime().toString()); end.setText(existing.endTime() == null ? "" : existing.endTime().toString()); severity.setValue(existing.severity()); active.setSelected(existing.active()); }
         VBox form = new VBox(9, title, message, location, date, start, end, severity, active); form.setPadding(new Insets(14));
-        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle(existing == null ? "Add Schedule Alert" : "Edit Schedule Alert"); dialog.getDialogPane().setContent(form); ButtonType save = new ButtonType(existing == null ? "Save Alert" : "Save Changes"); dialog.getButtonTypes().addAll(ButtonType.CANCEL, save);
+        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle(existing == null ? "Add Schedule Alert" : "Edit Schedule Alert"); dialog.getDialogPane().setContent(form); ButtonType save = new ButtonType(existing == null ? "Save Alert" : "Save Changes"); dialog.getButtonTypes().addAll(ButtonType.CANCEL, save); AppUi.styleDialog(dialog, stage, "schedule-admin-dialog", save);
         dialog.showAndWait().ifPresent(result -> { if (result != save) return; try { LocalTime from = start.getText().isBlank() ? null : LocalTime.parse(start.getText().trim()); LocalTime to = end.getText().isBlank() ? null : LocalTime.parse(end.getText().trim()); if ((from == null) != (to == null) || (from != null && !to.isAfter(from))) throw new IllegalArgumentException("Alert end time must be after start time."); saveScheduleAlert(new ScheduleAlert(existing == null ? "" : existing.id(), title.getText().trim(), message.getText().trim(), location.getText().trim(), date.getValue(), from, to, severity.getValue(), active.isSelected())); } catch (Exception exception) { showInfo("Alert not saved", exception.getMessage()); } });
     }
 
     private void showScheduleAlerts(LocalDate date) {
         VBox rows = new VBox(9, muted("Loading alerts...")); Button add = smallButton("+ Add Alert"); add.setOnAction(event -> showScheduleAlertForm(null, date));
-        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle("Manage Schedule Alerts"); dialog.getDialogPane().setContent(new VBox(12, add, rows)); dialog.getButtonTypes().add(ButtonType.CLOSE);
+        Alert dialog = new Alert(Alert.AlertType.NONE); dialog.setTitle("Manage Schedule Alerts"); dialog.getDialogPane().setContent(new VBox(12, add, rows)); dialog.getButtonTypes().add(ButtonType.CLOSE); AppUi.styleDialog(dialog, stage, "schedule-admin-dialog", ButtonType.CLOSE);
         java.util.concurrent.CompletableFuture.supplyAsync(() -> { try { return scheduleService.alertsForDate(date); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } }).whenComplete((alerts, error) -> Platform.runLater(() -> { if (error != null) rows.getChildren().setAll(muted("Alerts could not be refreshed.")); else if (alerts.isEmpty()) rows.getChildren().setAll(muted("No alerts for this date.")); else rows.getChildren().setAll(alerts.stream().map(this::adminAlertRow).toList()); })); dialog.showAndWait();
     }
 
@@ -1360,7 +1850,115 @@ public class AdminDashboardPage {
     private void saveScheduleAlert(ScheduleAlert alert) { java.util.concurrent.CompletableFuture.runAsync(() -> { try { scheduleService.saveAlert(alert); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } }).whenComplete((ignored, error) -> Platform.runLater(() -> { if (error != null) showInfo("Alert not saved", error.getCause().getMessage()); else showSection("Schedule & Events"); })); }
     private void deleteScheduleAlert(String id) { java.util.concurrent.CompletableFuture.runAsync(() -> { try { scheduleService.deleteAlert(id); } catch (Exception exception) { throw new java.util.concurrent.CompletionException(exception); } }).whenComplete((ignored, error) -> Platform.runLater(() -> { if (error != null) showInfo("Delete failed", error.getCause().getMessage()); else showSection("Schedule & Events"); })); }
 
-    
+    private VBox faqManagementPage() {
+        List<AppDataStore.FaqRecord> faqs = AppDataStore.faqs();
+        HBox stats = new HBox(12,
+                metric(String.valueOf(faqs.size()), "Total FAQs"),
+                metric(String.valueOf(faqs.stream().filter(faq -> faq.active).count()), "Published"),
+                metric(String.valueOf(faqs.stream().map(faq -> faq.category).distinct().count()), "Categories"));
+        TextField search = AppUi.textField("Search question / category");
+        ComboBox<String> category = combo("All", "General", "Simhastha 2027", "Ghats & Snan", "Travel & Transport",
+                "Stay & Accommodation", "Puja & Rituals", "Emergency & Safety", "Bookings & Payments");
+        ComboBox<String> status = combo("All", "Published", "Draft");
+        VBox rows = new VBox(9);
+        Runnable render = () -> renderAdminFaqRows(rows, search.getText(), category.getValue(), status.getValue());
+        search.textProperty().addListener((observable, oldValue, newValue) -> render.run());
+        category.setOnAction(event -> render.run());
+        status.setOnAction(event -> render.run());
+        Button add = new Button("+ Add FAQ");
+        add.getStyleClass().add("primary-button");
+        add.setOnAction(event -> showFaqEditor(null));
+        HBox filters = new HBox(10, search, category, status, add);
+        filters.getStyleClass().addAll("pilgrim-filter-row", "admin-faq-toolbar");
+        HBox.setHgrow(search, Priority.ALWAYS);
+        render.run();
+        return pageShell("FAQs / Help Center", "Manage user-facing help questions and support answers.",
+                stats, filters, infoPanel("FAQ Library", rows));
+    }
+
+    private void renderAdminFaqRows(VBox rows, String query, String category, String status) {
+        rows.getChildren().clear();
+        List<AppDataStore.FaqRecord> matches = AppDataStore.faqs().stream()
+                .filter(faq -> matches(query, faq.category, faq.question, faq.answer))
+                .filter(faq -> "All".equals(valueOr("All", category)) || category.equals(faq.category))
+                .filter(faq -> "All".equals(valueOr("All", status))
+                        || ("Published".equals(status) && faq.active)
+                        || ("Draft".equals(status) && !faq.active))
+                .sorted(java.util.Comparator.comparing(faq -> faq.sortOrder))
+                .toList();
+        if (matches.isEmpty()) {
+            rows.getChildren().add(dataRow("FAQs / Help Center", "No matching FAQs", "Add or adjust filters."));
+            return;
+        }
+        matches.forEach(faq -> rows.getChildren().add(adminFaqRow(faq)));
+    }
+
+    private HBox adminFaqRow(AppDataStore.FaqRecord faq) {
+        VBox copy = new VBox(4, strong(faq.question), muted(faq.category + " | " + (faq.active ? "Published" : "Draft")),
+                muted(faq.answer));
+        Button details = smallButton("Details");
+        details.setOnAction(event -> showInfo(faq.question, faq.answer));
+        Button edit = smallButton("Edit");
+        edit.setOnAction(event -> showFaqEditor(faq));
+        Button publish = smallButton(faq.active ? "Hide" : "Publish");
+        publish.setOnAction(event -> {
+            AppDataStore.saveFaq(faq.withActive(!faq.active));
+            showSection("FAQs / Help Center");
+        });
+        Button delete = smallButton("Delete");
+        delete.setOnAction(event -> {
+            if (confirm("Delete FAQ", "Delete this FAQ from the Help Center?")) {
+                AppDataStore.deleteFaq(faq.id);
+                showSection("FAQs / Help Center");
+            }
+        });
+        HBox row = new HBox(10, moduleIcon("FAQs / Help Center", "pilgrim-row-icon"), copy, createSpacer(),
+                details, edit, publish, delete);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        row.getStyleClass().addAll("pilgrim-data-row", "admin-faq-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private void showFaqEditor(AppDataStore.FaqRecord existing) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(existing == null ? "Add FAQ" : "Edit FAQ");
+        ButtonType save = new ButtonType(existing == null ? "Add FAQ" : "Save Changes");
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, save);
+        TextField question = AppUi.textField("Question");
+        ComboBox<String> category = combo("General", "Simhastha 2027", "Ghats & Snan", "Travel & Transport",
+                "Stay & Accommodation", "Puja & Rituals", "Emergency & Safety", "Bookings & Payments");
+        TextArea answer = new TextArea();
+        answer.setPromptText("Answer");
+        answer.setWrapText(true);
+        answer.getStyleClass().add("input-field");
+        TextField order = AppUi.textField("Display order");
+        CheckBox active = new CheckBox("Publish this FAQ");
+        active.setSelected(true);
+        if (existing != null) {
+            question.setText(existing.question);
+            category.setValue(existing.category);
+            answer.setText(existing.answer);
+            order.setText(existing.sortOrder);
+            active.setSelected(existing.active);
+        }
+        VBox form = new VBox(10, sectionTitle(existing == null ? "Add FAQ" : "Edit FAQ"), question, category,
+                answer, order, active);
+        form.getStyleClass().add("admin-faq-editor");
+        dialog.getDialogPane().setContent(form);
+        AppUi.styleDialog(dialog, stage, "profile-dialog-pane", save);
+        Optional<ButtonType> result = dialog.showAndWait();
+        if (result.isPresent() && result.get() == save) {
+            if (question.getText().trim().isBlank() || answer.getText().trim().isBlank()) {
+                showInfo("FAQ", "Please enter both question and answer.");
+                return;
+            }
+            AppDataStore.saveFaq(new AppDataStore.FaqRecord(existing == null ? "" : existing.id,
+                    category.getValue(), question.getText().trim(), answer.getText().trim(),
+                    active.isSelected(), order.getText().trim()));
+            showSection("FAQs / Help Center");
+        }
+    }
 
     private VBox emergencyPage() {
         VBox form = structuredForm("Name", "Type", "Phone", "Location", "Map Link", "Availability", "Verified", "Priority", "Active");
@@ -1812,6 +2410,7 @@ public class AdminDashboardPage {
             case "Lost & Found", "lost" -> "\uE721";
             case "Schedule & Events", "Schedule / Events", "schedule" -> "\uE787";
             case "Announcements", "announcement" -> "\uE789";
+            case "FAQs / Help Center" -> "\uE9CE";
             case "Emergency", "emergency" -> "\uE95E";
             case "Reports & Analytics" -> "\uE9D2";
             case "System" -> "\uE713";
@@ -1852,21 +2451,11 @@ public class AdminDashboardPage {
     }
 
     private void showInfo(String title, String message) {
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle(title);
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        alert.showAndWait();
+        AppUi.showInfo(title, message, root == null || root.getScene() == null ? null : root.getScene().getWindow());
     }
 
     private boolean confirm(String title, String message) {
-        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
-        alert.setTitle(title);
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        return alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK;
+        return AppUi.confirm(title, message, root == null || root.getScene() == null ? null : root.getScene().getWindow());
     }
 
-    private record AdminNotification(String id, String title, String detail, String targetSection) {
-    }
 }

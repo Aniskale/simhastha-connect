@@ -10,7 +10,13 @@ public final class GhatNavigationService {
     public record Destination(Point point, String entryName) { }
     public enum Decision { READY, HIGH_CROWD_CONFIRMATION, UNSAFE, NO_ENTRY }
     public Decision decision(Ghat ghat) {
-        if (ghat.operationalStatus() == Ghat.OperationalStatus.EMERGENCY_CLOSED || ghat.operationalStatus() == Ghat.OperationalStatus.TEMPORARILY_CLOSED || !ghat.operationalState().bathingRecommended()) return Decision.UNSAFE;
+        boolean explicitClosure = ghat.operationalStatus() == Ghat.OperationalStatus.EMERGENCY_CLOSED
+                || ghat.operationalStatus() == Ghat.OperationalStatus.TEMPORARILY_CLOSED
+                || ghat.operationalStatus() == Ghat.OperationalStatus.RESTRICTED;
+        boolean explicitBathingUnsafe = ghat.operationalState().bathingStatus() == GhatOperationalState.BathingStatus.SUSPENDED
+                || ghat.operationalState().waterSafety() == GhatOperationalState.WaterSafety.DANGEROUS
+                || ghat.operationalState().waterSafety() == GhatOperationalState.WaterSafety.BATHING_SUSPENDED;
+        if (explicitClosure || explicitBathingUnsafe) return Decision.UNSAFE;
         if (destinationFor(ghat).isEmpty() && destinationQueryFor(ghat).isBlank()) return Decision.NO_ENTRY;
         return ghat.crowdLevel().ordinal() >= Ghat.CrowdLevel.HIGH.ordinal() ? Decision.HIGH_CROWD_CONFIRMATION : Decision.READY;
     }

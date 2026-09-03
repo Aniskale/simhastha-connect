@@ -15,6 +15,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
@@ -47,7 +48,7 @@ public class OperatorAuthPage {
         showLoginForm();
         StackPane center = new StackPane(createSplitShell());
         center.setPadding(new Insets(18, 24, 36, 24));
-        page.setCenter(center);
+        page.setCenter(scroll(center));
 
         ThemedBackgroundPane root = new ThemedBackgroundPane(page);
         return AppUi.createScene(root, this);
@@ -306,6 +307,14 @@ public class OperatorAuthPage {
         return imageView;
     }
 
+    private ScrollPane scroll(javafx.scene.Node content) {
+        ScrollPane scroll = new ScrollPane(content);
+        scroll.getStyleClass().add("page-scroll");
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        return scroll;
+    }
+
     private void applyCoverViewport(ImageView imageView, Image image, double width, double height) {
         double scale = Math.max(width / image.getWidth(), height / image.getHeight());
         double cropWidth = width / scale;
@@ -320,11 +329,7 @@ public class OperatorAuthPage {
     }
 
     private void showInfo(String title, String message) {
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle(title);
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        alert.showAndWait();
+        AppUi.showInfo(title, message, formSlot == null || formSlot.getScene() == null ? null : formSlot.getScene().getWindow());
     }
 
     public static class OperatorAccount {

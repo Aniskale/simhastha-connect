@@ -26,7 +26,8 @@ public final class AnnouncementLocationSelector {
         double startLon = valid(initialLat, initialLon) ? initialLon : 73.7904;
         double[] pending = { startLat, startLon };
         Stage dialog = new Stage();
-        dialog.initOwner(owner); dialog.initModality(Modality.WINDOW_MODAL); dialog.setTitle("Select Announcement Location");
+        if (owner != null) dialog.initOwner(owner);
+        dialog.initModality(Modality.WINDOW_MODAL); dialog.setTitle("Select Announcement Location");
         Label selected = new Label(coords(pending[0], pending[1])); selected.getStyleClass().add("pilgrim-card-detail");
         WebView map = new WebView(); map.setMinHeight(440); VBox.setVgrow(map, Priority.ALWAYS);
         WebEngine engine = map.getEngine();
@@ -43,7 +44,11 @@ public final class AnnouncementLocationSelector {
         Button save = new Button("Confirm Location"); save.getStyleClass().add("primary-button"); save.setOnAction(e -> { confirm.accept(new Selection(pending[0], pending[1])); dialog.close(); });
         VBox root = new VBox(10, map, new VBox(3, new Label("Selected Location"), selected), new HBox(10, cancel, spacer(), save));
         root.getStyleClass().add("pilgrim-dashboard-main"); root.setPadding(new Insets(16));
-        dialog.setScene(new javafx.scene.Scene(root, 760, 620)); dialog.showAndWait();
+        javafx.scene.Scene scene = new javafx.scene.Scene(root, 760, 620);
+        java.net.URL css = AnnouncementLocationSelector.class.getResource("/css/simhastha-theme.css");
+        if (css != null) scene.getStylesheets().add(css.toExternalForm());
+        ThemeManager.applyTo(root);
+        dialog.setScene(scene); dialog.showAndWait();
     }
 
     public static final class Bridge {

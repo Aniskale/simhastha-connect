@@ -1,6 +1,10 @@
 package com.simhastha.view;
 
+import com.simhastha.config.CloudinaryFolders;
+import com.simhastha.service.CloudinaryService;
+import com.simhastha.model.CloudinaryUploadResult;
 import com.simhastha.model.Ghat;
+import com.simhastha.model.GhatOperationalState;
 import com.simhastha.service.GhatService;
 import com.simhastha.service.GhatSnanTimeCalculator;
 import com.simhastha.service.GhatOperationalStateService;
@@ -12,15 +16,30 @@ import com.simhastha.service.GhatCatalogueService;
 import com.simhastha.service.GhatImageService;
 import com.simhastha.service.GoogleMapsConfig;
 import com.simhastha.service.GoogleMapsService;
+import com.simhastha.schedule.NashikLocationRegistry;
+import com.simhastha.schedule.ScheduleAlert;
+import com.simhastha.schedule.ScheduleCategory;
+import com.simhastha.schedule.SchedulePeriod;
+import com.simhastha.schedule.ScheduleService;
+import com.simhastha.schedule.ScheduleStatus;
 import java.awt.Desktop;
+import java.io.File;
+import java.io.IOException;
 import java.net.URL;
 import java.net.URI;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.logging.Logger;
 
 import javafx.application.Platform;
 import javafx.animation.Animation;
 import javafx.animation.Interpolator;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.animation.TranslateTransition;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
@@ -32,17 +51,21 @@ import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.DateCell;
 import javafx.scene.control.DatePicker;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
+import javafx.scene.control.PasswordField;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Slider;
 import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
@@ -51,15 +74,22 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.scene.shape.Arc;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Rectangle;
+import javafx.scene.web.WebEngine;
+import javafx.scene.web.WebView;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
 
 public class DashboardPage {
 
+    private static final Logger LOGGER = Logger.getLogger(DashboardPage.class.getName());
+    private static final double GHAT_CARD_WIDTH = 200;
+    private static final double GHAT_CARD_IMAGE_HEIGHT = 122;
     private BorderPane root;
     private final AppPaymentCoordinator paymentCoordinator = new AppPaymentCoordinator();
     private final java.util.Map<String, Button> navButtons = new java.util.LinkedHashMap<>();
@@ -73,6 +103,13 @@ public class DashboardPage {
         thread.setDaemon(true);
         return thread;
     });
+    private static final java.util.concurrent.ExecutorService SCHEDULE_REFRESH_EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "simhastha-schedule-refresh");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    final FirestoreGateway firestoreGateway = new FirestoreGateway(FirebaseConfig.load());
     private final GhatService ghatService = new GhatService(new FirestoreGateway(FirebaseConfig.load()));
     private final GhatOperationalStateService ghatOperationalStateService = new GhatOperationalStateService(ghatService);
     private final GhatRecommendationService ghatRecommendationService = new GhatRecommendationService();
@@ -85,8 +122,28 @@ public class DashboardPage {
     private final java.util.Map<String, Image> localImageCache = new java.util.HashMap<>();
     private final java.util.Map<String, GhatCardCacheEntry> ghatCardCache = new java.util.HashMap<>();
     private final GoogleMapsService googleMapsService = new GoogleMapsService(GoogleMapsConfig.load());
+    private final ScheduleService scheduleService = new ScheduleService();
+    private final Map<String, com.simhastha.schedule.ScheduleEvent> savedScheduleEvents = new LinkedHashMap<>();
     private List<Ghat> currentGhats = List.of();
     private long ghatRefreshGeneration;
+    private java.time.LocalDate selectedScheduleDate = java.time.LocalDate.now();
+    private ScheduleCategory selectedScheduleCategory;
+    private List<com.simhastha.schedule.ScheduleEvent> loadedScheduleEvents = List.of();
+    private List<ScheduleAlert> loadedScheduleAlerts = List.of();
+    private final java.util.Set<String> readNotifications = new java.util.HashSet<>();
+    private VBox scheduleDateArea;
+    private VBox scheduleFeatureArea;
+    private VBox scheduleFilterArea;
+    private VBox scheduleTimelineArea;
+    private Timeline scheduleRefreshTimeline;
+    private boolean schedulePageActive;
+    private long scheduleRefreshGeneration;
+    private boolean scheduleRefreshInFlight;
+    private final Runnable scheduleLocalChangeListener = () -> Platform.runLater(() -> {
+        if (schedulePageActive) {
+            refreshSchedule();
+        }
+    });
     private VBox ghatOperationalAlerts;
     private Ghat selectedGhat;
     private VBox selectedGhatCard;
@@ -97,8 +154,20 @@ public class DashboardPage {
     private String ghatSearch = "";
     private final java.util.LinkedHashMap<String, StayItem> stayWishlist = new java.util.LinkedHashMap<>();
     private final java.util.LinkedHashMap<String, StayItem> recentlyViewedStays = new java.util.LinkedHashMap<>();
+    private Image profilePhoto;
+    private String profilePhotoUrl;
+    private String profilePhotoPublicId;
+    private Rectangle2D profilePhotoViewport;
+    private String editedProfileName;
+    private String editedProfileEmail;
+    private String editedProfileMobile = "+91 98765 43210";
+    private String editedProfileAddress = "Nashik, Maharashtra, India";
+    private String editedProfileBirthDate = "15 Aug 1995";
+    private String editedProfileGender = "Male";
+    private String profileSuccessMessage;
 
     public Scene createScene(Stage stage) {
+        hydrateProfilePhotoFromSession();
         root = new BorderPane();
         root.getStyleClass().add("pilgrim-dashboard-root");
         root.setLeft(createSidebar(stage));
@@ -107,6 +176,16 @@ public class DashboardPage {
         Scene scene = new Scene(root, 1200, 680);
         addTheme(scene);
         return scene;
+    }
+
+    private void hydrateProfilePhotoFromSession() {
+        AppSession.User user = AppSession.currentUser();
+        if (user != null && user.profilePhotoUrl() != null && !user.profilePhotoUrl().isBlank()) {
+            profilePhotoUrl = user.profilePhotoUrl();
+            profilePhotoPublicId = user.profilePhotoPublicId();
+            profilePhoto = ImageMediaHelper.loadImage(profilePhotoUrl, 260, 260);
+            profilePhotoViewport = null;
+        }
     }
 
     private VBox createSidebar(Stage stage) {
@@ -135,10 +214,8 @@ public class DashboardPage {
                 nav("business", "Business", false),
                 nav("bookings", "My Bookings", false),
                 nav("announcement", "Announcement", false),
+                nav("faq", "FAQs / Help Center", false),
                 nav("about", "About Us", false));
-
-        VBox support = new VBox(4, smallGold("24/7 Support"), muted("Emergency help and official information"));
-        support.getStyleClass().add("pilgrim-support-box");
 
         Button logout = sidebarAction("logout", "Logout");
         logout.setOnAction(eventAction -> {
@@ -146,10 +223,12 @@ public class DashboardPage {
             NavigationUtil.navigate(stage, new UserAuthPage().createScene(stage));
         });
 
-        VBox sidebar = new VBox(12, brand, menu, createSpacer(), support, logout);
+        VBox sidebar = new VBox(12, brand, menu, createSpacer(), supportPanel(), logout);
         sidebar.getStyleClass().add("pilgrim-sidebar");
         sidebar.setPadding(new Insets(15, 13, 14, 13));
         sidebar.setPrefWidth(238);
+        sidebar.setMinWidth(238);
+        sidebar.setMaxWidth(238);
         return sidebar;
     }
 
@@ -178,6 +257,15 @@ public class DashboardPage {
         return button;
     }
 
+    private VBox supportPanel() {
+        Label title = label("24/7 Support", "pilgrim-support-title");
+        title.setGraphic(moduleIcon("emergency", "pilgrim-support-icon"));
+        Label detail = label("Emergency help and official information", "pilgrim-support-detail");
+        VBox panel = new VBox(7, title, detail);
+        panel.getStyleClass().add("pilgrim-support-box");
+        return panel;
+    }
+
     private Label moduleIcon(String module, String styleClass) {
         String glyph = switch (module) {
             case "home" -> "\uE80F";
@@ -192,6 +280,7 @@ public class DashboardPage {
             case "business" -> "\uE719";
             case "bookings" -> "\uE8A7";
             case "announcement" -> "\uE789";
+            case "faq" -> "\uE9CE";
             case "about" -> "\uE946";
             case "logout" -> "\uE7E8";
             default -> "\uE8A5";
@@ -216,7 +305,7 @@ public class DashboardPage {
     }
         setActiveModule(module);
         if ("stay".equals(module)) {
-            root.setCenter(stayPageShell());
+            root.setCenter(scroll(stayPage()));
             return;
         }
         Node page = switch (module) {
@@ -230,24 +319,11 @@ public class DashboardPage {
             case "business" -> businessPage();
             case "bookings" -> myBookingsPage();
             case "announcement" -> announcementPage();
+            case "faq" -> faqPage();
             case "about" -> aboutPage();
             default -> genericModulePage(module);
         };
         root.setCenter(scroll(page));
-    }
-
-    private BorderPane stayPageShell() {
-        Button back = new Button("← Back");
-        back.getStyleClass().add("pilgrim-small-action");
-        back.setOnAction(event -> showHomePage());
-        HBox header = new HBox(back);
-        header.setAlignment(Pos.CENTER_LEFT);
-        header.setPadding(new Insets(12, 22, 8, 22));
-        header.getStyleClass().add("stay-top-bar");
-        BorderPane shell = new BorderPane();
-        shell.setTop(header);
-        shell.setCenter(scroll(stayPage()));
-        return shell;
     }
 
     private void setActiveModule(String module) {
@@ -264,12 +340,55 @@ public class DashboardPage {
         button.setGraphic(moduleIcon(module, selected ? "pilgrim-nav-icon-active" : "pilgrim-nav-icon"));
     }
 
-    private ScrollPane scroll(Node content) {
+    private Node scroll(Node content) {
+        if (content instanceof VBox box && box.getStyleClass().contains("pilgrim-dashboard-main")) {
+            return dashboardFrame(box);
+        }
+
         ScrollPane scroll = new ScrollPane(content);
         scroll.getStyleClass().add("pilgrim-dashboard-scroll");
         scroll.setFitToWidth(true);
         scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         return scroll;
+    }
+
+    private VBox dashboardFrame(VBox content) {
+        VBox pinned = new VBox(10);
+        while (!content.getChildren().isEmpty() && isPinnedDashboardNode(content.getChildren().get(0))) {
+            pinned.getChildren().add(content.getChildren().remove(0));
+        }
+        if (pinned.getChildren().isEmpty()) {
+            ScrollPane bodyOnly = plainDashboardScroll(content);
+            VBox frame = new VBox(bodyOnly);
+            VBox.setVgrow(bodyOnly, Priority.ALWAYS);
+            return frame;
+        }
+
+        pinned.getStyleClass().addAll("pilgrim-dashboard-main", "pilgrim-sticky-header");
+        pinned.setPadding(new Insets(12, 22, 8, 12));
+        content.setPadding(new Insets(8, 22, 28, 12));
+
+        ScrollPane body = plainDashboardScroll(content);
+        VBox frame = new VBox(pinned, body);
+        frame.getStyleClass().add("pilgrim-dashboard-frame");
+        VBox.setVgrow(body, Priority.ALWAYS);
+        return frame;
+    }
+
+    private ScrollPane plainDashboardScroll(Node content) {
+        ScrollPane scroll = new ScrollPane(content);
+        scroll.getStyleClass().add("pilgrim-dashboard-scroll");
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        return scroll;
+    }
+
+    private boolean isPinnedDashboardNode(Node node) {
+        return node.getStyleClass().contains("pilgrim-top-actions")
+                || node.getStyleClass().contains("pilgrim-hero")
+                || node.getStyleClass().contains("ghat-hero")
+                || node.getStyleClass().contains("bus-transport-hero")
+                || node.getStyleClass().contains("outside-journey-hero");
     }
 
     private VBox createHomePage() {
@@ -281,20 +400,21 @@ public class DashboardPage {
                 serviceCard("emergency", "Emergency", "Quick Assistance"),
                 serviceCard("stay", "Stay", "Hotels & Dharamshalas"),
                 serviceCard("business", "Business", "Approved Local Services"));
-        services.setAlignment(Pos.CENTER);
+        services.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
+        services.setAlignment(Pos.CENTER_LEFT);
+        services.getStyleClass().add("pilgrim-service-grid");
 
-        HBox lower = new HBox(14, liveUpdatesPanel(), divineNashikCard());
+        HBox lower = new HBox(14, facilityOptionsPanel(), quickAccessPanel());
         HBox.setHgrow(lower.getChildren().get(0), Priority.ALWAYS);
-        HBox.setHgrow(lower.getChildren().get(1), Priority.ALWAYS);
+        HBox.setHgrow(lower.getChildren().get(1), Priority.SOMETIMES);
 
         HBox metrics = new HBox(12,
-                metric("1.2L+", "Pilgrims Served"),
-                metric("86", "Services Available"),
-                metric("42", "Help Points"),
+                metric(remoteItemCountLabel("packages", "transport", "puja", "ghat", "emergency", "stay", "business"), "Active Services"),
+                metric(remoteItemCountLabel("emergency"), "Open Help Points"),
+                metric(remoteItemCountLabel("stay"), "Available Stays"),
                 metric("24/7", "Support"));
+        metrics.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
 
-        // TEMPORARY RAZORPAY API TEST
-        // Remove after module payment integration is verified.
         Button paymentTest = new Button("Test Razorpay Payment");
         paymentTest.getStyleClass().add("developer-payment-test-button");
         paymentTest.setOnAction(event -> paymentCoordinator.startDeveloperRazorpayTest(
@@ -302,20 +422,550 @@ public class DashboardPage {
         HBox developerTest = new HBox(paymentTest);
         developerTest.setAlignment(Pos.CENTER_RIGHT);
         developerTest.getStyleClass().add("developer-payment-test-row");
+        developerTest.setManaged(false);
+        developerTest.setVisible(false);
 
-return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and information platform",
-        searchBar(), announcementTicker(), services, lower, metrics, developerTest);
+        return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and information platform",
+        searchBar(), announcementTicker(), services, simhasthaMapCard(), lower, metrics, developerTest);
     }
 
     private HBox topControls() {
         Label title = new Label("Pilgrim Dashboard");
         title.getStyleClass().add("pilgrim-page-title");
+        Label welcome = new Label("Welcome, " + currentUserDisplayName());
+        welcome.getStyleClass().add("pilgrim-user-welcome");
+        VBox titleBox = new VBox(2, title, welcome);
 
-        HBox actions = new HBox(10, title, createSpacer(), AppUi.createThemeToggle(),
-                roundButton("\uE7F4", "Notifications"), roundButton("\uE77B", "Profile"));
+        HBox rightActions = new HBox(8, AppUi.createThemeToggle(), notificationBell(), profileButton());
+        rightActions.getStyleClass().add("pilgrim-top-action-group");
+        rightActions.setAlignment(Pos.CENTER_RIGHT);
+
+        HBox actions = new HBox(12, titleBox, createSpacer(), rightActions);
         actions.getStyleClass().add("pilgrim-top-actions");
         actions.setAlignment(Pos.CENTER_LEFT);
         return actions;
+    }
+
+    private String currentUserDisplayName() {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            return "Pilgrim";
+        }
+        return displayName(user);
+    }
+
+    private Button profileButton() {
+        return AppUi.createProfileChip(currentUserDisplayName(), this::showProfilePage);
+    }
+
+    private void showProfilePage() {
+        stopGhatRefresh();
+        stopScheduleRefresh();
+        setActiveModule("");
+        root.setCenter(scroll(profilePage()));
+    }
+
+    private VBox profilePage() {
+        AppSession.User user = AppSession.currentUser();
+        java.util.List<AppDataStore.BookingRecord> bookings = user == null ? java.util.List.of()
+                : AppDataStore.bookingsForUser(user.uid());
+        long upcoming = bookings.stream().filter(booking -> bookingBucket(booking).equals("Upcoming")).count();
+        long completed = bookings.stream().filter(booking -> bookingBucket(booking).equals("Completed")).count();
+
+        HBox profileHero = new HBox(26, profileIdentityCard(), profileInfoCard());
+        profileHero.getStyleClass().add("profile-hero-card");
+        HBox.setHgrow(profileHero.getChildren().get(1), Priority.ALWAYS);
+
+        HBox metrics = new HBox(12,
+                profileMetric("My Bookings", String.valueOf(bookings.size()), "Total Bookings"),
+                profileMetric("Upcoming Bookings", String.valueOf(upcoming), "Next 30 Days"),
+                profileMetric("Completed", String.valueOf(completed), "Total Completed"));
+        metrics.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
+
+        HBox accountRows = new HBox(14, accountSecurityCard(), supportHelpCard());
+        accountRows.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
+
+        java.util.List<Node> sections = new java.util.ArrayList<>();
+        if (profileSuccessMessage != null && !profileSuccessMessage.isBlank()) {
+            sections.add(successBanner(profileSuccessMessage));
+            profileSuccessMessage = null;
+        }
+        sections.add(profileHero);
+        sections.add(metrics);
+        sections.add(accountRows);
+
+        return pageShell("Profile", "Dashboard  >  Profile", sections.toArray(new Node[0]));
+    }
+
+    private VBox profileIdentityCard() {
+        VBox identity = new VBox(10, profilePhotoControl(), label(profileName(), "profile-user-name"),
+                iconDetail("\uE717", profileMobile()), iconDetail("\uE715", profileEmail()),
+                iconDetail("\uE707", profileAddress()), label("Verified User", "profile-verified-badge"));
+        identity.getStyleClass().add("profile-identity-panel");
+        identity.setAlignment(Pos.CENTER);
+        return identity;
+    }
+
+    private StackPane profilePhotoControl() {
+        StackPane avatar = profileAvatar(142, "profile-avatar-large");
+        Button camera = new Button();
+        camera.setGraphic(AppUi.symbolIcon("\uE722", "profile-camera-icon"));
+        camera.getStyleClass().add("profile-camera-button");
+        camera.setOnAction(event -> chooseProfilePhoto());
+        StackPane wrapper = new StackPane(avatar, camera);
+        StackPane.setAlignment(camera, Pos.BOTTOM_RIGHT);
+        StackPane.setMargin(camera, new Insets(0, 8, 8, 0));
+        return wrapper;
+    }
+
+    private StackPane profileAvatar(double size, String styleClass) {
+        StackPane avatar = new StackPane();
+        avatar.getStyleClass().add(styleClass);
+        avatar.setMinSize(size, size);
+        avatar.setPrefSize(size, size);
+        avatar.setMaxSize(size, size);
+        Circle clip = new Circle(size / 2, size / 2, size / 2);
+        if (profilePhoto == null) {
+            avatar.getChildren().add(AppUi.symbolIcon("\uE77B", "profile-avatar-placeholder"));
+        } else {
+            ImageView view = new ImageView(profilePhoto);
+            view.setFitWidth(size);
+            view.setFitHeight(size);
+            view.setPreserveRatio(false);
+            if (profilePhotoViewport != null) {
+                view.setViewport(profilePhotoViewport);
+            }
+            view.setClip(clip);
+            avatar.getChildren().add(view);
+        }
+        return avatar;
+    }
+
+    private VBox profileInfoCard() {
+        Button edit = new Button("Edit Profile");
+        edit.setGraphic(AppUi.symbolIcon("\uE70F", "button-icon"));
+        edit.getStyleClass().add("profile-edit-button");
+        edit.setOnAction(event -> showEditProfileDialog());
+        HBox header = new HBox(sectionTitle("Personal Information"), createSpacer(), edit);
+        header.setAlignment(Pos.CENTER_LEFT);
+        VBox card = new VBox(8, header,
+                profileInfoRow("Full Name", profileName()),
+                profileInfoRow("Date of Birth", profileBirthDate()),
+                profileInfoRow("Gender", profileGender()),
+                profileInfoRow("Mobile Number", profileMobile()),
+                profileInfoRow("Email Address", profileEmail()),
+                profileInfoRow("Address", profileAddress()),
+                profileInfoRow("Registration Date", "21 Aug 2025, 10:30 AM"));
+        card.getStyleClass().add("profile-info-panel");
+        return card;
+    }
+
+    private HBox profileInfoRow(String labelText, String value) {
+        Label label = muted(labelText);
+        Label valueLabel = label(value, "profile-info-value");
+        HBox row = new HBox(16, label, createSpacer(), valueLabel);
+        row.getStyleClass().add("profile-info-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private VBox profileMetric(String title, String value, String detail) {
+        Button view = new Button("View All");
+        view.getStyleClass().add("profile-text-action");
+        view.setOnAction(event -> showModulePage("bookings"));
+        VBox card = new VBox(5, label(title, "profile-metric-title"), label(value, "profile-metric-value"),
+                muted(detail), view);
+        card.getStyleClass().add("profile-metric-card");
+        return card;
+    }
+
+    private VBox accountSecurityCard() {
+        return profileActionPanel("Account & Security",
+                profileActionRow("\uE72E", "Change Password", "Update your account password", "Change",
+                        this::showChangePasswordPage),
+                profileActionRow("\uE72E", "Privacy Settings", "Manage your privacy and data", "Manage",
+                        this::showPrivacySettingsPage),
+                profileActionRow("\uE7E8", "Logout", "Sign out from your account", "Logout", () -> {
+                    AppSession.clear();
+                    NavigationUtil.navigate((Stage) root.getScene().getWindow(), new UserAuthPage().createScene((Stage) root.getScene().getWindow()));
+                }));
+    }
+
+    private VBox supportHelpCard() {
+        return profileActionPanel("Support & Help",
+                profileActionRow("\uE897", "Help Center", "Get help and support", ">", () -> showModulePage("about")),
+                profileActionRow("\uE8F2", "Contact Support", "Talk to our support team", ">", () -> showModulePage("emergency")),
+                profileActionRow("\uE9CE", "FAQs", "Frequently asked questions", ">", () -> showModulePage("faq")));
+    }
+
+    private VBox profileActionPanel(String title, Node... rows) {
+        VBox panel = new VBox(6, sectionTitle(title));
+        panel.getChildren().addAll(rows);
+        panel.getStyleClass().add("profile-action-panel");
+        return panel;
+    }
+
+    private HBox profileActionRow(String icon, String title, String detail, String action, Runnable handler) {
+        Button button = new Button(action);
+        button.getStyleClass().add("profile-row-action");
+        button.setOnAction(event -> handler.run());
+        VBox copy = new VBox(2, strong(title), muted(detail));
+        HBox row = new HBox(10, AppUi.symbolIcon(icon, "profile-row-icon"), copy, createSpacer(), button);
+        row.getStyleClass().add("profile-action-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private HBox iconDetail(String icon, String detail) {
+        HBox row = new HBox(6, AppUi.symbolIcon(icon, "profile-detail-icon"), muted(detail));
+        row.setAlignment(Pos.CENTER);
+        return row;
+    }
+
+    private HBox successBanner(String message) {
+        HBox banner = new HBox(8, AppUi.symbolIcon("\uE73E", "profile-success-icon"),
+                label(message, "profile-success-text"));
+        banner.getStyleClass().add("profile-success-banner");
+        banner.setAlignment(Pos.CENTER_LEFT);
+        return banner;
+    }
+
+    private void chooseProfilePhoto() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Choose Profile Photo");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Image files", "*.png", "*.jpg", "*.jpeg", "*.webp"));
+        File file = chooser.showOpenDialog(root.getScene() == null ? null : root.getScene().getWindow());
+        if (file == null) {
+            return;
+        }
+        Image selected = new Image(file.toURI().toString(), false);
+        if (selected.isError() || selected.getWidth() <= 0 || selected.getHeight() <= 0) {
+            showInfo("Profile Photo", "The selected image could not be opened.");
+            return;
+        }
+        showCropPhotoDialog(selected, file);
+    }
+
+    private void showCropPhotoDialog(Image selected, File file) {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Crop Photo");
+        ButtonType confirm = new ButtonType("Confirm");
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, confirm);
+
+        ImageView preview = new ImageView(selected);
+        preview.setFitWidth(260);
+        preview.setFitHeight(260);
+        preview.setPreserveRatio(false);
+        Rectangle previewClip = new Rectangle(260, 260);
+        previewClip.setArcWidth(10);
+        previewClip.setArcHeight(10);
+        preview.setClip(previewClip);
+
+        Slider zoom = new Slider(1, 2.4, 1.15);
+        zoom.setShowTickMarks(true);
+        zoom.setBlockIncrement(0.1);
+        Runnable updateViewport = () -> preview.setViewport(centerCropViewport(selected, zoom.getValue()));
+        zoom.valueProperty().addListener((observable, oldValue, newValue) -> updateViewport.run());
+        updateViewport.run();
+
+        VBox content = new VBox(12, label("Crop & Confirm", "profile-dialog-title"), new StackPane(preview),
+                muted("Adjust zoom, then confirm your profile photo."), zoom);
+        content.getStyleClass().add("profile-crop-dialog");
+        dialog.getDialogPane().setContent(content);
+        styleProfileDialog(dialog, confirm);
+
+        Optional<ButtonType> result = dialog.showAndWait();
+        if (result.isPresent() && result.get() == confirm) {
+            AppSession.User user = AppSession.currentUser();
+            if (user == null) {
+                showInfo("Profile Photo", "Please login again before updating your profile photo.");
+                return;
+            }
+            String oldPublicId = profilePhotoPublicId;
+            double selectedZoom = zoom.getValue();
+            java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                try {
+                    CloudinaryService cloudinaryService = new CloudinaryService();
+                    CloudinaryUploadResult uploadResult = cloudinaryService.uploadImage(file, CloudinaryFolders.USER_PROFILE);
+                    firestoreGateway.updateUserProfilePhoto(user.uid(), uploadResult.getSecureUrl(),
+                            uploadResult.getPublicId(), user.idToken());
+                    if (oldPublicId != null && !oldPublicId.isBlank() && !oldPublicId.equals(uploadResult.getPublicId())) {
+                        try {
+                            cloudinaryService.deleteImage(oldPublicId);
+                        } catch (IOException cleanupFailure) {
+                            LOGGER.fine("Old profile image cleanup failed after successful save.");
+                        }
+                    }
+                    return uploadResult;
+                } catch (IOException | InterruptedException exception) {
+                    throw new java.util.concurrent.CompletionException(exception);
+                }
+            }).whenComplete((uploadResult, error) -> Platform.runLater(() -> {
+                if (error != null) {
+                    showInfo("Profile Photo", "The selected profile photo could not be uploaded. Your current photo was kept.");
+                    return;
+                }
+                profilePhotoUrl = uploadResult.getSecureUrl();
+                profilePhotoPublicId = uploadResult.getPublicId();
+                profilePhoto = selected;
+                profilePhotoViewport = centerCropViewport(selected, selectedZoom);
+                AppSession.set(new AppSession.User(user.uid(), user.email(), user.role(), user.idToken(),
+                        user.displayName(), user.status(), profilePhotoUrl, profilePhotoPublicId));
+                profileSuccessMessage = "Profile photo updated successfully.";
+                showProfilePage();
+            }));
+        }
+    }
+
+    private Rectangle2D centerCropViewport(Image image, double zoom) {
+        double size = Math.min(image.getWidth(), image.getHeight()) / Math.max(1, zoom);
+        double x = Math.max(0, (image.getWidth() - size) / 2.0);
+        double y = Math.max(0, (image.getHeight() - size) / 2.0);
+        return new Rectangle2D(x, y, size, size);
+    }
+
+    private void showEditProfileDialog() {
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle("Edit Profile");
+        ButtonType save = new ButtonType("Save Changes");
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CANCEL, save);
+        TextField name = AppUi.textField("Full name");
+        name.setText(profileName());
+        TextField birthDate = AppUi.textField("Date of birth");
+        birthDate.setText(profileBirthDate());
+        ComboBox<String> gender = profileCombo("Gender", "Male", "Female", "Other", "Prefer not to say");
+        gender.setValue(profileGender());
+        TextField mobile = AppUi.textField("Mobile number");
+        mobile.setText(profileMobile());
+        TextField email = AppUi.textField("Email address");
+        email.setText(profileEmail());
+        TextField address = AppUi.textField("Address");
+        address.setText(profileAddress());
+        GridPane formGrid = new GridPane();
+        formGrid.setHgap(10);
+        formGrid.setVgap(10);
+        formGrid.add(profileField("Full Name", name), 0, 0);
+        formGrid.add(profileField("Date of Birth", birthDate), 1, 0);
+        formGrid.add(profileField("Gender", gender), 0, 1);
+        formGrid.add(profileField("Mobile Number", mobile), 1, 1);
+        formGrid.add(profileField("Email Address", email), 0, 2);
+        formGrid.add(profileField("Address", address), 1, 2);
+        ColumnConstraints left = new ColumnConstraints();
+        left.setPercentWidth(50);
+        ColumnConstraints right = new ColumnConstraints();
+        right.setPercentWidth(50);
+        formGrid.getColumnConstraints().addAll(left, right);
+        VBox form = new VBox(12, label("Edit Profile", "profile-dialog-title"),
+                muted("Update the details visible across your dashboard and admin records."), formGrid);
+        form.getStyleClass().add("profile-edit-dialog");
+        dialog.getDialogPane().setContent(form);
+        styleProfileDialog(dialog, save);
+        Optional<ButtonType> result = dialog.showAndWait();
+        if (result.isPresent() && result.get() == save) {
+            if (name.getText().trim().isBlank() || mobile.getText().trim().isBlank()
+                    || email.getText().trim().isBlank()) {
+                showInfo("Profile", "Please enter your name, mobile number and email address.");
+                return;
+            }
+            saveProfileDetails(name.getText().trim(), birthDate.getText().trim(), gender.getValue(),
+                    mobile.getText().trim(), email.getText().trim(), address.getText().trim());
+        }
+    }
+
+    private VBox profileField(String title, Node field) {
+        if (field instanceof Region region) {
+            region.setMaxWidth(Double.MAX_VALUE);
+        }
+        VBox box = new VBox(5, muted(title), field);
+        GridPane.setHgrow(box, Priority.ALWAYS);
+        return box;
+    }
+
+    private ComboBox<String> profileCombo(String prompt, String... values) {
+        ComboBox<String> combo = new ComboBox<>();
+        combo.setPromptText(prompt);
+        combo.getItems().addAll(values);
+        combo.getStyleClass().add("input-combo");
+        combo.setMaxWidth(Double.MAX_VALUE);
+        return combo;
+    }
+
+    private void saveProfileDetails(String name, String birthDate, String gender, String mobile, String email,
+            String address) {
+        editedProfileName = name;
+        editedProfileBirthDate = birthDate.isBlank() ? "15 Aug 1995" : birthDate;
+        editedProfileGender = gender == null || gender.isBlank() ? "Prefer not to say" : gender;
+        editedProfileMobile = mobile;
+        editedProfileEmail = email;
+        editedProfileAddress = address.isBlank() ? "Nashik, Maharashtra, India" : address;
+
+        AppSession.User user = AppSession.currentUser();
+        if (user != null) {
+            AppSession.User updated = new AppSession.User(user.uid(), editedProfileEmail, user.role(), user.idToken(),
+                    editedProfileName, user.status(), profilePhotoUrl, profilePhotoPublicId);
+            AppSession.set(updated);
+            AppDataStore.updateLocalUserProfile(user.uid(), editedProfileName, editedProfileEmail, editedProfileMobile);
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    firestoreGateway.updateUserProfileDetails(user.uid(), editedProfileName, editedProfileEmail,
+                            editedProfileMobile, editedProfileBirthDate, editedProfileGender, editedProfileAddress,
+                            user.idToken());
+                } catch (IOException | InterruptedException exception) {
+                    throw new java.util.concurrent.CompletionException(exception);
+                }
+            }).whenComplete((ignored, error) -> Platform.runLater(() -> {
+                if (error != null) {
+                    showInfo("Profile", "Details updated on this device. Firestore sync failed, please try again.");
+                }
+            }));
+        }
+        profileSuccessMessage = "Profile details updated successfully.";
+        showProfilePage();
+    }
+
+    private void showChangePasswordPage() {
+        setActiveModule("");
+        PasswordField current = AppUi.passwordField("Current password");
+        PasswordField next = AppUi.passwordField("New password");
+        PasswordField confirm = AppUi.passwordField("Confirm new password");
+        Label strength = muted("Use at least 8 characters with uppercase, lowercase, number and symbol.");
+        next.textProperty().addListener((observable, oldValue, value) ->
+                strength.setText(passwordStrengthText(value)));
+        Button save = new Button("Update Password");
+        save.getStyleClass().add("primary-button");
+        save.setOnAction(event -> {
+            if (!next.getText().equals(confirm.getText())) {
+                showInfo("Change Password", "New password and confirmation do not match.");
+                return;
+            }
+            if (!isStrongPassword(next.getText())) {
+                showInfo("Change Password", "Please choose a stronger password before saving.");
+                return;
+            }
+            save.setDisable(true);
+            AuthService.changePassword(current.getText(), next.getText()).whenComplete((outcome, error) ->
+                    Platform.runLater(() -> {
+                        save.setDisable(false);
+                        if (error != null || outcome == null || !outcome.success()) {
+                            showInfo("Change Password", outcome == null ? "Password could not be changed."
+                                    : outcome.message());
+                            return;
+                        }
+                        profileSuccessMessage = "Password changed successfully.";
+                        showProfilePage();
+                    }));
+        });
+        VBox requirements = profileSecurityChecklist();
+        VBox form = new VBox(12, sectionTitle("Secure Password Change"),
+                muted("Verify your current password before setting a new one."),
+                AppUi.passwordFieldWithToggle(current), AppUi.passwordFieldWithToggle(next),
+                AppUi.passwordFieldWithToggle(confirm), strength, requirements, save);
+        form.getStyleClass().add("profile-security-page");
+        root.setCenter(scroll(pageShell("Change Password", "Profile  >  Account Security", form)));
+    }
+
+    private VBox profileSecurityChecklist() {
+        return new VBox(7,
+                securityItem("8+ characters"),
+                securityItem("Uppercase and lowercase letters"),
+                securityItem("At least one number"),
+                securityItem("At least one symbol"));
+    }
+
+    private HBox securityItem(String text) {
+        HBox row = new HBox(8, AppUi.symbolIcon("\uE73E", "profile-success-icon"), muted(text));
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private String passwordStrengthText(String value) {
+        int score = passwordScore(value == null ? "" : value);
+        if (score >= 4) {
+            return "Password strength: Strong";
+        }
+        if (score >= 3) {
+            return "Password strength: Good";
+        }
+        return "Password strength: Needs more protection";
+    }
+
+    private boolean isStrongPassword(String value) {
+        return passwordScore(value == null ? "" : value) >= 4;
+    }
+
+    private int passwordScore(String value) {
+        int score = value.length() >= 8 ? 1 : 0;
+        if (value.matches(".*[A-Z].*")) score++;
+        if (value.matches(".*[a-z].*")) score++;
+        if (value.matches(".*[0-9].*")) score++;
+        if (value.matches(".*[^A-Za-z0-9].*")) score++;
+        return score;
+    }
+
+    private void showPrivacySettingsPage() {
+        setActiveModule("");
+        CheckBox showPhoto = new CheckBox("Show my profile photo on dashboard headers");
+        showPhoto.setSelected(true);
+        CheckBox bookingUpdates = new CheckBox("Allow booking and payment status notifications");
+        bookingUpdates.setSelected(true);
+        CheckBox safetyAlerts = new CheckBox("Allow emergency, crowd and route safety alerts");
+        safetyAlerts.setSelected(true);
+        CheckBox supportAccess = new CheckBox("Allow support team to view my support request history");
+        Button save = new Button("Save Privacy Preferences");
+        save.getStyleClass().add("primary-button");
+        save.setOnAction(event -> {
+            profileSuccessMessage = "Privacy preferences updated successfully.";
+            showProfilePage();
+        });
+        VBox controls = new VBox(11, showPhoto, bookingUpdates, safetyAlerts, supportAccess);
+        controls.getStyleClass().add("privacy-settings-list");
+        VBox privacy = new VBox(14, sectionTitle("Privacy Settings"),
+                muted("Control how Simhastha Connect uses your profile, alerts and support data."),
+                profilePrivacyCard("\uE72E", "Account Protection",
+                        "Your password and login session are handled through secure Firebase authentication."),
+                profilePrivacyCard("\uE8BD", "Data Visibility",
+                        "Only approved admins can review user records needed for safety and service support."),
+                profilePrivacyCard(AppUi.notificationBellGlyph(), "Notifications",
+                        "Important safety and booking updates remain enabled for pilgrim protection."),
+                controls, save);
+        privacy.getStyleClass().add("profile-security-page");
+        root.setCenter(scroll(pageShell("Privacy Settings", "Profile  >  Privacy", privacy)));
+    }
+
+    private HBox profilePrivacyCard(String icon, String title, String detail) {
+        VBox copy = new VBox(3, strong(title), muted(detail));
+        HBox card = new HBox(10, AppUi.symbolIcon(icon, "profile-row-icon"), copy);
+        card.getStyleClass().add("profile-privacy-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        return card;
+    }
+
+    private String profileName() {
+        return editedProfileName == null || editedProfileName.isBlank() ? currentUserDisplayName() : editedProfileName;
+    }
+
+    private String profileEmail() {
+        AppSession.User user = AppSession.currentUser();
+        if (editedProfileEmail != null && !editedProfileEmail.isBlank()) {
+            return editedProfileEmail;
+        }
+        return user == null || user.email() == null || user.email().isBlank() ? "aniket.patil@example.com" : user.email();
+    }
+
+    private String profileMobile() {
+        return editedProfileMobile;
+    }
+
+    private String profileAddress() {
+        return editedProfileAddress;
+    }
+
+    private String profileBirthDate() {
+        return editedProfileBirthDate;
+    }
+
+    private String profileGender() {
+        return editedProfileGender;
     }
 
     private StackPane photoHeader(String titleText, String subtitleText) {
@@ -337,21 +987,36 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     }
 
     private HBox searchBar() {
-        TextField search = AppUi.textField("Search services, places, events...");
+        TextField search = AppUi.textField("Search services, places, events, businesses...");
         search.getStyleClass().add("pilgrim-search-field");
         Button button = new Button("Search");
         button.getStyleClass().add("pilgrim-search-button");
         HBox row = new HBox(0, search, button);
         row.getStyleClass().add("pilgrim-search-bar");
-        row.setMaxWidth(560);
+        row.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(search, Priority.ALWAYS);
         return row;
     }
 
     private VBox serviceCard(String module, String title, String detail) {
-        VBox card = new VBox(8, moduleIcon(module, "pilgrim-card-icon"), strong(title), muted(detail), arrowAction("View"));
+        Label icon = moduleIcon(module, "pilgrim-card-icon");
+        StackPane iconCircle = new StackPane(icon);
+        iconCircle.getStyleClass().add("pilgrim-card-icon-circle");
+        iconCircle.setMinSize(46, 46);
+        iconCircle.setPrefSize(46, 46);
+        iconCircle.setMaxSize(46, 46);
+        Button action = new Button("emergency".equals(module) ? "SOS" : "View  >");
+        action.getStyleClass().add("emergency".equals(module) ? "pilgrim-sos-action" : "pilgrim-small-action");
+        action.setOnAction(event -> {
+            event.consume();
+            showModulePage(module);
+        });
+        VBox card = new VBox(8, iconCircle, strong(title), muted(detail), action);
         card.getStyleClass().addAll("pilgrim-module-card", "module-" + module);
-        card.setMinSize(132, 104);
+        card.setMinSize(106, 128);
+        card.setPrefWidth(142);
+        card.setMaxWidth(Double.MAX_VALUE);
+        card.setAlignment(Pos.CENTER);
         card.setOnMouseClicked(event -> showModulePage(module));
         HBox.setHgrow(card, Priority.ALWAYS);
         return card;
@@ -364,7 +1029,14 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 .collect(java.util.stream.Collectors.joining("  •  "));
         Label text = new Label(updates.isBlank() ? "No active official updates." : updates);
         text.getStyleClass().add("pilgrim-ticker-text");
-        Label live = new Label("📢  LIVE UPDATES");
+        Label live = label("LIVE UPDATES", "announcement-ticker-label");
+        live.setGraphic(moduleIcon("announcement", "announcement-ticker-icon"));
+        Button viewAll = new Button("View All  >");
+        viewAll.getStyleClass().add("pilgrim-ticker-action");
+        viewAll.setOnAction(event -> {
+            event.consume();
+            showModulePage("announcement");
+        });
         live.getStyleClass().add("announcement-ticker-label");
         StackPane viewport = new StackPane(text);
         viewport.getStyleClass().add("announcement-ticker-viewport");
@@ -372,7 +1044,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         clip.widthProperty().bind(viewport.widthProperty());
         clip.heightProperty().bind(viewport.heightProperty());
         viewport.setClip(clip);
-        HBox content = new HBox(12, live, viewport);
+        HBox content = new HBox(12, live, viewport, viewAll);
         content.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(viewport, Priority.ALWAYS);
         StackPane ticker = new StackPane(content);
@@ -402,10 +1074,246 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         } else {
             updates.stream().limit(4).forEach(item -> rows.getChildren().add(dataRow(item.module, item.title, item.detail)));
         }
-        VBox panel = new VBox(12, sectionTitle("Live Updates"), rows);
+        Button viewAll = new Button("View All");
+        viewAll.getStyleClass().add("pilgrim-text-link");
+        viewAll.setOnAction(event -> showModulePage("announcement"));
+        HBox heading = new HBox(10, sectionTitle("Live Updates"), createSpacer(), viewAll);
+        heading.setAlignment(Pos.CENTER_LEFT);
+        VBox panel = new VBox(12, heading, rows);
         panel.getStyleClass().add("pilgrim-panel");
         panel.setMinHeight(190);
         return panel;
+    }
+
+    private VBox facilityOptionsPanel() {
+        HBox heading = new HBox(10,
+                sectionTitle("Simhastha Facilities"),
+                createSpacer(),
+                facilityMapButton("View Full Map", null));
+        heading.setAlignment(Pos.CENTER_LEFT);
+
+        HBox row = new HBox(10,
+                facilityOption("help", "Help Centre", "Official support desks"),
+                facilityOption("hirkani", "Hirkani Room", "Mother and baby care"),
+                facilityOption("toilet", "Toilets", "Public sanitation points"),
+                facilityOption("parking", "Parking", "Vehicle parking areas"),
+                facilityOption("hospital", "Hospital", "Medical help points"));
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
+
+        VBox panel = new VBox(12, heading, row);
+        panel.getStyleClass().addAll("pilgrim-panel", "pilgrim-facility-panel");
+        panel.setMinHeight(190);
+        return panel;
+    }
+
+    private Button facilityMapButton(String text, String category) {
+        Button button = new Button(text);
+        button.getStyleClass().add("pilgrim-text-link");
+        button.setOnAction(event -> openSimhasthaAreaMap(category));
+        return button;
+    }
+
+    private VBox facilityOption(String category, String title, String detail) {
+        StackPane iconShell = new StackPane(facilityVectorIcon(category, 30));
+        iconShell.getStyleClass().addAll("pilgrim-facility-icon-shell", "facility-" + category);
+        iconShell.setMinSize(58, 58);
+        iconShell.setPrefSize(58, 58);
+        iconShell.setMaxSize(58, 58);
+
+        VBox card = new VBox(7, iconShell, strong(title), muted(detail), facilityMapButton("Show on Map  >", category));
+        card.getStyleClass().add("pilgrim-facility-card");
+        card.setAlignment(Pos.CENTER);
+        card.setMinWidth(112);
+        card.setMaxWidth(Double.MAX_VALUE);
+        card.setOnMouseClicked(event -> openSimhasthaAreaMap(category));
+        return card;
+    }
+
+    private Pane facilityVectorIcon(String category, double size) {
+        Pane icon = new Pane();
+        icon.setMinSize(size, size);
+        icon.setPrefSize(size, size);
+        icon.setMaxSize(size, size);
+        String stroke = "-fx-stroke: white; -fx-stroke-width: 2.4px; -fx-stroke-line-cap: round; -fx-fill: transparent;";
+        String fill = "-fx-fill: white;";
+        if ("help".equals(category)) {
+            Arc headset = new Arc(size / 2, size / 2, size * 0.34, size * 0.34, 22, 136);
+            headset.setStyle(stroke);
+            Rectangle left = roundedRect(size * 0.17, size * 0.43, size * 0.13, size * 0.24, 4, fill);
+            Rectangle right = roundedRect(size * 0.70, size * 0.43, size * 0.13, size * 0.24, 4, fill);
+            Line mic = new Line(size * 0.64, size * 0.66, size * 0.76, size * 0.72);
+            mic.setStyle(stroke);
+            icon.getChildren().addAll(headset, left, right, mic);
+        } else if ("hirkani".equals(category)) {
+            Circle mother = filledCircle(size * 0.39, size * 0.25, size * 0.12, fill);
+            Circle baby = filledCircle(size * 0.64, size * 0.43, size * 0.09, fill);
+            Arc body = new Arc(size * 0.42, size * 0.67, size * 0.24, size * 0.27, 18, 144);
+            body.setStyle(stroke);
+            Line arm = new Line(size * 0.48, size * 0.56, size * 0.68, size * 0.58);
+            arm.setStyle(stroke);
+            Arc babyWrap = new Arc(size * 0.64, size * 0.63, size * 0.18, size * 0.18, 200, 120);
+            babyWrap.setStyle(stroke);
+            icon.getChildren().addAll(mother, baby, body, arm, babyWrap);
+        } else if ("toilet".equals(category)) {
+            Rectangle tank = roundedRect(size * 0.30, size * 0.18, size * 0.38, size * 0.18, 3, fill);
+            Rectangle bowl = roundedRect(size * 0.34, size * 0.41, size * 0.31, size * 0.30, 6, stroke);
+            Line pipe = new Line(size * 0.48, size * 0.36, size * 0.48, size * 0.44);
+            pipe.setStyle(stroke);
+            Line base = new Line(size * 0.35, size * 0.78, size * 0.67, size * 0.78);
+            base.setStyle(stroke);
+            icon.getChildren().addAll(tank, bowl, pipe, base);
+        } else if ("parking".equals(category)) {
+            Rectangle body = roundedRect(size * 0.18, size * 0.43, size * 0.64, size * 0.22, 5, stroke);
+            Line roof = new Line(size * 0.31, size * 0.43, size * 0.42, size * 0.29);
+            roof.setStyle(stroke);
+            Line roofBack = new Line(size * 0.42, size * 0.29, size * 0.62, size * 0.43);
+            roofBack.setStyle(stroke);
+            Circle leftWheel = filledCircle(size * 0.32, size * 0.69, size * 0.07, fill);
+            Circle rightWheel = filledCircle(size * 0.68, size * 0.69, size * 0.07, fill);
+            icon.getChildren().addAll(body, roof, roofBack, leftWheel, rightWheel);
+        } else {
+            Rectangle bag = roundedRect(size * 0.24, size * 0.34, size * 0.52, size * 0.42, 5, stroke);
+            Line handle = new Line(size * 0.40, size * 0.34, size * 0.40, size * 0.24);
+            handle.setStyle(stroke);
+            Line handleTop = new Line(size * 0.40, size * 0.24, size * 0.60, size * 0.24);
+            handleTop.setStyle(stroke);
+            Line handleRight = new Line(size * 0.60, size * 0.24, size * 0.60, size * 0.34);
+            handleRight.setStyle(stroke);
+            Line plusH = new Line(size * 0.39, size * 0.55, size * 0.61, size * 0.55);
+            plusH.setStyle(stroke);
+            Line plusV = new Line(size * 0.50, size * 0.44, size * 0.50, size * 0.66);
+            plusV.setStyle(stroke);
+            icon.getChildren().addAll(bag, handle, handleTop, handleRight, plusH, plusV);
+        }
+        return icon;
+    }
+
+    private Rectangle roundedRect(double x, double y, double width, double height, double arc, String style) {
+        Rectangle rectangle = new Rectangle(x, y, width, height);
+        rectangle.setArcWidth(arc);
+        rectangle.setArcHeight(arc);
+        rectangle.setStyle(style);
+        return rectangle;
+    }
+
+    private Circle filledCircle(double x, double y, double radius, String style) {
+        Circle circle = new Circle(x, y, radius);
+        circle.setStyle(style);
+        return circle;
+    }
+
+    private HBox simhasthaMapCard() {
+        StackPane mapIcon = new StackPane(moduleIcon("ghat", "pilgrim-map-icon"));
+        mapIcon.getStyleClass().add("pilgrim-map-icon-circle");
+        mapIcon.setMinSize(52, 52);
+        mapIcon.setPrefSize(52, 52);
+        mapIcon.setMaxSize(52, 52);
+
+        Button open = new Button("Open Map  >");
+        open.getStyleClass().add("pilgrim-map-action");
+        open.setOnAction(event -> {
+            event.consume();
+            openSimhasthaAreaMap(null);
+        });
+
+        VBox text = new VBox(8,
+                mapIcon,
+                label("Simhastha Map", "pilgrim-map-title"),
+                muted("Explore Kumbh Area — Camps, Parking, Ghats, Temples & more"),
+                open);
+        text.setAlignment(Pos.CENTER_LEFT);
+        text.setMinWidth(330);
+        text.setMaxWidth(430);
+
+        StackPane visual = simhasthaMapPreview();
+        HBox.setHgrow(visual, Priority.ALWAYS);
+
+        HBox card = new HBox(18, text, visual);
+        card.getStyleClass().add("pilgrim-map-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        card.setOnMouseClicked(event -> openSimhasthaAreaMap(null));
+        return card;
+    }
+
+    private StackPane simhasthaMapPreview() {
+        Pane sketch = new Pane();
+        sketch.getStyleClass().add("pilgrim-map-sketch");
+        sketch.setMinSize(560, 132);
+        sketch.setPrefSize(560, 132);
+
+        Line river = new Line(12, 96, 546, 36);
+        river.getStyleClass().add("pilgrim-map-river");
+        Line routeA = new Line(36, 34, 526, 108);
+        routeA.getStyleClass().add("pilgrim-map-route");
+        Line routeB = new Line(88, 118, 470, 18);
+        routeB.getStyleClass().add("pilgrim-map-route-muted");
+        sketch.getChildren().addAll(river, routeA, routeB);
+        sketch.getChildren().addAll(
+                miniMapPin(70, 62, "help", "Help"),
+                miniMapPin(160, 28, "hospital", "Hospital"),
+                miniMapPin(254, 76, "toilet", "Toilet"),
+                miniMapPin(346, 40, "parking", "Parking"),
+                miniMapPin(452, 66, "hirkani", "Hirkani"));
+
+        Label caption = label("Nashik Kumbh service area map", "pilgrim-map-caption");
+        StackPane.setAlignment(caption, Pos.BOTTOM_RIGHT);
+        StackPane.setMargin(caption, new Insets(0, 14, 12, 0));
+        StackPane preview = new StackPane(sketch, caption);
+        preview.getStyleClass().add("pilgrim-map-preview");
+        preview.setMinHeight(132);
+        preview.setMaxWidth(Double.MAX_VALUE);
+        return preview;
+    }
+
+    private HBox miniMapPin(double x, double y, String category, String title) {
+        StackPane marker = new StackPane(facilityVectorIcon(category, 18));
+        marker.getStyleClass().addAll("pilgrim-map-mini-marker", "facility-" + category);
+        marker.setMinSize(34, 34);
+        marker.setPrefSize(34, 34);
+        marker.setMaxSize(34, 34);
+        Label label = new Label(title);
+        label.getStyleClass().add("pilgrim-map-mini-label");
+        HBox pin = new HBox(4, marker, label);
+        pin.setAlignment(Pos.CENTER_LEFT);
+        pin.setLayoutX(x);
+        pin.setLayoutY(y);
+        return pin;
+    }
+
+    private VBox quickAccessPanel() {
+        VBox actions = new VBox(8,
+                quickAccessButton("emergency", "Emergency Help"),
+                quickAccessButton("bookings", "My Bookings"),
+                quickAccessButton("lost", "Lost & Found"),
+                quickAccessButton("announcement", "Announcements"));
+        VBox panel = new VBox(12, sectionTitle("Quick Access"), actions);
+        panel.getStyleClass().addAll("pilgrim-panel", "pilgrim-quick-access-panel");
+        panel.setMinHeight(190);
+        panel.setMinWidth(310);
+        panel.setPrefWidth(360);
+        return panel;
+    }
+
+    private Button quickAccessButton(String module, String text) {
+        Button button = new Button(text);
+        button.setGraphic(moduleIcon(module, "pilgrim-row-icon"));
+        button.getStyleClass().add("pilgrim-quick-action");
+        button.setMaxWidth(Double.MAX_VALUE);
+        button.setOnAction(event -> showModulePage(module));
+        return button;
+    }
+
+    private String remoteItemCountLabel(String... modules) {
+        int count = 0;
+        boolean hasRemoteData = false;
+        for (String module : modules) {
+            if (AppDataStore.hasRemoteItems(module)) {
+                hasRemoteData = true;
+                count += AppDataStore.items(module).size();
+            }
+        }
+        return hasRemoteData ? String.valueOf(count) : "—";
     }
 
     private StackPane divineNashikCard() {
@@ -515,14 +1423,15 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 "Choose the best bus travel option for your journey to Nashik Kumbh"), busTransportHero(), busBackButton(), options,
                 busTravelTip());
         content.getStyleClass().add("pilgrim-dashboard-main");
-        content.setPadding(new Insets(12, 22, 28, 22));
+        content.setPadding(new Insets(12, 22, 28, 12));
         root.setCenter(scroll(content));
     }
 
     private HBox transportPageHeader(String titleText, String subtitleText) {
         VBox title = new VBox(2, label(titleText, "bus-page-title"), muted(subtitleText));
         HBox header = new HBox(10, title, createSpacer(), AppUi.createThemeToggle(),
-                roundButton("\uE7F4", "Notifications"), roundButton("\uE77B", "Profile"));
+                notificationBell(), roundButton("\uE77B", "Profile"));
+        header.getStyleClass().add("pilgrim-top-actions");
         header.setAlignment(Pos.CENTER_LEFT);
         return header;
     }
@@ -1166,7 +2075,6 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 } finally {
                     combo.getProperties().remove("locationSelectionInProgress");
                 }
-                System.out.println("LOCATION SELECTED: " + newLocation.displayName());
                 javafx.application.Platform.runLater(combo::hide);
             }
         });
@@ -2084,11 +2992,10 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     private VBox ghatsPage() {
         currentGhats = List.of();
         displayedGhats.clear();
-        FlowPane ghatFlowPane = new FlowPane(16, 16);
-        ghatFlowPane.setPrefWrapLength(1140);
+        FlowPane ghatFlowPane = new FlowPane(12, 18);
+        ghatFlowPane.setPrefWrapLength(1048);
         ghatFlowPane.getStyleClass().add("ghat-card-grid");
         List<Ghat> catalogue = ghatCatalogueService.catalogue();
-        System.out.println("CATALOGUE COUNT = " + catalogue.size());
         VBox operationalAlerts = new VBox(8);
         ghatOperationalAlerts = operationalAlerts;
         HBox summary = new HBox(12,
@@ -2096,7 +3003,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 ghatSummaryCard("\uE8B5", "Low Crowd", "—", "Comfortable movement", "ghat-summary-low"),
                 ghatSummaryCard("\uE8B5", "High Crowd", "—", "Plan extra time", "ghat-summary-high"),
                 ghatSummaryCard("\uE8B5", "Critical Crowd", "—", "Choose carefully", "ghat-summary-critical"),
-                ghatSummaryCard("\uE8B5", "Restricted / Closed", "—", "Check safety updates", "ghat-summary-restricted"));
+                ghatSummaryMapCard());
         summary.getStyleClass().add("ghat-summary-row");
 
         TextField search = AppUi.textField("Search Ghat name...");
@@ -2107,7 +3014,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
             renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats);
         });
         ComboBox<String> region = new ComboBox<>();
-        region.getItems().addAll("All Regions", "Nashik / Panchavati", "Trimbakeshwar"); region.setValue(ghatRegionFilter); region.getStyleClass().add("input-combo");
+        region.getItems().addAll("All Regions", "Nashik / Panchavati", "Trimbakeshwar"); region.setValue(ghatRegionFilter); region.getStyleClass().add("input-combo"); region.setPrefWidth(146);
         region.setOnAction(event -> { ghatRegionFilter = region.getValue(); renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats); });
         ComboBox<String> crowd = ghatFilterCombo("All", "Low", "Moderate", "High", "Critical", "Unknown");
         crowd.setValue(ghatCrowdFilter);
@@ -2117,11 +3024,11 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         snan.setOnAction(event -> { ghatSnanFilter = snan.getValue(); renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats); });
         ComboBox<String> sort = ghatFilterCombo("Live Crowd", "Name", "Walking Difficulty", "Estimated Wait");
         sort.setValue(ghatSort);
+        sort.setPrefWidth(146);
         sort.setOnAction(event -> { ghatSort = sort.getValue(); renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats); });
-        Button mapView = new Button("Map View"); mapView.getStyleClass().add("ghat-map-view-button"); mapView.setOnAction(event -> openGhatMapView());
-        FlowPane filter = new FlowPane(8, 8, search, label("Region", "ghat-filter-label"), region,
-                label("Crowd", "ghat-filter-label"), crowd, label("Snan", "ghat-filter-label"), snan,
-                label("Sort", "ghat-filter-label"), sort, mapView);
+        Button mapView = new Button("Filters"); mapView.getStyleClass().add("ghat-user-filter-button");
+        mapView.setOnAction(event -> showInfo("Ghat Filters", "Use search, region, crowd, snan and sort controls to refine the Ghat list."));
+        HBox filter = new HBox(10, search, region, crowd, snan, sort, mapView);
         filter.getStyleClass().add("ghat-filter-row");
 
         HBox featureCards = new HBox(14,
@@ -2130,24 +3037,25 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 ghatFeatureCard("\uE8D4", "Nashik–Trimbakeshwar Simhastha", "Nashik and Trimbakeshwar have distinct Akhada bathing arrangements.", "Learn More", () -> showInfo("Nashik–Trimbakeshwar Simhastha", "The festival takes place on the Godavari in Nashik and Trimbakeshwar. The two locations historically have distinct Akhada bathing arrangements.")));
         featureCards.getStyleClass().add("ghat-feature-row");
         featureCards.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
-        VBox content = new VBox(12, ghatHero(), summary, filter,
+        VBox content = new VBox(12, ghatHero(search), summary, filter,
                 new VBox(2, label("Ghats by Live Crowd", "ghat-section-title"),
-                        label("Live conditions appear first when available. Catalogue entries remain available for planning.", "ghat-section-subtitle")), operationalAlerts, ghatFlowPane, featureCards);
+                        label("Live conditions appear first when available. Catalogue entries remain available for planning.", "ghat-section-subtitle")),
+                operationalAlerts, ghatFlowPane, ghatGuideStrip(), featureCards);
         content.getStyleClass().addAll("pilgrim-dashboard-main", "ghat-page");
-        content.setPadding(new Insets(12, 22, 28, 22));
+        content.setPadding(new Insets(12, 22, 28, 12));
         ghatFlowPane.getChildren().add(ghatState("Loading Ghat information…", false, ghatFlowPane, summary));
         loadGhats(ghatFlowPane, summary, operationalAlerts);
         return content;
     }
 
-    private StackPane ghatHero() {
-        ImageView image = createImage("/images/godavari_kumbh.jpg", 1400, 196, 0.54, 0.47);
+    private StackPane ghatHero(TextField pageSearch) {
+        ImageView image = createImage("/images/welcome-light.png", 1080, 208, 0.54, 0.48);
         VBox copy = new VBox(5, label("Ghats & Snan", "ghat-hero-title"),
                 label("Sacred Bathing • Live Crowd Guide • Safe Snan", "ghat-hero-subtitle"),
                 label("Godavari guidance for a calm, informed pilgrimage", "ghat-hero-detail"));
-        copy.setPadding(new Insets(20, 28, 22, 28)); copy.setAlignment(Pos.CENTER_LEFT);
+        copy.setPadding(new Insets(28, 28, 24, 28)); copy.setAlignment(Pos.CENTER_LEFT);
         StackPane.setAlignment(copy, Pos.CENTER_LEFT);
-        HBox controls = ghatTopControls();
+        HBox controls = ghatTopControls(pageSearch);
         // StackPane resizes unconstrained Regions to fill its content area.  The
         // controls themselves have a light background, so keep that surface to
         // the compact date/time/weather controls rather than the whole banner.
@@ -2155,16 +3063,15 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         StackPane.setAlignment(controls, Pos.TOP_RIGHT); StackPane.setMargin(controls, new Insets(14, 18, 0, 0));
         StackPane overlay = new StackPane(); overlay.getStyleClass().add("ghat-hero-overlay");
         StackPane hero = new StackPane(image, overlay, copy, controls);
-        hero.getStyleClass().add("ghat-hero"); hero.setMinHeight(196);
+        hero.getStyleClass().add("ghat-hero"); hero.setMinHeight(208);
         return hero;
     }
 
-    private HBox ghatTopControls() {
-        Label date = label(java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("EEE, dd MMM")), "ghat-top-meta");
-        Label time = label(java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a")), "ghat-top-meta");
-        Label weather = label("Weather unavailable", "ghat-top-meta");
-        HBox controls = new HBox(9, date, time, weather,
-                AppUi.createThemeToggle(), roundButton("\uE7F4", "Notifications"), roundButton("\uE77B", "Profile"));
+    private HBox ghatTopControls(TextField pageSearch) {
+        Label weather = label("27°C   Nashik", "ghat-weather-pill");
+        Button search = roundButton("\uE721", "Search ghats");
+        search.setOnAction(event -> pageSearch.requestFocus());
+        HBox controls = new HBox(8, AppUi.createThemeToggle(), weather, search, notificationBell(), profileButton());
         controls.getStyleClass().add("ghat-top-controls"); controls.setAlignment(Pos.CENTER_RIGHT); return controls;
     }
 
@@ -2175,14 +3082,47 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         card.getStyleClass().addAll("ghat-summary-card", modifier); HBox.setHgrow(card, Priority.ALWAYS); return card;
     }
 
+    private Button ghatSummaryMapCard() {
+        Button button = new Button("Interactive Map\nView all ghats on map");
+        button.getStyleClass().add("ghat-summary-map");
+        button.setOnAction(event -> openGhatMapView());
+        HBox.setHgrow(button, Priority.ALWAYS);
+        return button;
+    }
+
     private ComboBox<String> ghatFilterCombo(String... values) {
-        ComboBox<String> combo = new ComboBox<>(); combo.getItems().addAll(values); combo.setValue(values[0]); combo.getStyleClass().add("input-combo"); return combo;
+        ComboBox<String> combo = new ComboBox<>(); combo.getItems().addAll(values); combo.setValue(values[0]); combo.getStyleClass().add("input-combo"); combo.setPrefWidth(128); return combo;
+    }
+
+    private VBox ghatFilterGroup(String title, Node control) {
+        VBox group = new VBox(4, label(title, "ghat-filter-label"), control);
+        group.getStyleClass().add("ghat-filter-group");
+        return group;
     }
 
     private VBox ghatFeatureCard(String icon, String title, String detail, String action, Runnable callback) {
         Button button = new Button(action); button.getStyleClass().add("ghat-feature-action"); button.setOnAction(event -> callback.run());
         VBox card = new VBox(8, label(icon, "ghat-feature-icon"), label(title, "ghat-feature-title"), label(detail, "ghat-feature-detail"), button);
         card.getStyleClass().add("ghat-feature-card"); return card;
+    }
+
+    private HBox ghatGuideStrip() {
+        HBox strip = new HBox(16,
+                ghatGuideItem("\uE8EF", "Check Live Crowd", "Real-time crowd status for safe snan"),
+                ghatGuideItem("\uE823", "Best Time to Visit", "Early morning 4:00 AM - 8:00 AM"),
+                ghatGuideItem("\uE9D9", "Water Quality", "Regularly monitored for your safety"),
+                ghatGuideItem("\uE72E", "Stay Safe", "Follow guidelines for a holy experience"));
+        strip.getStyleClass().add("ghat-guide-strip");
+        strip.getChildren().forEach(item -> HBox.setHgrow(item, Priority.ALWAYS));
+        return strip;
+    }
+
+    private HBox ghatGuideItem(String icon, String title, String detail) {
+        HBox item = new HBox(9, label(icon, "ghat-guide-icon"),
+                new VBox(2, label(title, "ghat-guide-title"), label(detail, "ghat-guide-detail")));
+        item.getStyleClass().add("ghat-guide-item");
+        item.setAlignment(Pos.CENTER_LEFT);
+        return item;
     }
 
     private void loadGhats(Pane cards, HBox summary, VBox operationalAlerts) {
@@ -2193,17 +3133,15 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 ghats -> Platform.runLater(() -> {
                     if (refreshGeneration != ghatRefreshGeneration) return;
                     try {
-                        System.out.println("SERVICE COUNT = " + ghats.size());
-                        System.out.println("SERVICE GHATS = " + ghats.stream().map(Ghat::name).collect(java.util.stream.Collectors.joining(", ")));
                         if (!ghats.equals(currentGhats)) renderGhats(cards, summary, operationalAlerts, ghats);
                     } catch (Throwable error) {
-                        error.printStackTrace();
+                        LOGGER.fine("Unable to render Ghat information: " + error.getMessage());
                         cards.getChildren().setAll(ghatState("Unable to load Ghat information.", true, cards, summary));
                     }
                 }),
                 error -> Platform.runLater(() -> {
                     if (refreshGeneration != ghatRefreshGeneration) return;
-                    error.printStackTrace();
+                    LOGGER.fine("Unable to load Ghat information: " + error.getMessage());
                     cards.getChildren().clear();
                     cards.getChildren().add(ghatState("Unable to load Ghat information.", true, cards, summary));
                 }));
@@ -2216,15 +3154,12 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
             updateGhatSummary(summary, currentGhats);
             updateOperationalAlerts(operationalAlerts, currentGhats);
             List<Ghat> visibleGhats = filteredGhats();
-            System.out.println("FILTERED COUNT = " + visibleGhats.size());
             if (visibleGhats.isEmpty()) {
                 cards.getChildren().setAll(ghatState("No Ghat information is currently available.", false, cards, summary));
-                System.out.println("FLOWPANE CHILDREN = " + cards.getChildren().size());
                 return;
             }
             List<Node> ghatCards = visibleGhats.stream().filter(java.util.Objects::nonNull).map(ghat -> (Node) cachedGhatCard(ghat)).toList();
             cards.getChildren().setAll(ghatCards);
-            System.out.println("FLOWPANE CHILDREN = " + cards.getChildren().size());
     }
 
     private List<Ghat> filteredGhats() {
@@ -2257,8 +3192,19 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         ghatRefreshGeneration++;
         if (ghatRefreshSubscription != null) {
             try { ghatRefreshSubscription.close(); }
-            catch (Exception exception) { exception.printStackTrace(); }
+            catch (Exception exception) { LOGGER.fine("Unable to close Ghat refresh subscription: " + exception.getMessage()); }
             ghatRefreshSubscription = null;
+        }
+    }
+
+    private void stopScheduleRefresh() {
+        schedulePageActive = false;
+        scheduleRefreshGeneration++;
+        scheduleRefreshInFlight = false;
+        scheduleService.removeLocalChangeListener(scheduleLocalChangeListener);
+        if (scheduleRefreshTimeline != null) {
+            scheduleRefreshTimeline.stop();
+            scheduleRefreshTimeline = null;
         }
     }
 
@@ -2288,36 +3234,63 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
             default -> false;
         }).count();
         String[] values = { String.valueOf(open), String.valueOf(low), String.valueOf(high), String.valueOf(critical), String.valueOf(restricted) };
-        for (int index = 0; index < summary.getChildren().size(); index++) {
-            VBox card = (VBox) summary.getChildren().get(index);
+        int valueIndex = 0;
+        for (Node node : summary.getChildren()) {
+            if (!(node instanceof VBox) || valueIndex >= values.length) continue;
+            VBox card = (VBox) node;
             HBox cardHeader = (HBox) card.getChildren().get(0);
             VBox copy = (VBox) cardHeader.getChildren().get(1);
-            copy.getChildren().set(0, label(values[index], "ghat-summary-value"));
+            copy.getChildren().set(0, label(values[valueIndex], "ghat-summary-value"));
+            valueIndex++;
         }
     }
 
     private VBox ghatCard(Ghat ghat) {
-        VBox card = new VBox(10); card.getStyleClass().add("ghat-card"); card.setPrefWidth(214); card.setMinWidth(205);
-        card.setOnMouseClicked(event -> selectGhatCard(ghat, card));
-        StackPane imageShell = new StackPane(ghatImageService.createView(ghat, 214, 124));
+        VBox card = new VBox(10); card.getStyleClass().add("ghat-card"); card.setPrefWidth(GHAT_CARD_WIDTH); card.setMinWidth(GHAT_CARD_WIDTH); card.setMaxWidth(GHAT_CARD_WIDTH); card.setMinHeight(358);
+        card.setOnMouseClicked(event -> openGhatDetailsFromCard(ghat, card));
+        ImageView cardImage = ghatImageService.createView(ghat, GHAT_CARD_WIDTH, GHAT_CARD_IMAGE_HEIGHT);
+        cardImage.setPreserveRatio(false);
+        StackPane imageShell = new StackPane(cardImage);
         imageShell.getStyleClass().add("ghat-card-image-shell");
-        Label crowdBadge = ghatBadge(ghat.crowdLevel() == Ghat.CrowdLevel.UNKNOWN ? "INFORMATION ONLY" : ghat.crowdLevel().name(), "ghat-crowd-" + ghat.crowdLevel().name().toLowerCase());
-        StackPane.setAlignment(crowdBadge, Pos.TOP_LEFT); StackPane.setMargin(crowdBadge, new Insets(9)); imageShell.getChildren().add(crowdBadge);
-        VBox heading = new VBox(2, label(ghat.name(), "ghat-card-title"),
-                label("\uE707  " + (ghat.area().isBlank() ? "Location details pending" : ghat.area()), "ghat-card-area"));
+        Rectangle imageClip = new Rectangle(GHAT_CARD_WIDTH, GHAT_CARD_IMAGE_HEIGHT);
+        imageClip.setArcWidth(22);
+        imageClip.setArcHeight(22);
+        imageShell.setClip(imageClip);
+        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) {
+            Label crowdBadge = ghatBadge(ghat.crowdLevel().name(), "ghat-crowd-" + ghat.crowdLevel().name().toLowerCase());
+            StackPane.setAlignment(crowdBadge, Pos.TOP_LEFT); StackPane.setMargin(crowdBadge, new Insets(9)); imageShell.getChildren().add(crowdBadge);
+        }
+        Label title = label(ghat.name(), "ghat-card-title");
+        title.setWrapText(true);
+        Label area = label("\uE707  " + (ghat.area().isBlank() ? "Location details pending" : ghat.area()), "ghat-card-area");
+        area.setWrapText(true);
+        VBox heading = new VBox(2, title, area);
         FlowPane statuses = new FlowPane(5, 5); statuses.setPadding(new Insets(0, 11, 0, 11));
         statuses.getStyleClass().add("ghat-status-row");
-        statuses.getChildren().add(ghatBadge(displayStatus(ghat.operationalStatus()), "ghat-status"));
-        if (ghat.crowdLevel() == Ghat.CrowdLevel.UNKNOWN) statuses.getChildren().add(ghatBadge("Live status unavailable", "ghat-status"));
-        else statuses.getChildren().add(ghatBadge("Snan " + titleCase(ghat.operationalState().bathingStatus().name()), ghat.operationalState().bathingRecommended() ? "ghat-bathing-available" : "ghat-bathing-unavailable"));
-        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN || ghat.operationalStatus() != Ghat.OperationalStatus.INFORMATION_ONLY) {
+        if (ghat.operationalStatus() != Ghat.OperationalStatus.INFORMATION_ONLY) {
+            statuses.getChildren().add(ghatBadge(displayStatus(ghat.operationalStatus()), "ghat-status"));
+        }
+        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN
+                && ghat.operationalState().bathingStatus() != GhatOperationalState.BathingStatus.UNAVAILABLE) {
+            statuses.getChildren().add(ghatBadge("Snan " + titleCase(ghat.operationalState().bathingStatus().name()),
+                    ghat.operationalState().bathingRecommended() ? "ghat-bathing-available" : "ghat-bathing-unavailable"));
+        }
+        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) {
             statuses.getChildren().add(ghatBadge("Water " + titleCase(ghat.operationalState().waterSafety().name()), "ghat-status"));
         }
-        HBox metrics = new HBox(5,
-                ghatMetric("WAIT", ghat.crowdLevel() == Ghat.CrowdLevel.UNKNOWN ? "N/A" : ghat.waitLabel()),
-                ghatMetric("WALK", titleCase(ghat.walking().difficulty().name())),
-                ghatMetric("STEPS", ghat.walking().approximateSteps() == null ? "N/A" : String.valueOf(ghat.walking().approximateSteps())),
-                ghatMetric("WEATHER", compactWeather(ghat.weather())));
+        HBox metrics = new HBox(4);
+        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN && ghat.estimatedWaitMinutes() != null) {
+            metrics.getChildren().add(ghatMetric("WAIT", ghat.waitLabel()));
+        }
+        if (hasWalkingDetails(ghat)) {
+            metrics.getChildren().add(ghatMetric("WALK", titleCase(ghat.walking().difficulty().name())));
+        }
+        if (ghat.walking().approximateSteps() != null) {
+            metrics.getChildren().add(ghatMetric("STEPS", String.valueOf(ghat.walking().approximateSteps())));
+        }
+        if (ghat.weather().available()) {
+            metrics.getChildren().add(ghatMetric("WEATHER", compactWeather(ghat.weather())));
+        }
         Node safety = ghatOperationalNote(ghat);
         HBox actions = new HBox(5, ghatAction("History", event -> showGhatHistory(ghat), "ghat-card-action"),
                 ghatAction("Locate", event -> locateGhat(ghat), "ghat-card-action ghat-card-action-primary"),
@@ -2325,7 +3298,9 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         HBox help = new HBox(4, ghatAction("Medical", event -> requestGhatHelp(ghat, "Medical"), "ghat-help-action"),
                 ghatAction("Police", event -> requestGhatHelp(ghat, "Police"), "ghat-help-action"),
                 ghatAction("Lost & Found", event -> requestGhatHelp(ghat, "Lost & Found"), "ghat-help-action"));
-        card.getChildren().addAll(imageShell, heading, statuses, metrics);
+        card.getChildren().addAll(imageShell, heading);
+        if (!statuses.getChildren().isEmpty()) card.getChildren().add(statuses);
+        if (!metrics.getChildren().isEmpty()) card.getChildren().add(metrics);
         if (!(safety instanceof Pane)) card.getChildren().add(safety);
         card.getChildren().addAll(actions, help);
         return card;
@@ -2342,6 +3317,11 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     private void selectGhatCard(Ghat ghat, VBox card) {
         if (selectedGhatCard != null) selectedGhatCard.getStyleClass().remove("ghat-card-selected");
         selectedGhat = ghat; selectedGhatCard = card; card.getStyleClass().add("ghat-card-selected");
+    }
+
+    private void openGhatDetailsFromCard(Ghat ghat, VBox card) {
+        selectGhatCard(ghat, card);
+        root.setCenter(scroll(ghatDetailsPage(ghat, "")));
     }
 
     private VBox ghatMetric(String key, String value) {
@@ -2366,43 +3346,112 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     private HBox ghatLine(String key, String value) { Label detail = label(value, "ghat-line-value"); detail.setWrapText(true); HBox row = new HBox(7, label(key, "ghat-line-key"), detail); HBox.setHgrow(detail, Priority.ALWAYS); return row; }
     private Button ghatAction(String text, javafx.event.EventHandler<javafx.event.ActionEvent> action, String style) {
         Button button = new Button(text); button.getStyleClass().addAll(style.split(" "));
-        button.setOnAction(action); return button;
+        button.setOnAction(event -> { action.handle(event); event.consume(); }); return button;
     }
-    private String walkingDescription(Ghat ghat) { String distance = ghat.walking().distanceMeters() == null ? "Distance unavailable" : ghat.walking().distanceMeters() + " m from entry"; return ghat.walking().approximateSteps() == null ? distance : distance + " • Approx. " + ghat.walking().approximateSteps() + " steps"; }
+    private boolean hasWalkingDetails(Ghat ghat) {
+        return ghat != null && ghat.walking() != null
+                && (ghat.walking().approximateSteps() != null || ghat.walking().distanceMeters() != null
+                || ghat.walking().seniorFriendly() || ghat.walking().wheelchairAccessible());
+    }
+    private String walkingDescription(Ghat ghat) { String distance = ghat.walking().distanceMeters() == null ? "Entry distance will be updated by the administration." : ghat.walking().distanceMeters() + " m from entry"; return ghat.walking().approximateSteps() == null ? distance : distance + " • Approx. " + ghat.walking().approximateSteps() + " steps"; }
     private String displayStatus(Ghat.OperationalStatus status) { return titleCase(status.name()); }
     private String titleCase(String text) { String[] words = text.toLowerCase().replace('_', ' ').split(" "); StringBuilder result = new StringBuilder(); for (String word : words) { if (!word.isBlank()) result.append(Character.toUpperCase(word.charAt(0))).append(word.substring(1)).append(' '); } return result.toString().trim(); }
     private String lastUpdatedLabel(String updated) { if (updated == null || updated.isBlank() || GhatDataFreshnessService.isStaleEpochMillis(updated)) return "Live status may be outdated"; try { return "Updated " + Math.max(0, (System.currentTimeMillis() - Long.parseLong(updated)) / 60000) + " min ago"; } catch (NumberFormatException exception) { return "Updated " + updated; } }
     private void showGhatHistory(Ghat ghat) {
         selectedGhat = ghat;
-        Alert dialog = new Alert(Alert.AlertType.INFORMATION);
-        dialog.setTitle("History & Significance");
-        dialog.setHeaderText(ghat.name());
-        dialog.setContentText(ghat.history().available() ? historyText(ghat.history()) : "Verified history information will be available soon.");
-        dialog.setGraphic(ghatImageService.createView(ghat, 210, 125));
-        dialog.showAndWait();
+        root.setCenter(scroll(ghatDetailsPage(ghat, "")));
     }
     private String historyText(Ghat.History history) { return String.join("\n\n", java.util.stream.Stream.of(history.historicalBackground(), history.religiousSignificance(), history.simhasthaConnection(), history.associatedSacredPlaces(), history.rituals(), history.didYouKnow()).filter(value -> !value.isBlank()).toList()); }
+    private VBox ghatDetailsPage(Ghat ghat, String notice) {
+        Button back = new Button("Back to Ghats");
+        back.getStyleClass().add("pilgrim-small-action");
+        back.setOnAction(event -> showModulePage("ghat"));
+        ImageView image = ghatImageService.createView(ghat, 520, 292);
+        VBox heroText = new VBox(8, badge("GHATS & SNAN"), label(ghat.name(), "ghat-detail-title"),
+                paragraph(ghat.area().isBlank() ? "Nashik Godavari riverfront" : ghat.area()),
+                paragraph(ghat.description().isBlank() ? "Sacred bathing and movement guidance for Simhastha pilgrims." : ghat.description()));
+        HBox hero = new HBox(18, image, heroText);
+        hero.getStyleClass().add("ghat-detail-hero");
+        HBox.setHgrow(heroText, Priority.ALWAYS);
+        VBox status = new VBox(10, sectionTitle("Current Ghat Status"));
+        java.util.List<Node> statusRows = new java.util.ArrayList<>();
+        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) statusRows.add(ghatLine("Crowd", titleCase(ghat.crowdLevel().name())));
+        if (ghat.estimatedWaitMinutes() != null) statusRows.add(ghatLine("Wait", ghat.waitLabel()));
+        if (ghat.operationalStatus() != Ghat.OperationalStatus.INFORMATION_ONLY) statusRows.add(ghatLine("Status", displayStatus(ghat.operationalStatus())));
+        if (ghat.operationalState().bathingStatus() != GhatOperationalState.BathingStatus.UNAVAILABLE) statusRows.add(ghatLine("Snan", titleCase(ghat.operationalState().bathingStatus().name())));
+        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) statusRows.add(ghatLine("Water", titleCase(ghat.operationalState().waterSafety().name())));
+        if (hasWalkingDetails(ghat)) statusRows.add(ghatLine("Walking", walkingDescription(ghat)));
+        if (!ghat.lastUpdated().isBlank()) statusRows.add(ghatLine("Updated", lastUpdatedLabel(ghat.lastUpdated())));
+        if (statusRows.isEmpty()) statusRows.add(paragraph("Live operational details will appear here after the administration publishes current field data."));
+        status.getChildren().addAll(statusRows);
+        status.getStyleClass().add("pilgrim-panel");
+        VBox essentials = new VBox(10, sectionTitle("Pilgrim Essentials"), ghatEssentialsGrid(ghat));
+        essentials.getStyleClass().add("pilgrim-panel");
+        VBox support = new VBox(10, sectionTitle("Nearby Support"), ghatSupportGrid(ghat));
+        support.getStyleClass().add("pilgrim-panel");
+        VBox history = new VBox(10, sectionTitle("History & Significance"), paragraph(cleanHistoryText(ghat)));
+        history.getStyleClass().add("pilgrim-panel");
+        VBox location = new VBox(10, sectionTitle("Location & Access"), ghatLine("Area", ghat.area().isBlank() ? "Nashik, Maharashtra" : ghat.area()),
+                ghatLine("Coordinates", coordinateText(ghat)), ghatLine("Gates", gateSummary(ghat)), ghatLine("Zones", zoneSummary(ghat)),
+                ghatLine("Access note", accessNote(ghat)));
+        location.getStyleClass().add("pilgrim-panel");
+        VBox content = pageShell(ghat.name(), "Ghats & Snan details", back, hero);
+        if (notice != null && !notice.isBlank()) content.getChildren().add(infoPanel("Important Update", notice));
+        content.getChildren().addAll(status, essentials, support, history, location);
+        return content;
+    }
+
+    private String cleanHistoryText(Ghat ghat) {
+        java.util.List<String> parts = java.util.stream.Stream.of(
+                        ghat.history().historicalBackground(),
+                        ghat.history().religiousSignificance(),
+                        ghat.history().simhasthaConnection(),
+                        ghat.history().associatedSacredPlaces(),
+                        ghat.history().rituals(),
+                        ghat.history().didYouKnow())
+                .filter(value -> value != null && !value.isBlank())
+                .filter(value -> !value.toLowerCase(java.util.Locale.ROOT).contains("pending"))
+                .filter(value -> !value.toLowerCase(java.util.Locale.ROOT).contains("will be added"))
+                .toList();
+        if (!parts.isEmpty()) return String.join("\n\n", parts);
+        String area = ghat.area().isBlank() ? "Nashik" : ghat.area();
+        return ghat.name() + " is part of the Godavari Ghat network used by pilgrims for darshan, movement and Snan planning during Simhastha. "
+                + "The " + area + " location helps pilgrims identify the correct riverfront zone, nearby access routes and support services.";
+    }
     private void locateGhat(Ghat ghat) {
         selectedGhat = ghat;
         googleMapsService.openGhatLocation(ghat)
                 .ifPresent(message -> showInfo("Google Maps", message));
     }
     private void openGhatMapView() {
-        googleMapsService.showGhats(root.getScene() == null ? null : root.getScene().getWindow(), filteredGhats(), selectedGhat)
+        List<Ghat> mapGhats = allGhatsForMap();
+        googleMapsService.showGhats(root.getScene() == null ? null : root.getScene().getWindow(), mapGhats, null)
                 .ifPresent(message -> showInfo("Google Maps", message));
+    }
+
+    private void openSimhasthaAreaMap(String category) {
+        googleMapsService.showSimhasthaArea(root.getScene() == null ? null : root.getScene().getWindow(), category)
+                .ifPresent(message -> showInfo("Simhastha Map", message));
+    }
+
+    private List<Ghat> allGhatsForMap() {
+        LinkedHashMap<String, Ghat> ghats = new LinkedHashMap<>();
+        ghatCatalogueService.catalogue().forEach(ghat -> ghats.put(ghat.id(), ghat));
+        if (currentGhats != null) currentGhats.forEach(ghat -> ghats.put(ghat.id(), ghat));
+        return List.copyOf(ghats.values());
     }
     private void navigateToGhat(Ghat ghat) {
         selectedGhat = ghat; GhatNavigationService.Decision decision = ghatNavigationService.decision(ghat);
-        if (decision == GhatNavigationService.Decision.UNSAFE) { showInfo("Safe Snan unavailable", "This Ghat is currently unavailable for safe Snan. Choose one of the less crowded safe alternatives."); return; }
-        if (decision == GhatNavigationService.Decision.NO_ENTRY) { showInfo("No active entry route", "No active entry route is currently available for this Ghat."); return; }
-        if (decision == GhatNavigationService.Decision.HIGH_CROWD_CONFIRMATION) { Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, "This Ghat currently has high crowd. Continue to this Ghat?", ButtonType.YES, ButtonType.NO); if (confirm.showAndWait().orElse(ButtonType.NO) != ButtonType.YES) return; }
+        if (decision == GhatNavigationService.Decision.UNSAFE) { root.setCenter(scroll(ghatDetailsPage(ghat, "Safe Snan is currently not recommended for this Ghat. Choose one of the safer, less crowded alternatives."))); return; }
+        if (decision == GhatNavigationService.Decision.NO_ENTRY) { root.setCenter(scroll(ghatDetailsPage(ghat, "No active entry route is currently available for this Ghat."))); return; }
+        if (decision == GhatNavigationService.Decision.HIGH_CROWD_CONFIRMATION) { Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, "This Ghat currently has high crowd. Continue to this Ghat?", ButtonType.YES, ButtonType.NO); confirm.setTitle("High Crowd"); confirm.setHeaderText("High Crowd"); AppUi.styleDialog(confirm, root.getScene() == null ? null : root.getScene().getWindow(), "ghat-navigation-dialog", ButtonType.YES); if (confirm.showAndWait().orElse(ButtonType.NO) != ButtonType.YES) return; }
         java.util.Optional<GhatNavigationService.Destination> destination = ghatNavigationService.destinationFor(ghat);
         String destinationQuery = destination.isPresent() ? "" : ghatNavigationService.destinationQueryFor(ghat);
         Dialog<ButtonType> originDialog = new Dialog<>(); originDialog.setTitle("Choose Starting Location");
         TextField latitude = AppUi.textField("Latitude"); TextField longitude = AppUi.textField("Longitude");
         String targetName = destination.map(GhatNavigationService.Destination::entryName).orElse(ghat.name());
         ButtonType withoutOrigin = new ButtonType("Continue without origin");
-        originDialog.getDialogPane().setContent(new VBox(8, label("Enter your current starting coordinates to open directions to " + targetName + ", or let Google Maps request your location.", "ghat-line-value"), latitude, longitude)); originDialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, withoutOrigin, ButtonType.CANCEL);
+        originDialog.getDialogPane().setContent(new VBox(8, label("Enter your current starting coordinates to open directions to " + targetName + ", or let Google Maps request your location.", "ghat-line-value"), latitude, longitude)); originDialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, withoutOrigin, ButtonType.CANCEL); AppUi.styleDialog(originDialog, root.getScene() == null ? null : root.getScene().getWindow(), "ghat-navigation-dialog", ButtonType.OK);
         ButtonType choice = originDialog.showAndWait().orElse(ButtonType.CANCEL);
         if (choice == ButtonType.CANCEL) return;
         try {
@@ -2417,7 +3466,90 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         selectedGhat = ghat;
         showModulePage("Lost & Found".equals(type) ? "lost" : "emergency");
     }
-    private String coordinateText(Ghat ghat) { return ghat.latitude() == null || ghat.longitude() == null ? "unavailable" : ghat.latitude() + ", " + ghat.longitude(); }
+
+    private FlowPane ghatEssentialsGrid(Ghat ghat) {
+        FlowPane grid = new FlowPane(10, 10);
+        grid.getStyleClass().add("ghat-detail-grid");
+        grid.getChildren().addAll(
+                ghatInfoTile("Snan readiness", titleCase(ghat.operationalState().bathingStatus().name()), snanAdvice(ghat)),
+                ghatInfoTile("Water safety", titleCase(ghat.operationalState().waterSafety().name()), waterAdvice(ghat)),
+                ghatInfoTile("Expected wait", ghat.estimatedWaitMinutes() == null ? "Admin update expected" : ghat.waitLabel(), waitAdvice(ghat)),
+                ghatInfoTile("Walking access", walkingShort(ghat), walkingDescription(ghat)));
+        return grid;
+    }
+
+    private FlowPane ghatSupportGrid(Ghat ghat) {
+        FlowPane grid = new FlowPane(10, 10);
+        grid.getStyleClass().add("ghat-detail-grid");
+        supportTiles(ghat).forEach(tile -> grid.getChildren().add(tile));
+        return grid;
+    }
+
+    private java.util.List<Node> supportTiles(Ghat ghat) {
+        String area = ghat.area().isBlank() ? "near this Ghat" : "near " + ghat.area();
+        java.util.List<Node> tiles = new java.util.ArrayList<>();
+        tiles.add(ghatInfoTile("Locker / Cloakroom", "Nearby guidance", "Use official cloakroom or locker counters " + area + " before entering crowded Snan steps."));
+        tiles.add(ghatInfoTile("Toilets", "Available nearby", "Follow signboards and official help points for nearest public toilet blocks."));
+        tiles.add(ghatInfoTile("Parking", parkingLabel(ghat), "Use designated parking and continue by walking route or local shuttle when crowd control is active."));
+        tiles.add(ghatInfoTile("Hotels & Stay", "Search nearby", "Stay options around Panchavati, CBS, Nashik Road and Trimbakeshwar can be checked from the Stay page."));
+        tiles.add(ghatInfoTile("Medical Help", "First-aid support", "Use Medical action from the Ghat card for emergency numbers and support information."));
+        tiles.add(ghatInfoTile("Police / Lost Help", "Help desk route", "For missing person or crowd assistance, use Police or Lost & Found from the Ghat card."));
+        for (String facility : ghat.facilities()) {
+            if (!facility.isBlank()) tiles.add(ghatInfoTile(facility, "Listed facility", "Shown from admin/catalogue facility data for this Ghat."));
+        }
+        return tiles.stream().limit(8).toList();
+    }
+
+    private VBox ghatInfoTile(String title, String value, String detail) {
+        Label titleLabel = label(title, "ghat-detail-tile-title");
+        Label valueLabel = label(value, "ghat-detail-tile-value");
+        Label detailLabel = label(detail, "ghat-detail-tile-detail");
+        detailLabel.setWrapText(true);
+        VBox tile = new VBox(5, titleLabel, valueLabel, detailLabel);
+        tile.getStyleClass().add("ghat-detail-tile");
+        return tile;
+    }
+
+    private String snanAdvice(Ghat ghat) {
+        return switch (ghat.operationalState().bathingStatus()) {
+            case AVAILABLE -> "Snan entry is open. Follow gate and volunteer instructions.";
+            case CAUTION -> "Snan is allowed with caution. Prefer low-crowd windows and avoid rushing.";
+            case SUSPENDED -> "Snan is suspended right now. Choose another open Ghat.";
+            case UNAVAILABLE -> "Admin has not marked Snan entry open for this Ghat.";
+        };
+    }
+
+    private String waterAdvice(Ghat ghat) {
+        return switch (ghat.operationalState().waterSafety()) {
+            case NORMAL -> "Water condition is marked normal for guided Snan.";
+            case CAUTION, HIGH_WATER -> "Use caution and stay inside guided bathing areas.";
+            case DANGEROUS, BATHING_SUSPENDED -> "Avoid bathing here until administration marks it safe.";
+        };
+    }
+
+    private String waitAdvice(Ghat ghat) {
+        if (ghat.estimatedWaitMinutes() == null) return "Live wait will be shown after admin update.";
+        if (ghat.estimatedWaitMinutes() <= 15) return "Good time for short visit and quick movement.";
+        if (ghat.estimatedWaitMinutes() <= 35) return "Plan extra time and keep group members together.";
+        return "Heavy wait expected. Check alternatives before reaching the entry gate.";
+    }
+
+    private String walkingShort(Ghat ghat) {
+        String difficulty = titleCase(ghat.walking().difficulty().name());
+        return ghat.walking().approximateSteps() == null ? difficulty : difficulty + " • " + ghat.walking().approximateSteps() + " steps";
+    }
+
+    private String parkingLabel(Ghat ghat) {
+        return ghat.area().toLowerCase(java.util.Locale.ROOT).contains("trimbakeshwar") ? "Trimbakeshwar lots" : "Nashik city lots";
+    }
+
+    private String accessNote(Ghat ghat) {
+        if (!ghat.operationalState().restrictionReason().isBlank()) return ghat.operationalState().restrictionReason();
+        if (ghat.operationalStatus() == Ghat.OperationalStatus.OPEN) return "Entry is open. Use the listed gate and follow one-way crowd movement when active.";
+        return "Check live status before visiting. Some access paths may be restricted by administration.";
+    }
+
+    private String coordinateText(Ghat ghat) { return ghat.latitude() == null || ghat.longitude() == null ? "Nashik Godavari zone coordinates will be updated by administration." : ghat.latitude() + ", " + ghat.longitude(); }
 
     private VBox emergencyPage() {
         if (!AppDataStore.items("emergency").isEmpty()) {
@@ -2444,8 +3576,8 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         approved.getStyleClass().add("primary-button");
         Button other = new Button("Search Other Stays");
         other.getStyleClass().add("pilgrim-small-action");
-        VBox approvedCard = stayChoiceCard("SIMHASTHA CONNECT", "Approved Stays", "Discover trusted accommodation connected with SIMHASTHA CONNECT.", "Trusted Stay Listings  •  Property Details  •  Real Location  •  Internal Booking Flow", approved, "stay-approved-card");
-        VBox otherCard = stayChoiceCard("EXPLORE NASHIK", "Other Stays", "Search hotels, OYO, lodges, dharamshalas, guest houses and homestays across Nashik.", "Hotels  •  OYO  •  Lodges  •  Dharamshalas  •  Guest Houses", other, "stay-other-card");
+        VBox approvedCard = stayChoiceCard("SIMHASTHA CONNECT", "Approved Stays", "Discover trusted accommodation connected with SIMHASTHA CONNECT.", approved, "stay-approved-card");
+        VBox otherCard = stayChoiceCard("EXPLORE NASHIK", "Other Stays", "Search hotels, OYO, lodges, dharamshalas, guest houses and homestays across Nashik.", other, "stay-other-card");
         approved.setOnAction(event -> {
             approvedCard.getStyleClass().add("stay-choice-active");
             otherCard.getStyleClass().remove("stay-choice-active");
@@ -2458,21 +3590,105 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         });
         HBox cards = new HBox(14, approvedCard, otherCard);
         cards.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
-        return pageShell("Stay", "Find the right accommodation for your Simhastha journey.", stayHero(),
-                sectionTitle("How would you like to find your stay?"), cards, dynamic);
+        return pageShell("Stay", "Find the right accommodation for your Simhastha journey.", stayBackRow(), stayIntroPanel(),
+                sectionTitle("How would you like to find your stay?"), cards, dynamic,
+                sectionTitle("Why Book with Simhastha Connect?"), stayWhyBookStrip(), stayStatsBand());
     }
 
-    private StackPane stayHero() {
-        ImageView image = createImage("/images/godavari_kumbh.jpg", 980, 170, 0.54, 0.47);
-        VBox copy = new VBox(7, badge("SIMHASTHA CONNECT  •  STAY"), label("Stay Close. Travel Easy. Experience Simhastha.", "pilgrim-hero-title"),
-                label("Choose trusted SIMHASTHA CONNECT stays or explore accommodation across Nashik.", "pilgrim-hero-detail"));
-        copy.setAlignment(Pos.CENTER_LEFT); copy.setPadding(new Insets(22, 28, 22, 28));
-        StackPane hero = new StackPane(image, copy); StackPane.setAlignment(copy, Pos.CENTER_LEFT); hero.getStyleClass().add("pilgrim-hero"); hero.setMinHeight(170); return hero;
+    private HBox stayBackRow() {
+        Button back = new Button("← Back");
+        back.getStyleClass().add("pilgrim-small-action");
+        back.setOnAction(event -> showHomePage());
+        HBox row = new HBox(back);
+        row.getStyleClass().add("stay-back-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
     }
 
-    private VBox stayChoiceCard(String eyebrow, String title, String detail, String features, Button action, String style) {
-        VBox card = new VBox(10, badge(eyebrow), strong(title), paragraph(detail), muted(features), action);
-        card.getStyleClass().addAll("pilgrim-rich-card", "stay-choice-card", style); card.setMinHeight(225); HBox.setHgrow(card, Priority.ALWAYS); return card;
+    private VBox stayIntroPanel() {
+        HBox facts = new HBox(10,
+                stayIntroFact("\uE8E1", "Trusted Stays", "Verified SIMHASTHA CONNECT listings"),
+                stayIntroFact("\uE55F", "Real Location", "Open map before planning travel"),
+                stayIntroFact("\uE8B6", "Flexible Search", "Explore hotels, lodges and dharamshalas"));
+        facts.getChildren().forEach(item -> HBox.setHgrow(item, Priority.ALWAYS));
+        VBox panel = new VBox(facts);
+        panel.getStyleClass().add("stay-intro-panel");
+        return panel;
+    }
+
+    private HBox stayIntroFact(String icon, String title, String detail) {
+        VBox copy = new VBox(4, strong(title), muted(detail));
+        HBox fact = new HBox(14, label(icon, "stay-feature-icon"), copy);
+        fact.setAlignment(Pos.CENTER_LEFT);
+        fact.getStyleClass().add("stay-intro-fact");
+        return fact;
+    }
+
+    private VBox stayChoiceCard(String eyebrow, String title, String detail, Button action, String style) {
+        HBox header = new HBox(8, badge(eyebrow), "stay-approved-card".equals(style) ? label("\uE86C", "stay-verified-mark") : new Pane());
+        header.setAlignment(Pos.CENTER_LEFT);
+        HBox features = "stay-approved-card".equals(style)
+                ? stayChoiceFeatures(stayChoiceFeature("\uE8E1", "Trusted Stay Listings"), stayChoiceFeature("\uE0AF", "Property Details"),
+                stayChoiceFeature("\uE55F", "Real Location"), stayChoiceFeature("\uE870", "Internal Booking Flow"))
+                : stayChoiceFeatures(stayChoiceFeature("\uE7F1", "Hotels"), stayChoiceFeature("OYO", "OYO"),
+                stayChoiceFeature("\uE0AF", "Lodges"), stayChoiceFeature("\uE88A", "Dharamshalas"), stayChoiceFeature("\uE88A", "Guest Houses"));
+        StackPane artwork = new StackPane();
+        artwork.getStyleClass().add("stay-choice-artwork");
+        VBox card = new VBox(12, header, strong(title), paragraph(detail), features, createSpacer(), action, artwork);
+        card.getStyleClass().addAll("pilgrim-rich-card", "stay-choice-card", style); card.setMinHeight(305); HBox.setHgrow(card, Priority.ALWAYS); return card;
+    }
+
+    private HBox stayChoiceFeatures(Node... nodes) {
+        HBox row = new HBox(12, nodes);
+        row.setAlignment(Pos.CENTER);
+        row.getStyleClass().add("stay-choice-features");
+        for (Node node : nodes) HBox.setHgrow(node, Priority.ALWAYS);
+        return row;
+    }
+
+    private VBox stayChoiceFeature(String icon, String title) {
+        VBox item = new VBox(6, label(icon, "stay-choice-feature-icon"), label(title, "stay-choice-feature-title"));
+        item.setAlignment(Pos.CENTER);
+        item.getStyleClass().add("stay-choice-feature");
+        return item;
+    }
+
+    private HBox stayWhyBookStrip() {
+        HBox strip = new HBox(12,
+                stayBenefit("\uE8E1", "Trusted & Verified", "All listings are verified by our team"),
+                stayBenefit("\uE55F", "Exact Location", "View exact location on map"),
+                stayBenefit("\uE227", "Best Prices", "Competitive prices & great deals"),
+                stayBenefit("\uE0CD", "24x7 Support", "We are here to help you anytime"),
+                stayBenefit("\uE86C", "Secure Booking", "Safe, easy & secure booking"));
+        strip.getStyleClass().add("stay-benefit-strip");
+        strip.getChildren().forEach(item -> HBox.setHgrow(item, Priority.ALWAYS));
+        return strip;
+    }
+
+    private HBox stayBenefit(String icon, String title, String detail) {
+        HBox item = new HBox(10, label(icon, "stay-benefit-icon"), new VBox(2, strong(title), muted(detail)));
+        item.setAlignment(Pos.CENTER_LEFT);
+        item.getStyleClass().add("stay-benefit-card");
+        return item;
+    }
+
+    private HBox stayStatsBand() {
+        HBox band = new HBox(18,
+                stayStat("\uE7F1", "750+", "Verified Stays"),
+                stayStat("\uE7EF", "50K+", "Happy Pilgrims"),
+                stayStat("\uE838", "4.8", "Average Rating"),
+                stayStat("\uE55F", "100+", "Locations"),
+                stayStat("\uE0CD", "24x7", "Support"));
+        band.getStyleClass().add("stay-stats-band");
+        band.getChildren().forEach(item -> HBox.setHgrow(item, Priority.ALWAYS));
+        return band;
+    }
+
+    private HBox stayStat(String icon, String value, String title) {
+        HBox item = new HBox(10, label(icon, "stay-stat-icon"), new VBox(1, label(value, "stay-stat-value"), label(title, "stay-stat-title")));
+        item.setAlignment(Pos.CENTER);
+        item.getStyleClass().add("stay-stat-item");
+        return item;
     }
 
     private VBox stayApprovedFlow(Runnable exploreOther) {
@@ -2540,7 +3756,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 Button details = new Button("View Details"); details.getStyleClass().add("pilgrim-small-action"); details.setOnAction(event -> showStayDetails(stay, StayCriteria.empty()));
                 Button map = new Button("View on Map"); map.getStyleClass().add("pilgrim-small-action"); map.setOnAction(event -> openStayMap(stay));
                 Button book = new Button("Book Stay"); book.getStyleClass().add("primary-button"); book.setOnAction(event -> showStayDetails(stay, StayCriteria.empty()));
-                ImageView image = createImage(stay.localImagePath(), 116, 72, 0.54, 0.50);
+                ImageView image = stayImage(stay, 116, 72);
                 VBox detailsCopy = new VBox(3, strong(stay.name()), muted(stay.category() + " • " + stay.area()),
                         muted(stay.priceInfo().isBlank() ? "Price available during connected booking" : stay.priceInfo()));
                 HBox row = new HBox(10, image, detailsCopy, createSpacer(), details, map, book);
@@ -2549,7 +3765,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
             }
         }
         ScrollPane scroll = new ScrollPane(content); scroll.setFitToWidth(true); scroll.setPrefViewportHeight(460);
-        dialog.getDialogPane().setContent(scroll); dialog.getDialogPane().setPrefSize(940, 560); dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); dialog.showAndWait();
+        dialog.getDialogPane().setContent(scroll); dialog.getDialogPane().setPrefSize(940, 560); dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); AppUi.styleDialog(dialog, root.getScene() == null ? null : root.getScene().getWindow(), "stay-dialog-pane", ButtonType.CLOSE); dialog.showAndWait();
     }
 
     private void showStayBookings() {
@@ -2569,7 +3785,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
             content.getChildren().addAll(strong("Your Last Stay Booking"), stayBookingRow(latest), new HBox(8, upcoming, past, cancelled), rows);
             render.run();
         }
-        content.getStyleClass().add("stay-booking-summary"); dialog.getDialogPane().setContent(content); dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); dialog.showAndWait();
+        content.getStyleClass().add("stay-booking-summary"); dialog.getDialogPane().setContent(content); dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE); AppUi.styleDialog(dialog, root.getScene() == null ? null : root.getScene().getWindow(), "stay-dialog-pane", ButtonType.CLOSE); dialog.showAndWait();
     }
 
     private java.util.List<AppDataStore.BookingRecord> currentUserStayBookings() {
@@ -2655,7 +3871,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     }
 
     private VBox createStayCard(StayItem stay, StayCriteria criteria) {
-        ImageView image = createImage(stay.localImagePath(), 390, 190, 0.54, 0.50);
+        ImageView image = stayImage(stay, 390, 190);
         Label fallback = label("Representative accommodation image", "stay-image-fallback");
         fallback.setVisible(image.getImage() == null);
         StackPane cover = new StackPane(image, fallback, badge(stay.locallyApprovedSeed() ? "SIMHASTHA STAY" : "SIMHASTHA VERIFIED"));
@@ -2767,9 +3983,11 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
             for (AppDataStore.BusinessRecord business : AppDataStore.businesses()) {
                 if (!isApprovedStayBusiness(business)) continue;
                 StayItem mapped = new StayItem(business.businessName, business.category, blankTo(business.location, "Nashik"),
-                        blankTo(business.location, "Location details available during connected booking."), "", "/images/welcome-light.png",
+                        blankTo(business.location, "Location details available during connected booking."),
+                        firstNonBlank(business.coverPhotoUrl, business.logoUrl), "/images/welcome-light.png",
                         business.businessName + " " + blankTo(business.location, "Nashik"), stayBudgetFrom(business.priceRange), List.of(),
-                        blankTo(business.description, "Approved accommodation listing."), false, business.priceRange, business.businessId);
+                        blankTo(business.description, "Approved accommodation listing."), false, business.priceRange, business.businessId,
+                        business.galleryImages);
                 stays.put(mapped.name().trim().toLowerCase(), mapped);
             }
         } catch (RuntimeException ignored) {
@@ -2791,6 +4009,13 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
 
     private String blankTo(String value, String fallback) { return value == null || value.isBlank() ? fallback : value.trim(); }
 
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) return value.trim();
+        }
+        return "";
+    }
+
     private java.util.Comparator<StayItem> stayComparator(String location, String sort) {
         if ("Property Name A-Z".equals(sort)) return java.util.Comparator.comparing(StayItem::name, String.CASE_INSENSITIVE_ORDER);
         if ("Budget First".equals(sort)) return java.util.Comparator.comparingInt(stay -> budgetRank(stay.budgetCategory()));
@@ -2807,8 +4032,9 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         rememberStayViewed(stay);
         Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle("Stay Details"); dialog.setHeaderText(null);
         ButtonType continueBooking = new ButtonType("Continue to Booking");
-        ImageView image = createImage(stay.localImagePath(), 650, 265, 0.54, 0.50);
+        ImageView image = stayImage(stay, 650, 265);
         FlowPane facilities = new FlowPane(6, 6); stay.facilities().forEach(item -> facilities.getChildren().add(badge(item)));
+        FlowPane gallery = new FlowPane(8, 8); stay.galleryImages().forEach(photo -> gallery.getChildren().add(ImageMediaHelper.imageView(photo.url(), 140, 92))); if (gallery.getChildren().isEmpty()) gallery.getChildren().add(muted("No additional stay photos available yet."));
         Button map = new Button("View on Google Maps"); map.getStyleClass().add("pilgrim-small-action"); map.setOnAction(event -> openStayMap(stay));
         Button save = new Button(stayWishlist.containsKey(stay.stableId()) ? "♥ Saved" : "♡ Save to Wishlist");
         save.getStyleClass().add("pilgrim-small-action"); save.setOnAction(event -> toggleStayWishlist(stay, save));
@@ -2819,10 +4045,10 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         option.getStyleClass().add("stay-option-card");
         VBox content = new VBox(12, image, label(stay.name(), "stay-property-name"), muted(stay.category() + " • " + stay.area()), muted(stay.address()),
                 paragraph(stay.shortDescription()), sectionTitle("Stay Overview"), muted(staySearchSummary(criteria)), muted("Budget: " + stay.budgetCategory()), muted(stay.priceInfo().isBlank() ? "Price available during booking" : stay.priceInfo()), sectionTitle("Facilities"), facilities,
-                sectionTitle("Location"), new HBox(8, save, map), option);
+                sectionTitle("Photos"), gallery, sectionTitle("Location"), new HBox(8, save, map), option);
         content.setPadding(new Insets(4));
         ScrollPane scroll = new ScrollPane(content); scroll.setFitToWidth(true); scroll.setPrefViewportHeight(560); scroll.getStyleClass().add("stay-dialog-scroll");
-        dialog.getDialogPane().setContent(scroll); dialog.getDialogPane().setPrefSize(900, 650); dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CLOSE, continueBooking);
+        dialog.getDialogPane().setContent(scroll); dialog.getDialogPane().setPrefSize(900, 650); dialog.getDialogPane().getButtonTypes().addAll(ButtonType.CLOSE, continueBooking); AppUi.styleDialog(dialog, root.getScene() == null ? null : root.getScene().getWindow(), "stay-dialog-pane", continueBooking);
         dialog.showAndWait().filter(choice -> choice == continueBooking).ifPresent(choice -> showStayBookingDetails(stay, criteria));
     }
 
@@ -2833,7 +4059,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         TextField mobile = AppUi.textField("Mobile Number");
         TextField email = AppUi.textField("Email Address");
         TextField request = AppUi.textField("Special Request (optional)");
-        ImageView image = createImage(stay.localImagePath(), 170, 105, 0.54, 0.50);
+        ImageView image = stayImage(stay, 170, 105);
         VBox property = new VBox(4, strong(stay.name()), muted(stay.category() + " • " + stay.area()), muted(stay.address()));
         HBox propertySummary = new HBox(14, image, property); propertySummary.setAlignment(Pos.CENTER_LEFT);
         VBox content = new VBox(14, propertySummary, sectionTitle("Trip Details"), muted(staySearchSummary(criteria)),
@@ -2841,7 +4067,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 muted("Personal details are used only for this booking request and are not logged by the Stay page."));
         content.getStyleClass().add("stay-booking-summary"); dialog.getDialogPane().setContent(content); dialog.getDialogPane().setPrefSize(760, 620);
         ButtonType back = new ButtonType("Back", javafx.scene.control.ButtonBar.ButtonData.BACK_PREVIOUS);
-        ButtonType review = new ButtonType("Review Booking"); dialog.getDialogPane().getButtonTypes().addAll(back, review);
+        ButtonType review = new ButtonType("Review Booking"); dialog.getDialogPane().getButtonTypes().addAll(back, review); AppUi.styleDialog(dialog, root.getScene() == null ? null : root.getScene().getWindow(), "stay-dialog-pane", review);
         dialog.showAndWait().filter(choice -> choice == review).ifPresent(choice -> {
             StayGuestDetails guest = new StayGuestDetails(name.getText(), mobile.getText(), email.getText(), request.getText());
             if (!validStayGuest(guest)) { showStayBookingDetails(stay, criteria); return; }
@@ -2858,7 +4084,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
 
     private void showStayBookingSummary(StayItem stay, StayCriteria criteria, StayGuestDetails guest) {
         Dialog<ButtonType> dialog = new Dialog<>(); dialog.setTitle("Review Your Booking"); dialog.setHeaderText(null);
-        ImageView image = createImage(stay.localImagePath(), 180, 108, 0.54, 0.50);
+        ImageView image = stayImage(stay, 180, 108);
         VBox property = new VBox(4, strong(stay.name()), muted(stay.area() + ", Nashik"), muted(stay.category()));
         HBox propertySummary = new HBox(14, image, property); propertySummary.setAlignment(Pos.CENTER_LEFT);
         VBox summary = new VBox(11, sectionTitle("Review Your Booking"), propertySummary, sectionTitle("Your Trip"),
@@ -2870,7 +4096,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
                 muted("Online payment is available only after the booking server resolves an approved stay option, live price and availability."));
         summary.getStyleClass().add("stay-booking-summary"); dialog.getDialogPane().setContent(summary); dialog.getDialogPane().setPrefSize(760, 650);
         ButtonType back = new ButtonType("Back", javafx.scene.control.ButtonBar.ButtonData.BACK_PREVIOUS);
-        ButtonType proceed = new ButtonType("Proceed to Payment"); dialog.getDialogPane().getButtonTypes().addAll(back, proceed);
+        ButtonType proceed = new ButtonType("Proceed to Payment"); dialog.getDialogPane().getButtonTypes().addAll(back, proceed); AppUi.styleDialog(dialog, root.getScene() == null ? null : root.getScene().getWindow(), "stay-dialog-pane", proceed);
         Button paymentButton = (Button) dialog.getDialogPane().lookupButton(proceed);
         boolean trustedPayment = com.simhastha.payment.PaymentCatalog.find(stay.stableId())
                 .map(item -> item.moduleType() == com.simhastha.payment.PaymentModuleType.STAY).orElse(false);
@@ -2890,6 +4116,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     private String stayDate(java.time.LocalDate date) { return date == null ? "Not selected" : date.getDayOfMonth() + " " + date.getMonth().toString().substring(0, 3); }
 
     private record StayCriteria(String location, java.time.LocalDate checkIn, java.time.LocalDate checkOut, String guests, String budget) {
+        private static StayCriteria empty() { return new StayCriteria("All Areas", null, null, "1 Room • 2 Guests", "Any Budget"); }
         private boolean hasDates() { return checkIn != null && checkOut != null && checkOut.isAfter(checkIn); }
         private long nights() { return hasDates() ? java.time.temporal.ChronoUnit.DAYS.between(checkIn, checkOut) : 0; }
         private StayCriteria withBudget(String secondaryBudget) { return new StayCriteria(location, checkIn, checkOut, guests, secondaryBudget == null ? "Any Budget" : secondaryBudget); }
@@ -2899,15 +4126,15 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
 
     private record StayItem(String name, String category, String area, String address, String imageUrl, String localImagePath, String mapQuery,
             String budgetCategory, java.util.List<String> facilities, String shortDescription, boolean locallyApprovedSeed, String priceInfo,
-            String stableId) {
+            String stableId, java.util.List<com.simhastha.model.CloudImage> galleryImages) {
         private StayItem(String name, String category, String area, String address, String imageUrl, String localImagePath, String mapQuery,
                 String budgetCategory, java.util.List<String> facilities, String shortDescription, boolean locallyApprovedSeed) {
-            this(name, category, area, address, imageUrl, localImagePath, mapQuery, budgetCategory, facilities, shortDescription, locallyApprovedSeed, "", "");
+            this(name, category, area, address, imageUrl, localImagePath, mapQuery, budgetCategory, facilities, shortDescription, locallyApprovedSeed, "", "", List.of());
         }
 
         private StayItem(String name, String category, String area, String address, String imageUrl, String localImagePath, String mapQuery,
                 String budgetCategory, java.util.List<String> facilities, String shortDescription, boolean locallyApprovedSeed, String priceInfo) {
-            this(name, category, area, address, imageUrl, localImagePath, mapQuery, budgetCategory, facilities, shortDescription, locallyApprovedSeed, priceInfo, "");
+            this(name, category, area, address, imageUrl, localImagePath, mapQuery, budgetCategory, facilities, shortDescription, locallyApprovedSeed, priceInfo, "", List.of());
         }
 
         public String stableId() {
@@ -2942,20 +4169,660 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     }
 
     private VBox schedulePage() {
-        if (!AppDataStore.items("schedule").isEmpty()) {
-            return pageShell("KUMBH ALL DAY SCHEDULE", "Daily movement, snan, seva and security schedule.",
-                    filterRow("Select Date", "Select Location", "Filter by Category", "Download Schedule"),
-                    adminControlledGrid("schedule", "Official Update"));
+        schedulePageActive = true;
+        scheduleDateArea = new VBox();
+        scheduleFeatureArea = new VBox();
+        scheduleFilterArea = new VBox();
+        scheduleTimelineArea = new VBox();
+        VBox content = new VBox(16, topControls(), scheduleHeader(), scheduleDateArea, scheduleFeatureArea,
+                scheduleFilterArea, scheduleTimelineArea, scheduleInfoStrip());
+        content.getStyleClass().addAll("pilgrim-dashboard-main", "schedule-page");
+        content.setPadding(new Insets(12, 22, 28, 12));
+        startScheduleRefresh();
+        scheduleService.addLocalChangeListener(scheduleLocalChangeListener);
+        refreshSchedule();
+        return content;
+    }
+
+    private VBox scheduleHeader() {
+        Label title = label("All Day Schedule", "schedule-page-title");
+        Label subtitle = label("Plan your day at Simhastha", "schedule-page-subtitle");
+        Region divider = new Region();
+        divider.getStyleClass().add("schedule-divider");
+        return new VBox(3, title, subtitle, divider);
+    }
+
+    private HBox scheduleDateControls() {
+        Label calendar = AppUi.symbolIcon("\uE787", "schedule-date-icon");
+        boolean today = selectedScheduleDate.equals(java.time.LocalDate.now());
+        String dateText = today ? "Today, " + formatScheduleDate(selectedScheduleDate)
+                : selectedScheduleDate.format(java.time.format.DateTimeFormatter.ofPattern("EEEE, d MMM yyyy"));
+        VBox dateCopy = new VBox(1, label(today ? "TODAY" : selectedScheduleDate.getDayOfWeek().toString(),
+                "schedule-date-caption"), label(dateText, "schedule-date-value"));
+        DatePicker picker = new DatePicker(selectedScheduleDate);
+        picker.getStyleClass().add("schedule-date-picker");
+        picker.setOnAction(event -> {
+            if (picker.getValue() != null) {
+                changeScheduleDate(picker.getValue());
+            }
+        });
+        HBox dateCard = new HBox(9, calendar, dateCopy, picker);
+        dateCard.getStyleClass().add("schedule-date-card");
+        dateCard.setAlignment(Pos.CENTER_LEFT);
+        Button previous = scheduleIconButton("\uE72B", "Previous day");
+        Button next = scheduleIconButton("\uE72A", "Next day");
+        previous.setOnAction(event -> changeScheduleDate(selectedScheduleDate.minusDays(1)));
+        next.setOnAction(event -> changeScheduleDate(selectedScheduleDate.plusDays(1)));
+        Button mySchedule = new Button("*  My Schedule");
+        mySchedule.getStyleClass().add("schedule-my-button");
+        mySchedule.setOnAction(event -> showMySchedule());
+        HBox row = new HBox(8, dateCard, previous, next, createSpacer(), mySchedule);
+        row.getStyleClass().add("schedule-date-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private HBox scheduleFilterBar() {
+        HBox filters = new HBox(7);
+        String[] categories = { "All Events", "Snan", "Aarti", "Akhada", "Samaj", "Cultural", "Government", "Important" };
+        for (String category : categories) {
+            boolean selected = selectedScheduleCategory == null && "All Events".equals(category)
+                    || selectedScheduleCategory != null && selectedScheduleCategory.label().equals(category);
+            filters.getChildren().add(createFilterButton(category, selected));
         }
-        HBox body = new HBox(14, scheduleTable(),
-                new VBox(10,
-                        infoPanel("Today Highlights", "Morning snan guidance\nEvening aarti crowd movement\nNight patrol after 10 PM"),
-                        infoPanel("Important Information", "Carry ID\nUse official route diversions\nKeep water with you"),
-                        infoPanel("Emergency Contacts", "112 Unified Emergency\n108 Ambulance\n100 Police"),
-                        infoPanel("Weather Update", "Demo weather panel for official advisory display")));
-        HBox.setHgrow(body.getChildren().get(0), Priority.ALWAYS);
-        return pageShell("KUMBH ALL DAY SCHEDULE", "Daily movement, snan, seva and security schedule.",
-                filterRow("Select Date", "Select Location", "Filter by Category", "Download Schedule"), body);
+        Button filter = new Button("\uE71C  Filter");
+        filter.getStyleClass().add("schedule-filter-button");
+        filter.setOnAction(event -> showScheduleDialog("Schedule filter",
+                "Use the category filters to narrow the displayed events."));
+        HBox row = new HBox(9, filters, createSpacer(), filter);
+        row.getStyleClass().add("schedule-filter-bar");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private Button createFilterButton(String text, boolean selected) {
+        Button button = new Button(text);
+        button.getStyleClass().addAll("schedule-filter-button",
+                selected ? "schedule-filter-selected" : "schedule-filter-idle");
+        button.setOnAction(event -> {
+            selectedScheduleCategory = "All Events".equals(text) ? null : ScheduleCategory.valueOf(text.toUpperCase());
+            refreshTimeline();
+            if (scheduleFilterArea != null) {
+                scheduleFilterArea.getChildren().setAll(scheduleFilterBar());
+            }
+        });
+        return button;
+    }
+
+    private void refreshSchedule() {
+        if (!schedulePageActive || scheduleDateArea == null || scheduleRefreshInFlight) {
+            return;
+        }
+        final long generation = scheduleRefreshGeneration;
+        final java.time.LocalDate requestedDate = selectedScheduleDate;
+        scheduleRefreshInFlight = true;
+        scheduleDateArea.getChildren().setAll(scheduleDateControls());
+        if (loadedScheduleEvents.isEmpty()) {
+            scheduleFeatureArea.getChildren().setAll(infoPanel("Loading schedule", "Loading official schedule..."));
+        }
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return new ScheduleLoad(scheduleService.eventsForDate(requestedDate),
+                        scheduleService.alertsForDate(requestedDate));
+            } catch (Exception exception) {
+                throw new java.util.concurrent.CompletionException(exception);
+            }
+        }, SCHEDULE_REFRESH_EXECUTOR).whenComplete((loaded, error) -> Platform.runLater(() -> {
+            if (!schedulePageActive) {
+                return;
+            }
+            if (generation != scheduleRefreshGeneration) {
+                scheduleRefreshInFlight = false;
+                refreshSchedule();
+                return;
+            }
+            scheduleRefreshInFlight = false;
+            if (error == null) {
+                loadedScheduleEvents = loaded.events();
+                loadedScheduleAlerts = loaded.alerts();
+                savedScheduleEvents.keySet().removeIf(id -> loadedScheduleEvents.stream()
+                        .noneMatch(event -> event.id().equals(id)));
+                loadedScheduleEvents.forEach(event -> {
+                    if (savedScheduleEvents.containsKey(event.id())) {
+                        savedScheduleEvents.put(event.id(), event);
+                    }
+                });
+            } else {
+                LOGGER.fine("Schedule could not be refreshed for " + requestedDate + ": " + error.getCause());
+            }
+            scheduleFeatureArea.getChildren().setAll(functionalFeatureCards());
+            scheduleFilterArea.getChildren().setAll(scheduleFilterBar());
+            refreshTimeline();
+        }));
+    }
+
+    private void refreshTimeline() {
+        if (scheduleTimelineArea != null) {
+            scheduleTimelineArea.getChildren().setAll(functionalScheduleTimeline());
+        }
+    }
+
+    private void changeScheduleDate(java.time.LocalDate date) {
+        selectedScheduleDate = date;
+        scheduleRefreshGeneration++;
+        scheduleRefreshInFlight = false;
+        refreshSchedule();
+    }
+
+    private HBox functionalFeatureCards() {
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        Optional<com.simhastha.schedule.ScheduleEvent> live = loadedScheduleEvents.stream()
+                .filter(item -> scheduleService.statusFor(item, now) == ScheduleStatus.LIVE_NOW)
+                .sorted(Comparator.comparing(com.simhastha.schedule.ScheduleEvent::important).reversed()
+                        .thenComparing(com.simhastha.schedule.ScheduleEvent::startTime))
+                .findFirst();
+        Optional<com.simhastha.schedule.ScheduleEvent> next = findNextEvent(now);
+        ScheduleAlert alert = loadedScheduleAlerts.stream().filter(ScheduleAlert::active)
+                .filter(item -> !selectedScheduleDate.equals(java.time.LocalDate.now())
+                        || item.startTime() == null || !java.time.LocalTime.now().isBefore(item.startTime()))
+                .filter(item -> item.endTime() == null || !selectedScheduleDate.equals(java.time.LocalDate.now())
+                        || !java.time.LocalTime.now().isAfter(item.endTime()))
+                .sorted(Comparator.comparingInt((ScheduleAlert item) -> switch (item.severity().toUpperCase()) {
+                    case "CRITICAL" -> 3;
+                    case "WARNING" -> 2;
+                    default -> 1;
+                }).reversed())
+                .findFirst().orElse(null);
+        VBox liveCard = live.map(item -> dynamicFeatureCard("LIVE NOW", item.title(), item.location(),
+                formatEventTime(item), "View Route", "schedule-feature-live", () -> handleRoute(item)))
+                .orElseGet(() -> dynamicFeatureCard("LIVE NOW", "No event live right now",
+                        "Check upcoming schedule below", "", "View Schedule", "schedule-feature-live", () -> { }));
+        VBox nextCard = next.map(item -> dynamicFeatureCard("UP NEXT", item.title(), item.location(),
+                formatEventTime(item),
+                selectedScheduleDate.equals(now.toLocalDate())
+                        ? formatCountdown(java.time.Duration.between(now,
+                                java.time.LocalDateTime.of(item.date(), item.startTime())))
+                        : "Upcoming",
+                "schedule-feature-next", () -> showEventDetails(item)))
+                .orElseGet(() -> dynamicFeatureCard("UP NEXT", "No more events today",
+                        "Check another date for events", "", "Schedule", "schedule-feature-next", () -> { }));
+        VBox alertCard = alert == null ? dynamicFeatureCard("IMPORTANT UPDATE",
+                "No important updates for this date.", "", "", "Details", "schedule-feature-alert", () -> { })
+                : dynamicFeatureCard("IMPORTANT UPDATE", alert.title(), alert.location(), "",
+                        "View Details", "schedule-feature-alert", () -> showAlertDetails(alert));
+        HBox row = new HBox(12, liveCard, nextCard, alertCard);
+        row.getStyleClass().add("schedule-feature-row");
+        return row;
+    }
+
+    private VBox dynamicFeatureCard(String heading, String title, String place, String detail, String action,
+            String style, Runnable handler) {
+        Button button = new Button(action);
+        button.getStyleClass().add("schedule-feature-action");
+        button.setOnAction(event -> handler.run());
+        VBox card = new VBox(7, label(heading, "schedule-feature-eyebrow"), label(title, "schedule-feature-title"),
+                label(place, "schedule-feature-detail"), label(detail, "schedule-feature-time"), button);
+        card.getStyleClass().addAll("schedule-feature-card", style);
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private GridPane functionalScheduleTimeline() {
+        GridPane grid = new GridPane();
+        grid.getStyleClass().add("schedule-timeline-grid");
+        ColumnConstraints first = new ColumnConstraints();
+        first.setPercentWidth(50);
+        first.setHgrow(Priority.ALWAYS);
+        ColumnConstraints second = new ColumnConstraints();
+        second.setPercentWidth(50);
+        second.setHgrow(Priority.ALWAYS);
+        grid.getColumnConstraints().addAll(first, second);
+        SchedulePeriod[] periods = SchedulePeriod.values();
+        for (int index = 0; index < periods.length; index++) {
+            grid.add(functionalScheduleSection(periods[index]), index % 2, index / 2);
+        }
+        return grid;
+    }
+
+    private VBox functionalScheduleSection(SchedulePeriod period) {
+        List<com.simhastha.schedule.ScheduleEvent> items = filteredScheduleEvents().stream()
+                .filter(item -> SchedulePeriod.from(item.startTime()) == period).toList();
+        VBox rows = new VBox(8);
+        if (items.isEmpty()) {
+            rows.getChildren().add(label("No events scheduled", "schedule-empty-text"));
+        } else {
+            items.forEach(item -> rows.getChildren().add(functionalEventRow(item)));
+        }
+        VBox card = new VBox(12, new VBox(2, label(period.title(), "schedule-section-title"),
+                label(period.duration(), "schedule-section-duration")), rows);
+        card.getStyleClass().add("schedule-section-card");
+        return card;
+    }
+
+    private HBox functionalEventRow(com.simhastha.schedule.ScheduleEvent item) {
+        ScheduleStatus status = scheduleService.statusFor(item, java.time.LocalDateTime.now());
+        VBox time = new VBox(1, label(formatTime(item.startTime()), "schedule-event-time"),
+                label("- " + formatTime(item.endTime()), "schedule-event-end"));
+        StackPane node = new StackPane(label(item.category().label().substring(0, 1), "schedule-event-icon"));
+        node.getStyleClass().add("schedule-event-node");
+        VBox details = new VBox(2, label(item.title(), "schedule-event-name"),
+                label(item.location(), "schedule-event-location"));
+        Button detailsButton = new Button("Details");
+        detailsButton.getStyleClass().add("schedule-event-action");
+        detailsButton.setOnAction(event -> showEventDetails(item));
+        Button routeButton = new Button("Route");
+        routeButton.getStyleClass().add("schedule-event-action");
+        routeButton.setOnAction(event -> handleRoute(item));
+        boolean saved = savedScheduleEvents.containsKey(item.id());
+        Button bell = new Button(saved ? "Saved" : AppUi.notificationBellGlyph());
+        bell.getStyleClass().addAll("schedule-icon-button", "schedule-event-bell");
+        if (saved) {
+            bell.getStyleClass().add("schedule-event-bell-saved");
+        }
+        bell.setOnAction(event -> toggleSavedEvent(item));
+        HBox row = new HBox(8, time, node, details, createStatusBadge(status), detailsButton, routeButton, bell);
+        row.getStyleClass().add("schedule-event-row");
+        if (status == ScheduleStatus.LIVE_NOW) {
+            row.getStyleClass().add("schedule-event-live");
+        }
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(details, Priority.ALWAYS);
+        return row;
+    }
+
+    private List<com.simhastha.schedule.ScheduleEvent> filteredScheduleEvents() {
+        return loadedScheduleEvents.stream()
+                .filter(item -> selectedScheduleCategory == null || item.category() == selectedScheduleCategory
+                        || selectedScheduleCategory == ScheduleCategory.IMPORTANT && item.important())
+                .sorted(Comparator.comparing(com.simhastha.schedule.ScheduleEvent::startTime))
+                .toList();
+    }
+
+    private Optional<com.simhastha.schedule.ScheduleEvent> findNextEvent(java.time.LocalDateTime now) {
+        return loadedScheduleEvents.stream()
+                .filter(item -> !item.cancelled()
+                        && (item.date().isAfter(now.toLocalDate())
+                                || item.date().equals(now.toLocalDate()) && item.startTime().isAfter(now.toLocalTime())))
+                .sorted(Comparator.comparing(com.simhastha.schedule.ScheduleEvent::date)
+                        .thenComparing(com.simhastha.schedule.ScheduleEvent::startTime))
+                .findFirst();
+    }
+
+    private void toggleSavedEvent(com.simhastha.schedule.ScheduleEvent item) {
+        if (savedScheduleEvents.containsKey(item.id())) {
+            savedScheduleEvents.remove(item.id());
+        } else {
+            savedScheduleEvents.put(item.id(), item);
+        }
+        refreshTimeline();
+    }
+
+    private void handleRoute(com.simhastha.schedule.ScheduleEvent item) {
+        if (item.latitude() != null || item.longitude() != null) {
+            if (item.latitude() == null || item.longitude() == null
+                    || !NashikLocationRegistry.validNashikPoint(item.latitude(), item.longitude())) {
+                showScheduleDialog("Location unavailable",
+                        "Location is outside the supported Nashik Simhastha area.");
+                return;
+            }
+        }
+        NashikLocationRegistry.resolve(item.locationId(), item.location(), item.latitude(), item.longitude())
+                .ifPresentOrElse(point -> showScheduleLocationMap(item, point),
+                        () -> showScheduleDialog("Location unavailable",
+                                "Accurate location is not available for this event yet."));
+    }
+
+    private void showScheduleLocationMap(com.simhastha.schedule.ScheduleEvent item,
+            NashikLocationRegistry.LocationPoint point) {
+        stopScheduleRefresh();
+        Button back = new Button("< Back to All Day Schedule");
+        back.getStyleClass().add("map-secondary-button");
+        back.setOnAction(event -> showModulePage("schedule"));
+        Button centerMarker = new Button("Center Marker");
+        centerMarker.getStyleClass().add("map-secondary-button");
+        Button copyCoordinates = new Button("Copy Coordinates");
+        copyCoordinates.getStyleClass().add("map-secondary-button");
+        copyCoordinates.setOnAction(event -> copyRouteCoordinates(item, point));
+        Button getRoute = new Button("Get Route");
+        getRoute.getStyleClass().add("map-open-button");
+        getRoute.setOnAction(event -> openUrl(googleMapsDirectionsUrl(point)));
+        Button openMap = new Button("Open in OpenStreetMap");
+        openMap.getStyleClass().add("map-open-button");
+        openMap.setOnAction(event -> openUrl("https://www.openstreetmap.org/?mlat=" + point.latitude()
+                + "&mlon=" + point.longitude() + "#map=16/" + point.latitude() + "/" + point.longitude()));
+        HBox tools = new HBox(8, back, createSpacer(), centerMarker, copyCoordinates, getRoute, openMap);
+        tools.getStyleClass().add("schedule-route-toolbar");
+        tools.setAlignment(Pos.CENTER_LEFT);
+
+        WebView mapView = new WebView();
+        mapView.getStyleClass().add("schedule-map-webview");
+        mapView.setContextMenuEnabled(false);
+        mapView.setMinHeight(430);
+        mapView.setPrefHeight(470);
+        mapView.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
+        WebEngine engine = mapView.getEngine();
+        Label loading = label("Loading OpenStreetMap...", "schedule-map-loading");
+        Label fallback = label("Map could not be loaded. Use Get Route to open navigation in your browser.",
+                "schedule-map-loading");
+        fallback.setVisible(false);
+        fallback.setManaged(false);
+        StackPane map = new StackPane(mapView, loading, fallback);
+        map.getStyleClass().add("schedule-map-shell");
+        map.setMinHeight(430);
+        map.setPrefHeight(470);
+        map.setMaxWidth(Double.MAX_VALUE);
+        mapView.prefWidthProperty().bind(map.widthProperty());
+        mapView.prefHeightProperty().bind(map.heightProperty());
+        VBox.setVgrow(map, Priority.ALWAYS);
+        engine.getLoadWorker().stateProperty().addListener((observable, oldState, newState) -> {
+            if (newState == javafx.concurrent.Worker.State.SUCCEEDED) {
+                loading.setVisible(false);
+                loading.setManaged(false);
+                refreshLeafletMapSize(engine);
+            } else if (newState == javafx.concurrent.Worker.State.FAILED
+                    || newState == javafx.concurrent.Worker.State.CANCELLED) {
+                loading.setVisible(false);
+                loading.setManaged(false);
+                fallback.setVisible(true);
+                fallback.setManaged(true);
+            }
+        });
+        engine.setOnError(event -> {
+            loading.setVisible(false);
+            loading.setManaged(false);
+            fallback.setVisible(true);
+            fallback.setManaged(true);
+        });
+        engine.loadContent(scheduleMapHtml(item, point));
+        centerMarker.setOnAction(event -> {
+            try {
+                engine.executeScript("if (window.simhasthaMap) { window.simhasthaMap.setView(["
+                        + point.latitude() + "," + point.longitude() + "], 16); window.simhasthaMarker.openPopup(); }");
+            } catch (RuntimeException ignored) {
+                refreshLeafletMapSize(engine);
+            }
+        });
+
+        VBox content = pageShell("Event Location", "Nashik Simhastha schedule destination", tools, map,
+                scheduleRouteQuickPanel(item, point), selectedScheduleEventCard(item));
+        root.setCenter(scroll(content));
+        Platform.runLater(() -> refreshLeafletMapSize(engine));
+    }
+
+    private void refreshLeafletMapSize(WebEngine engine) {
+        Runnable refresh = () -> {
+            try {
+                engine.executeScript("if (window.simhasthaMap) { window.simhasthaMap.invalidateSize(true); }");
+            } catch (RuntimeException ignored) {
+            }
+        };
+        Platform.runLater(refresh);
+        new Timeline(new KeyFrame(Duration.millis(250), event -> refresh.run()),
+                new KeyFrame(Duration.millis(800), event -> refresh.run())).play();
+    }
+
+    private HBox scheduleRouteQuickPanel(com.simhastha.schedule.ScheduleEvent item,
+            NashikLocationRegistry.LocationPoint point) {
+        HBox panel = new HBox(10,
+                createInfoCard("\uE81D", "Destination", item.location(), item.title()),
+                createInfoCard("\uE121", "Event Time", formatTime(item.startTime()), formatTime(item.endTime())),
+                createInfoCard("\uE8F4", "Coordinates", String.format(java.util.Locale.US, "%.5f, %.5f",
+                        point.latitude(), point.longitude()), "Nashik Simhastha area"),
+                createInfoCard("\uE8A7", "Browser Route", "Google Maps", "Uses your current location"));
+        panel.getStyleClass().add("schedule-route-summary");
+        panel.setAlignment(Pos.CENTER_LEFT);
+        return panel;
+    }
+
+    private VBox selectedScheduleEventCard(com.simhastha.schedule.ScheduleEvent item) {
+        StringBuilder detail = new StringBuilder();
+        detail.append(item.location())
+                .append("\nDate: ").append(formatScheduleDate(item.date()))
+                .append("\nTime: ").append(formatEventTime(item))
+                .append("\nCategory: ").append(item.category().label());
+        if (item.organizer() != null && !item.organizer().isBlank()) {
+            detail.append("\nOrganizer: ").append(item.organizer());
+        }
+        if (item.note() != null && !item.note().isBlank()) {
+            detail.append("\nImportant note: ").append(item.note());
+        }
+        VBox card = new VBox(7, sectionTitle("Selected Event"), strong(item.title()), paragraph(detail.toString()));
+        card.getStyleClass().addAll("pilgrim-panel", "schedule-selected-event-card");
+        return card;
+    }
+
+    private void copyRouteCoordinates(com.simhastha.schedule.ScheduleEvent item,
+            NashikLocationRegistry.LocationPoint point) {
+        javafx.scene.input.ClipboardContent content = new javafx.scene.input.ClipboardContent();
+        content.putString(String.format(java.util.Locale.US, "%s - %s: %.6f, %.6f",
+                item.title(), item.location(), point.latitude(), point.longitude()));
+        javafx.scene.input.Clipboard.getSystemClipboard().setContent(content);
+        showScheduleDialog("Coordinates copied", item.title() + "\n" + item.location() + "\n"
+                + String.format(java.util.Locale.US, "%.6f, %.6f", point.latitude(), point.longitude()));
+    }
+
+    private String googleMapsDirectionsUrl(NashikLocationRegistry.LocationPoint point) {
+        return "https://www.google.com/maps/dir/?api=1&destination=" + point.latitude() + "," + point.longitude();
+    }
+
+    private String scheduleMapHtml(com.simhastha.schedule.ScheduleEvent item,
+            NashikLocationRegistry.LocationPoint point) {
+        String popup = "<strong>" + htmlEscape(item.title()) + "</strong><br>"
+                + htmlEscape(item.location()) + "<br>"
+                + htmlEscape(formatEventTime(item)) + "<br>"
+                + htmlEscape(item.category().label());
+        return """
+                <!doctype html>
+                <html>
+                <head>
+                  <meta charset="utf-8">
+                  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+                  <style>
+                    html, body, #map { width: 100%%; height: 100%%; margin: 0; padding: 0; overflow: hidden; }
+                    body { background: #fff7e8; }
+                    .leaflet-container { background: #fff7e8; outline: 0; overflow: hidden; font: 12px/1.5 "Segoe UI", Arial, sans-serif; }
+                    .leaflet-pane, .leaflet-tile, .leaflet-marker-icon, .leaflet-marker-shadow,
+                    .leaflet-tile-container, .leaflet-pane > svg, .leaflet-pane > canvas,
+                    .leaflet-zoom-box, .leaflet-image-layer, .leaflet-layer { position: absolute; left: 0; top: 0; }
+                    .leaflet-container img.leaflet-tile { max-width: none !important; max-height: none !important; width: 256px; height: 256px; }
+                    .leaflet-tile-pane { z-index: 200; }
+                    .leaflet-overlay-pane { z-index: 400; }
+                    .leaflet-shadow-pane { z-index: 500; }
+                    .leaflet-marker-pane { z-index: 600; }
+                    .leaflet-tooltip-pane { z-index: 650; }
+                    .leaflet-popup-pane { z-index: 700; }
+                    .leaflet-control { position: relative; z-index: 800; pointer-events: auto; }
+                    .leaflet-top, .leaflet-bottom { position: absolute; z-index: 1000; pointer-events: none; }
+                    .leaflet-top { top: 0; }
+                    .leaflet-right { right: 0; }
+                    .leaflet-bottom { bottom: 0; }
+                    .leaflet-left { left: 0; }
+                    .leaflet-control { float: left; clear: both; }
+                    .leaflet-right .leaflet-control { float: right; }
+                    .leaflet-top .leaflet-control { margin-top: 10px; }
+                    .leaflet-left .leaflet-control { margin-left: 10px; }
+                    .leaflet-right .leaflet-control { margin-right: 10px; }
+                    .leaflet-bottom .leaflet-control { margin-bottom: 10px; }
+                    .leaflet-control-zoom a { background: #fff8ec; color: #5a0a0a; display: block; width: 30px; height: 30px; line-height: 30px; text-align: center; text-decoration: none; border-bottom: 1px solid #e4bd7d; font-size: 18px; font-weight: bold; }
+                    .leaflet-control-zoom { border: 1px solid #d98c27; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(94, 47, 11, .18); }
+                    .leaflet-control-attribution { background: rgba(255, 248, 236, .86); color: #5a0a0a; padding: 2px 7px; }
+                    .leaflet-popup { position: absolute; text-align: center; margin-bottom: 20px; }
+                    .leaflet-popup-content-wrapper { background: #fff8ec; color: #4a160d; border-radius: 8px; box-shadow: 0 3px 14px rgba(54, 20, 3, .22); border: 1px solid #e0ad60; }
+                    .leaflet-popup-content { color: #4a160d; font-family: "Segoe UI", Arial, sans-serif; line-height: 1.45; margin: 10px 12px; min-width: 150px; }
+                    .leaflet-popup-tip-container { width: 40px; height: 20px; position: absolute; left: 50%%; margin-left: -20px; overflow: hidden; pointer-events: none; }
+                    .leaflet-popup-tip { background: #fff8ec; width: 14px; height: 14px; padding: 1px; margin: -8px auto 0; transform: rotate(45deg); border-right: 1px solid #e0ad60; border-bottom: 1px solid #e0ad60; }
+                    .leaflet-popup-close-button { position: absolute; top: 0; right: 0; padding: 4px 7px 0 0; color: #8b3d0d; text-decoration: none; font-weight: bold; }
+                    .simhastha-marker { width: 34px !important; height: 34px !important; margin-left: -17px !important; margin-top: -34px !important; }
+                    .simhastha-marker-pin { width: 26px; height: 26px; border-radius: 50%% 50%% 50%% 0; background: #e87505; transform: rotate(-45deg); border: 3px solid #fff7e8; box-shadow: 0 2px 8px rgba(80, 18, 5, .35); }
+                    .simhastha-marker-pin:after { content: ""; position: absolute; width: 8px; height: 8px; border-radius: 50%%; background: #5a0a0a; top: 6px; left: 6px; }
+                  </style>
+                </head>
+                <body>
+                  <div id="map"></div>
+                  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                  <script>
+                    window.onerror = function () {
+                      document.body.innerHTML = '<div style="font-family: Segoe UI, Arial, sans-serif; color: #5a0a0a; padding: 18px;">Map could not be loaded. Use Get Route to open navigation in your browser.</div>';
+                    };
+                    const map = L.map('map', { zoomControl: true }).setView([%s, %s], 16);
+                    window.simhasthaMap = map;
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                      maxZoom: 19,
+                      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    }).addTo(map);
+                    const markerIcon = L.divIcon({
+                      className: 'simhastha-marker',
+                      html: '<div class="simhastha-marker-pin"></div>',
+                      iconSize: [34, 34],
+                      iconAnchor: [17, 34],
+                      popupAnchor: [0, -30]
+                    });
+                    const marker = L.marker([%s, %s], { icon: markerIcon }).addTo(map).bindPopup(%s);
+                    window.simhasthaMarker = marker;
+                    marker.openPopup();
+                    window.addEventListener('resize', function () { map.invalidateSize(true); });
+                    setTimeout(function () { map.invalidateSize(true); }, 150);
+                    setTimeout(function () { map.invalidateSize(true); }, 700);
+                  </script>
+                </body>
+                </html>
+                """.formatted(point.latitude(), point.longitude(), point.latitude(), point.longitude(),
+                jsString(popup));
+    }
+
+    private String htmlEscape(String value) {
+        return (value == null ? "" : value)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
+    }
+
+    private String jsString(String value) {
+        String escaped = (value == null ? "" : value)
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n")
+                .replace("</", "<\\/");
+        return "'" + escaped + "'";
+    }
+
+    private String formatScheduleDate(java.time.LocalDate date) {
+        return date.format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"));
+    }
+
+    private String formatTime(java.time.LocalTime time) {
+        return time.format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a"));
+    }
+
+    private String formatEventTime(com.simhastha.schedule.ScheduleEvent item) {
+        return formatTime(item.startTime()) + " - " + formatTime(item.endTime());
+    }
+
+    private String formatCountdown(java.time.Duration duration) {
+        long minutes = Math.max(0, duration.toMinutes());
+        return minutes < 60 ? "Starting in " + minutes + "m"
+                : "Starting in " + minutes / 60 + "h " + minutes % 60 + "m";
+    }
+
+    private Label createStatusBadge(ScheduleStatus status) {
+        String text = status == ScheduleStatus.LIVE_NOW ? "Live Now"
+                : status.name().substring(0, 1) + status.name().substring(1).toLowerCase().replace('_', ' ');
+        Label badge = label(text, "schedule-status-badge");
+        badge.getStyleClass().add(switch (status) {
+            case LIVE_NOW -> "schedule-status-live";
+            case COMPLETED -> "schedule-status-completed";
+            case CANCELLED -> "schedule-status-cancelled";
+            default -> "schedule-status-upcoming";
+        });
+        return badge;
+    }
+
+    private void startScheduleRefresh() {
+        stopScheduleRefresh();
+        schedulePageActive = true;
+        scheduleRefreshTimeline = new Timeline(new KeyFrame(Duration.seconds(30), event -> refreshSchedule()));
+        scheduleRefreshTimeline.setCycleCount(Animation.INDEFINITE);
+        scheduleRefreshTimeline.play();
+    }
+
+    private HBox scheduleInfoStrip() {
+        HBox strip = new HBox(10,
+                createInfoCard("\uE706", "Crowd Status", "Moderate", "Ramkund Area"),
+                createInfoCard("\uE708", "Weather", "26 C", "Partly Cloudy"),
+                createInfoCard("\uE7D4", "Drinking Water", "Available", "At all ghats"),
+                createInfoCard("\uE95E", "Medical Help", "24x7", "Near Ramkund"),
+                createInfoCard("\uE717", "Emergency Contact", "112 / 108", "Police / Ambulance"));
+        strip.getStyleClass().add("schedule-info-strip");
+        return strip;
+    }
+
+    private VBox createInfoCard(String icon, String title, String value, String detail) {
+        VBox card = new VBox(3, AppUi.symbolIcon(icon, "schedule-info-icon"), label(title, "schedule-info-title"),
+                label(value, "schedule-info-value"), label(detail, "schedule-info-detail"));
+        card.getStyleClass().add("schedule-info-card");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private Button scheduleIconButton(String icon, String tooltip) {
+        Button button = new Button(icon);
+        button.getStyleClass().add("schedule-icon-button");
+        button.setTooltip(new javafx.scene.control.Tooltip(tooltip));
+        return button;
+    }
+
+    private void showEventDetails(com.simhastha.schedule.ScheduleEvent item) {
+        showScheduleDialog(item.title(),
+                "Category: " + item.category().label()
+                        + "\nDate: " + formatScheduleDate(item.date())
+                        + "\nTime: " + formatEventTime(item)
+                        + "\nLocation: " + item.location()
+                        + "\nOrganizer: " + item.organizer()
+                        + "\nStatus: " + createStatusBadge(scheduleService.statusFor(item,
+                                java.time.LocalDateTime.now())).getText()
+                        + "\n\n" + item.description()
+                        + "\n\nNote: " + item.note());
+    }
+
+    private void showAlertDetails(ScheduleAlert alert) {
+        showScheduleDialog(alert.severity() + " Update",
+                alert.title() + "\n\n" + alert.message() + "\n\nLocation: " + alert.location());
+    }
+
+    private void showScheduleDialog(String title, String detail) {
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle(title);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.OK);
+        AppUi.styleDialog(dialog, root == null || root.getScene() == null ? null : root.getScene().getWindow(), "schedule-dialog", ButtonType.OK);
+        Label heading = label(title, "schedule-dialog-title");
+        Label body = label(detail, "schedule-dialog-detail");
+        body.setWrapText(true);
+        body.setMaxWidth(420);
+        ScrollPane bodyScroll = new ScrollPane(body);
+        bodyScroll.setFitToWidth(true);
+        bodyScroll.setMaxHeight(260);
+        bodyScroll.getStyleClass().add("schedule-dialog-scroll");
+        VBox content = new VBox(12, heading, bodyScroll);
+        content.getStyleClass().add("schedule-dialog-content");
+        dialog.getDialogPane().setContent(content);
+        dialog.showAndWait();
+    }
+
+    private void showMySchedule() {
+        String detail = savedScheduleEvents.isEmpty() ? "No events added to My Schedule yet."
+                : savedScheduleEvents.values().stream()
+                        .sorted(Comparator.comparing(com.simhastha.schedule.ScheduleEvent::date)
+                                .thenComparing(com.simhastha.schedule.ScheduleEvent::startTime))
+                        .map(item -> formatTime(item.startTime()) + "  " + item.title() + " - " + item.location())
+                        .collect(java.util.stream.Collectors.joining("\n"));
+        showScheduleDialog("My Schedule", detail);
+    }
+
+    private record ScheduleLoad(List<com.simhastha.schedule.ScheduleEvent> events, List<ScheduleAlert> alerts) {
     }
 
     private VBox businessPage() {
@@ -3166,7 +5033,10 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     }
 
     private Node announcementPage() {
-        return new UserAnnouncementView(this::showAnnouncementContent).page();
+        VBox page = new VBox(12, topControls(), new UserAnnouncementView(this::showAnnouncementContent).page());
+        page.getStyleClass().add("pilgrim-dashboard-main");
+        page.setPadding(new Insets(12, 22, 28, 12));
+        return page;
     }
 
     private void showAnnouncementContent(Node page) {
@@ -3175,6 +5045,220 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         } else {
             root.setCenter(scroll(page));
         }
+    }
+
+    private VBox faqPage() {
+        TextField search = AppUi.textField("Search questions...");
+        Button searchButton = new Button("Search");
+        searchButton.setGraphic(AppUi.symbolIcon("\uE721", "button-icon"));
+        searchButton.getStyleClass().add("faq-search-button");
+        HBox searchBar = new HBox(10, search, searchButton);
+        searchBar.getStyleClass().add("faq-search-bar");
+        searchBar.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(search, Priority.ALWAYS);
+
+        ObjectProperty<String> selectedCategory = new SimpleObjectProperty<>("All");
+        ObjectProperty<String> expandedFaqId = new SimpleObjectProperty<>("");
+        ObjectProperty<Boolean> showAll = new SimpleObjectProperty<>(false);
+        VBox categoryList = new VBox(6);
+        categoryList.getStyleClass().add("faq-category-list");
+        VBox questionList = new VBox(8);
+        questionList.getStyleClass().add("faq-question-list");
+
+        Runnable render = () -> {
+            renderFaqCategories(categoryList, selectedCategory);
+            renderFaqQuestions(questionList, selectedCategory.get(), search.getText(), expandedFaqId, showAll.get());
+        };
+        search.textProperty().addListener((observable, oldValue, newValue) -> {
+            expandedFaqId.set("");
+            showAll.set(false);
+            render.run();
+        });
+        search.setOnAction(event -> render.run());
+        searchButton.setOnAction(event -> render.run());
+        selectedCategory.addListener((observable, oldValue, newValue) -> {
+            expandedFaqId.set("");
+            showAll.set(false);
+            render.run();
+        });
+        expandedFaqId.addListener((observable, oldValue, newValue) -> render.run());
+        showAll.addListener((observable, oldValue, newValue) -> render.run());
+
+        FlowPane categoryCards = new FlowPane(10, 10,
+                faqCategoryCard("\uE946", "General", "General info & support", selectedCategory),
+                faqCategoryCard("\uE946", "Simhastha 2027", "Dates, plans, updates", selectedCategory),
+                faqCategoryCard("\uE707", "Ghats & Snan", "Bathing & rituals", selectedCategory),
+                faqCategoryCard("\uE806", "Travel & Transport", "Routes, bus, parking", selectedCategory),
+                faqCategoryCard("\uE809", "Stay & Accommodation", "Hotels and camps", selectedCategory),
+                faqCategoryCard("\uE707", "Puja & Rituals", "Puja slots and seva", selectedCategory),
+                faqCategoryCard("\uE95E", "Emergency & Safety", "Medical & safety", selectedCategory),
+                faqCategoryCard("\uE8A7", "Bookings & Payments", "Payments & tickets", selectedCategory));
+        categoryCards.getStyleClass().add("faq-category-cards");
+
+        Button contactSupport = new Button("Contact Emergency Desk");
+        contactSupport.setGraphic(AppUi.symbolIcon("\uE72A", "button-icon"));
+        contactSupport.getStyleClass().add("faq-support-button");
+        contactSupport.setMaxWidth(Double.MAX_VALUE);
+        contactSupport.setOnAction(event -> showModulePage("emergency"));
+        VBox helpCard = new VBox(8, AppUi.symbolIcon("\uE897", "faq-help-icon"),
+                strong("Still need help?"),
+                muted("24/7 support for emergency help, lost people/items, route changes and medical assistance."),
+                label("Emergency Desk  |  Response guidance  |  Official updates", "faq-support-meta"),
+                contactSupport);
+        helpCard.getStyleClass().add("faq-help-card");
+
+        Label allCategories = label("All Categories", "faq-side-title");
+        allCategories.setWrapText(false);
+        HBox sideHeader = new HBox(8, AppUi.symbolIcon("\uE9CE", "faq-panel-icon"),
+                allCategories, createSpacer(), badge(String.valueOf(faqEntries().size())));
+        sideHeader.setAlignment(Pos.CENTER_LEFT);
+        VBox left = new VBox(10, sideHeader, categoryList, helpCard);
+        left.getStyleClass().add("faq-side-panel");
+        left.setMinWidth(300);
+        left.setPrefWidth(330);
+
+        ComboBox<String> sort = profileCombo("Sort by", "Most Popular", "Recently Updated", "Category");
+        sort.setValue("Most Popular");
+        HBox listHeader = new HBox(10, createSpacer(), muted("Sort by:"), sort);
+        listHeader.setAlignment(Pos.CENTER_LEFT);
+        VBox right = new VBox(12, listHeader, questionList, loadMoreFaqButton(showAll));
+        right.getStyleClass().add("faq-main-panel");
+        HBox.setHgrow(right, Priority.ALWAYS);
+
+        HBox body = new HBox(14, left, right);
+        body.getStyleClass().add("faq-body");
+        render.run();
+
+        return pageShell("Frequently Asked Questions", "Find quick answers to common questions about Simhastha Connect.",
+                searchBar, categoryCards, body);
+    }
+
+    private Button faqCategoryCard(String icon, String title, String detail, ObjectProperty<String> selectedCategory) {
+        Button button = new Button();
+        button.setGraphic(AppUi.symbolIcon(icon, "faq-category-icon"));
+        button.setText(title + "\n" + detail);
+        button.getStyleClass().add("faq-category-card");
+        button.setWrapText(true);
+        button.setMinWidth(170);
+        button.setPrefWidth(176);
+        button.setOnAction(event -> selectedCategory.set(title));
+        return button;
+    }
+
+    private void renderFaqCategories(VBox list, ObjectProperty<String> selectedCategory) {
+        list.getChildren().clear();
+        List<String> categories = List.of("All", "General", "Simhastha 2027", "Ghats & Snan", "Travel & Transport",
+                "Stay & Accommodation", "Puja & Rituals", "Emergency & Safety", "Bookings & Payments");
+        for (String category : categories) {
+            long count = faqEntries().stream()
+                    .filter(entry -> "All".equals(category) || entry.category.equals(category))
+                    .filter(entry -> entry.active)
+                    .count();
+            Button button = new Button(category + "  " + count);
+            button.setGraphic(AppUi.symbolIcon(categoryIcon(category), "faq-list-icon"));
+            button.getStyleClass().add(category.equals(selectedCategory.get())
+                    ? "faq-category-list-active" : "faq-category-list-button");
+            button.setMaxWidth(Double.MAX_VALUE);
+            button.setWrapText(true);
+            button.setAlignment(Pos.CENTER_LEFT);
+            button.setOnAction(event -> selectedCategory.set(category));
+            list.getChildren().add(button);
+        }
+    }
+
+    private void renderFaqQuestions(VBox list, String category, String query, ObjectProperty<String> expandedFaqId,
+            boolean showAll) {
+        list.getChildren().clear();
+        List<AppDataStore.FaqRecord> entries = faqEntries().stream()
+                .filter(entry -> entry.active)
+                .filter(entry -> "All".equals(category) || entry.category.equals(category))
+                .filter(entry -> query == null || query.isBlank()
+                        || (entry.question + " " + entry.answer).toLowerCase(java.util.Locale.ROOT)
+                                .contains(query.toLowerCase(java.util.Locale.ROOT)))
+                .sorted(Comparator.comparingInt(this::faqSortIndex))
+                .limit(showAll ? 200 : 8)
+                .toList();
+        for (int i = 0; i < entries.size(); i++) {
+            AppDataStore.FaqRecord entry = entries.get(i);
+            list.getChildren().add(faqQuestionRow(entry, entry.id.equals(expandedFaqId.get()), expandedFaqId));
+        }
+        if (entries.isEmpty()) {
+            list.getChildren().add(infoPanel("No questions found", "Try another keyword or category."));
+        }
+    }
+
+    private int faqSortIndex(AppDataStore.FaqRecord entry) {
+        try {
+            return Integer.parseInt(entry.sortOrder);
+        } catch (NumberFormatException ignored) {
+            return 99;
+        }
+    }
+
+    private VBox faqQuestionRow(AppDataStore.FaqRecord entry, boolean expanded, ObjectProperty<String> expandedFaqId) {
+        Label question = strong(entry.question);
+        question.setWrapText(true);
+        question.setMaxWidth(Double.MAX_VALUE);
+        Label control = AppUi.symbolIcon(expanded ? "\uE738" : "\uE710", "faq-expand-icon");
+        HBox title = new HBox(10, AppUi.symbolIcon(categoryIcon(entry.category), "faq-question-icon"), question,
+                createSpacer(), control);
+        title.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(question, Priority.ALWAYS);
+        VBox row = new VBox(8, title);
+        if (expanded) {
+            Label answer = muted(entry.answer);
+            answer.setWrapText(true);
+            answer.setMaxWidth(Double.MAX_VALUE);
+            answer.getStyleClass().add("faq-question-answer");
+            row.getChildren().add(answer);
+            row.getStyleClass().add("faq-question-row-expanded");
+        } else {
+            row.getStyleClass().add("faq-question-row");
+        }
+        row.setOnMouseClicked(event -> expandedFaqId.set(expanded ? "" : entry.id));
+        return row;
+    }
+
+    private void showFaqDetails(AppDataStore.FaqRecord entry) {
+        Button back = new Button("\u2190 Back to FAQs");
+        back.getStyleClass().add("pilgrim-small-action");
+        back.setOnAction(event -> showModulePage("faq"));
+        VBox detailPage = new VBox(14,
+                back,
+                new HBox(10, badge(entry.category), badge(entry.active ? "Published" : "Draft")),
+                sectionTitle(entry.question),
+                paragraph(entry.answer),
+                infoPanel("Need More Help",
+                        "Use Emergency, Announcement, Transport or Contact Support modules for live Simhastha guidance."));
+        detailPage.getStyleClass().add("faq-detail-page");
+        root.setCenter(scroll(pageShell("FAQ Details", "Help Center  >  " + entry.category, detailPage)));
+    }
+
+    private Button loadMoreFaqButton(ObjectProperty<Boolean> showAll) {
+        Button button = new Button("Load More Questions");
+        button.setGraphic(AppUi.symbolIcon("\uE74B", "button-icon"));
+        button.getStyleClass().add("faq-load-more-button");
+        button.setOnAction(event -> {
+            showAll.set(true);
+            button.setText("Showing All Questions");
+        });
+        return button;
+    }
+
+    private String categoryIcon(String category) {
+        return switch (category) {
+            case "Ghats & Snan", "Puja & Rituals" -> "\uE707";
+            case "Travel & Transport" -> "\uE806";
+            case "Stay & Accommodation" -> "\uE809";
+            case "Emergency & Safety" -> "\uE95E";
+            case "Bookings & Payments" -> "\uE8A7";
+            case "Simhastha 2027" -> "\uE946";
+            default -> "\uE9CE";
+        };
+    }
+
+    private List<AppDataStore.FaqRecord> faqEntries() {
+        return AppDataStore.faqs();
     }
 
     private VBox aboutPage() {
@@ -3199,7 +5283,8 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     private GridPane adminControlledGrid(String module, String action) {
         List<Node> cards = new java.util.ArrayList<>();
         for (AppDataStore.ServiceItem item : AppDataStore.items(module)) {
-            cards.add("business".equals(module) ? publicBusinessCard(item) : richCard(module, item.title, item.detail, action));
+            cards.add("business".equals(module) ? publicBusinessCard(item)
+                    : mediaRichCard(module, item, action));
         }
         if (cards.isEmpty()) {
             cards.add(infoPanel("No official records", "Admin-published information will appear here."));
@@ -3210,14 +5295,49 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     private VBox publicBusinessCard(AppDataStore.ServiceItem item) {
         Button details = new Button("View Details  >");
         details.getStyleClass().add("pilgrim-small-action");
-        details.setOnAction(event -> showInfo(item.title, item.detail));
+        details.setOnAction(event -> showBusinessDetails(item));
         Button book = new Button("Book Now  >");
         book.getStyleClass().add("pilgrim-small-action");
         book.setOnAction(event -> createBusinessBooking(book, item));
-        VBox card = new VBox(8, new HBox(10, moduleIcon("business", "pilgrim-card-icon"), badge("Approved")),
+        ImageView image = ImageMediaHelper.imageView(item.imageUrl, 390, 150);
+        VBox card = new VBox(8, image, new HBox(10, moduleIcon("business", "pilgrim-card-icon"), badge("Approved")),
                 strong(item.title), paragraph(item.detail), new HBox(8, details, book));
         card.getStyleClass().add("pilgrim-rich-card");
         return card;
+    }
+
+    private ImageView stayImage(StayItem stay, double width, double height) {
+        return ImageMediaHelper.imageView(stay.imageUrl().isBlank() ? stay.localImagePath() : stay.imageUrl(), width, height);
+    }
+
+    private VBox mediaRichCard(String module, AppDataStore.ServiceItem item, String action) {
+        VBox card = richCard(module, item.title, item.detail, action);
+        if (item.imageUrl != null && !item.imageUrl.isBlank()) {
+            card.getChildren().add(1, ImageMediaHelper.imageView(item.imageUrl, 390, 150));
+        }
+        return card;
+    }
+
+    private void showBusinessDetails(AppDataStore.ServiceItem item) {
+        FlowPane gallery = new FlowPane(8, 8);
+        if (item.galleryImages.isEmpty()) {
+            gallery.getChildren().add(muted("No gallery photos available yet."));
+        } else {
+            item.galleryImages.forEach(image -> gallery.getChildren().add(ImageMediaHelper.imageView(image.url(), 150, 96)));
+        }
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.setTitle(item.title);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        VBox content = new VBox(12,
+                ImageMediaHelper.imageView(item.imageUrl, 560, 220),
+                label(item.title, "profile-dialog-title"),
+                paragraph(item.detail),
+                new HBox(8, badge("Verified"), badge("Location / Map"), badge("Booking")),
+                sectionTitle("Business Photos"),
+                gallery);
+        dialog.getDialogPane().setContent(content);
+        AppUi.styleDialog(dialog, root == null || root.getScene() == null ? null : root.getScene().getWindow(), "business-detail-dialog", ButtonType.CLOSE);
+        dialog.showAndWait();
     }
 
     private void createBusinessBooking(Button button, AppDataStore.ServiceItem item) {
@@ -3249,7 +5369,7 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
         VBox content = new VBox(10, topControls(), photoHeader(title, subtitle));
         content.getChildren().addAll(sections);
         content.getStyleClass().add("pilgrim-dashboard-main");
-        content.setPadding(new Insets(12, 22, 28, 22));
+        content.setPadding(new Insets(12, 22, 28, 12));
         return content;
     }
 
@@ -3411,10 +5531,83 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     }
 
     private Button roundButton(String icon, String text) {
-        Button button = new Button(icon);
+        boolean notification = "Notifications".equalsIgnoreCase(text);
+        Button button = new Button(notification ? AppUi.notificationBellGlyph() : icon);
         button.getStyleClass().add("pilgrim-round-icon-button");
-        button.setOnAction(event -> showInfo(text, text + " panel will open here."));
+        if (notification) {
+            button.getStyleClass().add("pilgrim-notification-button");
+            button.setOnAction(event -> showPilgrimNotificationCenter());
+        } else {
+            button.setOnAction(event -> showInfo(text, text + " panel will open here."));
+        }
         return button;
+    }
+
+    private StackPane notificationBell() {
+        List<NotificationCenter.NotificationItem> items = pilgrimNotifications();
+        int unread = (int) items.stream().filter(item -> !readNotifications.contains(item.id())).count();
+        return NotificationCenter.bell(unread, this::showPilgrimNotificationCenter);
+    }
+
+    private void showPilgrimNotificationCenter() {
+        NotificationCenter.show(root.getScene() == null ? null : root.getScene().getWindow(),
+                "Notifications", "Booking, official and safety updates", pilgrimNotifications(),
+                readNotifications, this::openNotificationTarget);
+    }
+
+    private List<NotificationCenter.NotificationItem> pilgrimNotifications() {
+        List<NotificationCenter.NotificationItem> items = new java.util.ArrayList<>();
+        AppSession.User user = AppSession.currentUser();
+        String uid = user == null ? "" : user.uid();
+        AppDataStore.bookingsForUser(uid).stream().limit(8).forEach(booking -> items.add(
+                new NotificationCenter.NotificationItem("booking-" + booking.bookingId,
+                        bookingTitle(booking), booking.title + " | " + booking.dateText + " | " + booking.location,
+                        "Booking", bookingSeverity(booking), "bookings")));
+        AppDataStore.lostFoundCases().stream()
+                .filter(item -> !"closed".equalsIgnoreCase(item.status))
+                .limit(4)
+                .forEach(item -> items.add(new NotificationCenter.NotificationItem("lost-" + item.caseId,
+                        "Lost & Found " + item.status, item.name + " | " + item.lastSeenLocation,
+                        "Safety", item.priority, "lost")));
+        AppDataStore.items("announcement").stream().limit(6).forEach(item -> items.add(
+                new NotificationCenter.NotificationItem("announcement-" + item.id, item.title, item.detail,
+                        "Official", "info", "announcement")));
+        if (items.isEmpty()) {
+            items.add(new NotificationCenter.NotificationItem("welcome-notification",
+                    "Welcome to Simhastha Connect",
+                    "Your booking, safety and official updates will appear here.", "System", "info", "home"));
+        }
+        return items;
+    }
+
+    private String bookingTitle(AppDataStore.BookingRecord booking) {
+        if ("PAID".equalsIgnoreCase(booking.paymentStatus) || "VERIFIED".equalsIgnoreCase(booking.paymentStatus)) {
+            return "Booking confirmed";
+        }
+        if ("FAILED".equalsIgnoreCase(booking.paymentStatus) || "PAYMENT_FAILED".equalsIgnoreCase(booking.bookingStatus)) {
+            return "Payment needs attention";
+        }
+        return "Booking update";
+    }
+
+    private String bookingSeverity(AppDataStore.BookingRecord booking) {
+        if ("FAILED".equalsIgnoreCase(booking.paymentStatus) || "PAYMENT_FAILED".equalsIgnoreCase(booking.bookingStatus)) {
+            return "failed";
+        }
+        if ("PENDING".equalsIgnoreCase(booking.paymentStatus) || booking.bookingStatus.toUpperCase().contains("PENDING")) {
+            return "pending";
+        }
+        return "confirmed";
+    }
+
+    private void openNotificationTarget(String target) {
+        if ("profile".equals(target)) {
+            showProfilePage();
+        } else if ("home".equals(target)) {
+            showHomePage();
+        } else {
+            showModulePage(target);
+        }
     }
 
     private Button arrowAction(String text) {
@@ -3487,11 +5680,11 @@ return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and inform
     private record GhatCardCacheEntry(Ghat ghat, VBox card) { }
 
     private void showInfo(String title, String message) {
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle(title);
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        alert.showAndWait();
+        AppUi.showInfo(title, message, root == null || root.getScene() == null ? null : root.getScene().getWindow());
+    }
+
+    private void styleProfileDialog(Dialog<?> dialog, ButtonType primaryAction) {
+        AppUi.styleDialog(dialog, root == null || root.getScene() == null ? null : root.getScene().getWindow(), "profile-dialog-pane", primaryAction);
     }
 
     private void addTheme(Scene scene) {

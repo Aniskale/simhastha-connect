@@ -1,5 +1,9 @@
 package com.simhastha.view;
 
+import com.simhastha.config.CloudinaryFolders;
+import com.simhastha.model.CloudinaryUploadResult;
+import com.simhastha.service.CloudinaryService;
+import java.io.File;
 import java.util.concurrent.CompletableFuture;
 
 public final class AuthService {
@@ -67,7 +71,9 @@ public final class AuthService {
                         profile.role(),
                         auth.idToken,
                         profile.name(),
-                        profile.status());
+                        profile.status(),
+                        profile.profilePhotoUrl(),
+                        profile.profilePhotoPublicId());
                 AppSession.set(user);
                 AppDataStore.refreshFirebaseData(auth.idToken);
                 return AuthOutcome.success(user);
@@ -82,6 +88,11 @@ public final class AuthService {
     }
 
     public static CompletableFuture<AuthOutcome> registerUser(String name, String mobile, String email, String password) {
+        return registerUser(name, mobile, email, password, null);
+    }
+
+    public static CompletableFuture<AuthOutcome> registerUser(String name, String mobile, String email, String password,
+            File profilePhotoFile) {
         return CompletableFuture.supplyAsync(() -> {
             if (!CONFIG.isEnabled()) {
                 return AuthOutcome.failure("Firebase is not enabled. Check firebase.properties.");
@@ -92,10 +103,19 @@ public final class AuthService {
                     return AuthOutcome.failure(auth.errorMessage);
                 }
 
+                String profilePhotoUrl = "";
+                String profilePhotoPublicId = "";
+                if (profilePhotoFile != null) {
+                    CloudinaryUploadResult photo = new CloudinaryService().uploadImage(profilePhotoFile,
+                            CloudinaryFolders.USER_PROFILE);
+                    profilePhotoUrl = photo.getSecureUrl();
+                    profilePhotoPublicId = photo.getPublicId();
+                }
                 FirestoreGateway.UserProfile profile = new FirestoreGateway.UserProfile(
-                        auth.uid, name, auth.email, mobile, "user", "active");
+                        auth.uid, name, auth.email, mobile, "user", "active", profilePhotoUrl, profilePhotoPublicId);
                 FIRESTORE.saveUserProfile(profile, auth.idToken);
-                AppSession.set(new AppSession.User(auth.uid, auth.email, "user", auth.idToken, name, "active"));
+                AppSession.set(new AppSession.User(auth.uid, auth.email, "user", auth.idToken, name, "active",
+                        profile.profilePhotoUrl(), profile.profilePhotoPublicId()));
                 AppDataStore.refreshFirebaseData(auth.idToken);
                 return AuthOutcome.success(AppSession.currentUser());
             } catch (Exception exception) {
@@ -114,6 +134,18 @@ public final class AuthService {
                 FirebaseAuthGateway.AuthResult auth = AUTH.register(account.email, password);
                 if (!auth.success) {
                     return AuthOutcome.failure(auth.errorMessage);
+                }
+
+                CloudinaryService cloudinary = new CloudinaryService();
+                if (account.logoFile != null) {
+                    CloudinaryUploadResult logo = cloudinary.uploadImage(account.logoFile, CloudinaryFolders.BUSINESS_LOGO);
+                    account.logoUrl = logo.getSecureUrl();
+                    account.logoPublicId = logo.getPublicId();
+                }
+                if (account.coverFile != null) {
+                    CloudinaryUploadResult cover = cloudinary.uploadImage(account.coverFile, CloudinaryFolders.BUSINESS_GALLERY);
+                    account.coverPhotoUrl = cover.getSecureUrl();
+                    account.coverPhotoPublicId = cover.getPublicId();
                 }
 
                 FirestoreGateway.UserProfile profile = new FirestoreGateway.UserProfile(
@@ -173,6 +205,34 @@ public final class AuthService {
         });
     }
 
+    public static CompletableFuture<AuthOutcome> changePassword(String currentPassword, String newPassword) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (!CONFIG.isEnabled()) {
+                return AuthOutcome.failure("Firebase is not enabled. Check firebase.properties.");
+            }
+            AppSession.User user = AppSession.currentUser();
+            if (user == null || user.email() == null || user.email().isBlank()) {
+                return AuthOutcome.failure("Please login again before changing your password.");
+            }
+            try {
+                FirebaseAuthGateway.AuthResult login = AUTH.login(user.email(), currentPassword);
+                if (!login.success) {
+                    return AuthOutcome.failure("Current password is incorrect.");
+                }
+                FirebaseAuthGateway.AuthResult update = AUTH.updatePassword(login.idToken, newPassword);
+                if (!update.success) {
+                    return AuthOutcome.failure(update.errorMessage);
+                }
+                AppSession.User updated = new AppSession.User(user.uid(), user.email(), user.role(), update.idToken,
+                        user.displayName(), user.status(), user.profilePhotoUrl(), user.profilePhotoPublicId());
+                AppSession.set(updated);
+                return AuthOutcome.success(updated);
+            } catch (Exception exception) {
+                return AuthOutcome.failure("Password could not be changed. Check internet and try again.");
+            }
+        });
+    }
+
     public static CompletableFuture<AuthOutcome> loginWithGoogleIdToken(String googleIdToken) {
         return CompletableFuture.supplyAsync(() -> {
             if (!CONFIG.isEnabled()) {
@@ -191,7 +251,8 @@ public final class AuthService {
                 }
 
                 AppSession.User user = new AppSession.User(
-                        auth.uid, auth.email, profile.role(), auth.idToken, profile.name(), profile.status());
+                        auth.uid, auth.email, profile.role(), auth.idToken, profile.name(), profile.status(),
+                        profile.profilePhotoUrl(), profile.profilePhotoPublicId());
                 AppSession.set(user);
                 AppDataStore.refreshFirebaseData(auth.idToken);
                 return AuthOutcome.success(user);

@@ -19,7 +19,12 @@ public final class AppSession {
         currentUser = null;
     }
 
-    public record User(String uid, String email, String role, String idToken, String displayName, String status) {
+    public record User(String uid, String email, String role, String idToken, String displayName, String status,
+            String profilePhotoUrl, String profilePhotoPublicId) {
+        public User(String uid, String email, String role, String idToken, String displayName, String status) {
+            this(uid, email, role, idToken, displayName, status, "", "");
+        }
+
         public boolean isAdmin() {
             return "admin".equals(role);
         }

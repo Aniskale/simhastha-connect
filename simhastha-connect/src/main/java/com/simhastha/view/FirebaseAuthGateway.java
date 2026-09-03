@@ -23,6 +23,9 @@ public final class FirebaseAuthGateway {
     private static final String SIGN_IN_WITH_IDP_URL =
             "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp?key=%s";
 
+    private static final String ACCOUNT_UPDATE_URL =
+            "https://identitytoolkit.googleapis.com/v1/accounts:update?key=%s";
+
     private final FirebaseConfig config;
 
     private final HttpClient client = HttpClient.newBuilder()
@@ -106,6 +109,22 @@ public final class FirebaseAuthGateway {
 
         return sendAuthRequest(
                 String.format(SIGN_IN_WITH_IDP_URL, config.apiKey()),
+                json);
+    }
+
+    public AuthResult updatePassword(String idToken, String newPassword)
+            throws IOException, InterruptedException {
+
+        String json = """
+                {
+                  "idToken":"%s",
+                  "password":"%s",
+                  "returnSecureToken":true
+                }
+                """.formatted(escape(idToken), escape(newPassword));
+
+        return sendAuthRequest(
+                String.format(ACCOUNT_UPDATE_URL, config.apiKey()),
                 json);
     }
 

@@ -360,6 +360,14 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }
+    // ================= GHATS =================
+
+match /ghats/{ghatId} {
+  allow read: if isAdmin()
+    || (isSignedIn() && approvedPublic());
+
+  allow create, update, delete: if isAdmin();
+}
 
     match /{collection}/{id} {
 

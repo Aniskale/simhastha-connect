@@ -19,7 +19,7 @@ public final class GhatImageService {
 
     public ImageView createView(Ghat ghat, double width, double height) {
         String source = sourceFor(ghat);
-        System.out.println("IMAGE RESOLVER SOURCE = " + source);
+        LOGGER.fine("Ghat image resolver source: " + source);
         Image image = imageFor(source, width, height);
         ImageView view = new ImageView(image == null ? fallback(width, height) : image);
         view.setFitWidth(width); view.setFitHeight(height); view.setPreserveRatio(true); view.setSmooth(true);

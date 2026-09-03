@@ -55,7 +55,7 @@ public final class LocalGhatOverrideStore {
         GhatOperationalState state = ghat.operationalState();
         return "{" + fields(
                 pair("id", ghat.id()), pair("name", ghat.name()), pair("area", ghat.area()), pair("description", ghat.description()),
-                pair("imageUrl", ghat.imageUrl()), pair("latitude", ghat.latitude()), pair("longitude", ghat.longitude()),
+                pair("imageUrl", ghat.imageUrl()), pair("imagePublicId", ghat.imagePublicId()), pair("latitude", ghat.latitude()), pair("longitude", ghat.longitude()),
                 pair("entryLatitude", ghat.entryLatitude()), pair("entryLongitude", ghat.entryLongitude()),
                 pair("operationalStatus", ghat.operationalStatus().name()), pair("crowdLevel", ghat.crowdLevel().name()), pair("estimatedWait", ghat.estimatedWaitMinutes()),
                 pair("bathingAvailable", ghat.bathingAvailable()), pair("walkingDifficulty", ghat.walking().difficulty().name()),
@@ -90,7 +90,7 @@ public final class LocalGhatOverrideStore {
                 GhatOperationalState.CleaningStatus.NORMAL, value(json, "restriction"),
                 new GhatOperationalState.PriorityAlert(enumValue(GhatOperationalState.AlertPriority.class, value(json, "alertPriority"), GhatOperationalState.AlertPriority.INFO), value(json, "alert")), "");
         return new Ghat(value(json, "id"), value(json, "name"), value(json, "area"), value(json, "description"), decimal(json, "latitude"), decimal(json, "longitude"),
-                decimal(json, "entryLatitude"), decimal(json, "entryLongitude"), value(json, "imageUrl"),
+                decimal(json, "entryLatitude"), decimal(json, "entryLongitude"), value(json, "imageUrl"), value(json, "imagePublicId"),
                 enumValue(Ghat.OperationalStatus.class, value(json, "operationalStatus"), Ghat.OperationalStatus.INFORMATION_ONLY),
                 enumValue(Ghat.CrowdLevel.class, value(json, "crowdLevel"), Ghat.CrowdLevel.UNKNOWN), integer(json, "estimatedWait"), bool(json, "bathingAvailable"), walking,
                 split(value(json, "facilities")), Ghat.Weather.unavailable(), new Ghat.History(value(json, "history"), value(json, "significance"), value(json, "simhastha"), "", "", "", ""),

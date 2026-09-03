@@ -1,5 +1,6 @@
 package com.simhastha.view;
 
+import com.simhastha.model.CloudImage;
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
 import com.simhastha.service.GhatRepository;
@@ -55,7 +56,7 @@ public final class FirestoreGateway implements GhatRepository {
                         java.time.LocalTime.parse(field(fields, "endTime")), field(fields, "description"), field(fields, "organizer"),
                         "true".equals(boolField(fields, "important")), field(fields, "note"), "CANCELLED".equalsIgnoreCase(field(fields, "status")),
                         nullableDouble(numberField(fields, "latitude")), nullableDouble(numberField(fields, "longitude")), field(fields, "locationId")));
-            } catch (RuntimeException ignored) { System.err.println("Skipping malformed schedule event " + document.id); }
+            } catch (RuntimeException ignored) { LOGGER.fine("Skipping malformed schedule event " + document.id); }
         }
         return result.stream().sorted(java.util.Comparator.comparing(ScheduleEvent::startTime)).toList();
     }
@@ -68,7 +69,7 @@ public final class FirestoreGateway implements GhatRepository {
             try { result.add(new ScheduleAlert(valueOr(document.id, field(fields, "alertId")), field(fields, "title"), field(fields, "message"),
                     field(fields, "location"), date, parseTime(field(fields, "startTime")), parseTime(field(fields, "endTime")),
                     valueOr("INFO", field(fields, "severity")), !"false".equals(boolField(fields, "active"))));
-            } catch (RuntimeException ignored) { System.err.println("Skipping malformed schedule alert " + document.id); }
+            } catch (RuntimeException ignored) { LOGGER.fine("Skipping malformed schedule alert " + document.id); }
         }
         return result;
     }
@@ -78,7 +79,7 @@ public final class FirestoreGateway implements GhatRepository {
             return loadCollectionDocuments(collection, idToken);
         } catch (IOException exception) {
             AppSession.User user = AppSession.currentUser();
-            System.err.println("Schedule Firestore read failed: collection=" + collection + ", status=" + exception.getMessage()
+            LOGGER.fine("Schedule Firestore read failed: collection=" + collection + ", status=" + exception.getMessage()
                     + ", tokenPresent=" + (idToken != null && !idToken.isBlank())
                     + ", role=" + (user == null ? "none" : user.role()));
             throw exception;
@@ -137,7 +138,15 @@ public final class FirestoreGateway implements GhatRepository {
     public List<Ghat> loadAdminGhats(String idToken) throws IOException, InterruptedException {
         if (!isEnabled()) return List.of();
         List<Ghat> ghats = new ArrayList<>();
-        for (Document document : loadCollectionDocuments("ghats", idToken)) {
+        List<Document> documents;
+        try {
+            documents = loadCollectionDocuments("ghats", idToken);
+        } catch (IOException exception) {
+            LOGGER.info("Admin Ghat collection read is not allowed by Firestore rules; using published Ghat query instead. " + exception.getMessage());
+            documents = loadPublishedGhatDocuments(idToken);
+        }
+        LOGGER.info("Admin Ghat records loaded: count=" + documents.size());
+        for (Document document : documents) {
             Ghat ghat = parseGhat(document);
             if (ghat != null) ghats.add(ghat);
         }
@@ -164,6 +173,7 @@ public final class FirestoreGateway implements GhatRepository {
                 Ghat ghat = new Ghat(document.id, name, firstNonBlank(field(fields, "area"), field(fields, "location")),
                     field(fields, "description"), decimalField(fields, "latitude"), decimalField(fields, "longitude"),
                     decimalField(fields, "entryLatitude"), decimalField(fields, "entryLongitude"), field(fields, "imageUrl"),
+                    field(fields, "imagePublicId"),
                     enumValue(Ghat.OperationalStatus.class, field(fields, "operationalStatus"), Ghat.OperationalStatus.INFORMATION_ONLY),
                     enumValue(Ghat.CrowdLevel.class, field(fields, "crowdLevel"), Ghat.CrowdLevel.UNKNOWN),
                     integerField(fields, "estimatedWaitMinutes"), "true".equalsIgnoreCase(boolField(fields, "bathingAvailable")),
@@ -179,6 +189,10 @@ public final class FirestoreGateway implements GhatRepository {
                     firstNonBlank(field(fields, "lastUpdated"), field(fields, "updatedAt"), timestampField(fields, "updatedAt")),
                     operationalState(fields), !"false".equalsIgnoreCase(boolField(fields, "published")),
                     !"false".equalsIgnoreCase(boolField(fields, "active")));
+                LOGGER.info("Parsed Ghat record: ghatId=" + ghat.id()
+                        + ", imageUrlPresent=" + notBlank(ghat.imageUrl())
+                        + ", imagePublicIdPresent=" + notBlank(ghat.imagePublicId())
+                        + ", weatherPresent=" + ghat.weather().available());
                 return ghat;
             } catch (RuntimeException exception) {
                 LOGGER.warning("Skipping malformed ghat document " + document.id + ": " + exception.getMessage());
@@ -191,13 +205,15 @@ public final class FirestoreGateway implements GhatRepository {
         String now = String.valueOf(System.currentTimeMillis());
         String json = fieldsJson(
                 fieldJson("ghatName", ghat.name()), fieldJson("area", ghat.area()), fieldJson("description", ghat.description()),
-                fieldJson("imageUrl", ghat.imageUrl()), numberOrNullFieldJson("latitude", ghat.latitude()), numberOrNullFieldJson("longitude", ghat.longitude()),
+                fieldJson("imageUrl", ghat.imageUrl()), fieldJson("imagePublicId", ghat.imagePublicId()),
+                numberOrNullFieldJson("latitude", ghat.latitude()), numberOrNullFieldJson("longitude", ghat.longitude()),
                 numberOrNullFieldJson("entryLatitude", ghat.entryLatitude()), numberOrNullFieldJson("entryLongitude", ghat.entryLongitude()),
                 fieldJson("operationalStatus", ghat.operationalStatus().name()), fieldJson("crowdLevel", ghat.crowdLevel().name()),
                 numberOrNullFieldJson("estimatedWaitMinutes", ghat.estimatedWaitMinutes()), boolFieldJson("bathingAvailable", ghat.bathingAvailable()),
                 fieldJson("walkingDifficulty", ghat.walking().difficulty().name()), numberOrNullFieldJson("approximateSteps", ghat.walking().approximateSteps()),
                 numberOrNullFieldJson("walkingDistanceMeters", ghat.walking().distanceMeters()), boolFieldJson("seniorFriendly", ghat.walking().seniorFriendly()),
                 boolFieldJson("wheelchairAccessible", ghat.walking().wheelchairAccessible()), stringArrayFieldJson("facilities", ghat.facilities()),
+                numberOrNullFieldJson("weatherTemperatureCelsius", ghat.weather().temperatureCelsius()), fieldJson("weatherCondition", ghat.weather().condition()),
                 fieldJson("historicalBackground", ghat.history().historicalBackground()), fieldJson("religiousSignificance", ghat.history().religiousSignificance()),
                 fieldJson("simhasthaConnection", ghat.history().simhasthaConnection()), fieldJson("associatedSacredPlaces", ghat.history().associatedSacredPlaces()),
                 fieldJson("rituals", ghat.history().rituals()), fieldJson("didYouKnow", ghat.history().didYouKnow()), fieldJson("historyImageUrl", ghat.history().imageUrl()),
@@ -216,13 +232,16 @@ public final class FirestoreGateway implements GhatRepository {
 
     /** Image-only update avoids overwriting operational data during Admin Change Image. */
     @Override
-    public void updateGhatImage(String ghatId, String imageUrl, String idToken) throws IOException, InterruptedException {
-        String json = fieldsJson(fieldJson("imageUrl", imageUrl), fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+    public void updateGhatImage(String ghatId, String imageUrl, String imagePublicId, String idToken) throws IOException, InterruptedException {
+        LOGGER.info("Firestore Ghat image save started: ghatId=" + ghatId
+                + ", secureUrlPresent=" + notBlank(imageUrl)
+                + ", publicIdPresent=" + notBlank(imagePublicId));
+        String json = fieldsJson(fieldJson("imageUrl", imageUrl), fieldJson("imagePublicId", imagePublicId),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
         URI document = documentUri("ghats", ghatId);
-        System.out.println("FIREBASE PROJECT ID = " + config.projectId());
-        System.out.println("FIREBASE DOCUMENT PATH = " + document.getPath());
-        System.out.println("UPDATE PAYLOAD = " + json);
-        sendAuthorizedPatch(document, json, idToken);
+        sendAuthorizedPatch(URI.create(documentUrl("ghats", ghatId)
+                + "&updateMask.fieldPaths=imageUrl&updateMask.fieldPaths=imagePublicId&updateMask.fieldPaths=updatedAt"), json, idToken);
+        LOGGER.info("Firestore Ghat image save success: ghatId=" + ghatId);
     }
 
     private GhatOperationalState operationalState(String fields) {
@@ -312,6 +331,37 @@ public final class FirestoreGateway implements GhatRepository {
         return records;
     }
 
+    public List<AppDataStore.FaqRecord> loadFaqs(String idToken) throws IOException, InterruptedException {
+        List<AppDataStore.FaqRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("faqs", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.FaqRecord(
+                    valueOr(document.id, field(fields, "id")),
+                    field(fields, "category"),
+                    field(fields, "question"),
+                    field(fields, "answer"),
+                    !"false".equalsIgnoreCase(boolField(fields, "active")),
+                    field(fields, "sortOrder")));
+        }
+        return records;
+    }
+
+    public void saveFaq(AppDataStore.FaqRecord faq, String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("id", faq.id),
+                fieldJson("category", faq.category),
+                fieldJson("question", faq.question),
+                fieldJson("answer", faq.answer),
+                boolFieldJson("active", faq.active),
+                fieldJson("sortOrder", faq.sortOrder),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(documentUri("faqs", faq.id), json, idToken);
+    }
+
+    public void deleteFaq(String id, String idToken) throws IOException, InterruptedException {
+        sendAuthorizedDelete(documentUri("faqs", id), idToken);
+    }
+
     public List<AppDataStore.BusinessRecord> loadBusinesses(String idToken) throws IOException, InterruptedException {
         List<AppDataStore.BusinessRecord> records = new ArrayList<>();
         for (Document document : loadCollectionDocuments("businesses", idToken)) {
@@ -332,6 +382,11 @@ public final class FirestoreGateway implements GhatRepository {
                     field(fields, "priceRange"),
                     field(fields, "status"),
                     "true".equalsIgnoreCase(approved),
+                    field(fields, "logoUrl"),
+                    field(fields, "logoPublicId"),
+                    field(fields, "coverPhotoUrl"),
+                    field(fields, "coverPhotoPublicId"),
+                    stringListField(fields, "galleryImages").stream().map(CloudImage::parse).toList(),
                     field(fields, "createdAt"),
                     field(fields, "updatedAt")));
         }
@@ -447,7 +502,15 @@ public final class FirestoreGateway implements GhatRepository {
             String fields = document.fields;
             String title = firstNonBlank(field(fields, titleField), field(fields, "title"), field(fields, "businessName"));
             if (notBlank(title)) {
-                target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory));
+                target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory,
+                        firstNonBlank(field(fields, "packageThumbnailUrl"), field(fields, "pujaImageUrl"),
+                                field(fields, "thumbnailUrl"), field(fields, "imageUrl"), field(fields, "mainImageUrl"),
+                                field(fields, "logoUrl"), field(fields, "coverPhotoUrl")),
+                        firstNonBlank(field(fields, "packageThumbnailPublicId"), field(fields, "pujaImagePublicId"),
+                                field(fields, "thumbnailPublicId"), field(fields, "imagePublicId"),
+                                field(fields, "mainImagePublicId"), field(fields, "logoPublicId"),
+                                field(fields, "coverPhotoPublicId")),
+                        stringListField(fields, "galleryImages").stream().map(CloudImage::parse).toList()));
             }
         }
     }
@@ -509,7 +572,15 @@ public final class FirestoreGateway implements GhatRepository {
             if (!notBlank(title)) {
                 continue;
             }
-            target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory));
+            target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory,
+                    firstNonBlank(field(fields, "packageThumbnailUrl"), field(fields, "pujaImageUrl"),
+                            field(fields, "thumbnailUrl"), field(fields, "imageUrl"), field(fields, "mainImageUrl"),
+                            field(fields, "logoUrl"), field(fields, "coverPhotoUrl")),
+                    firstNonBlank(field(fields, "packageThumbnailPublicId"), field(fields, "pujaImagePublicId"),
+                            field(fields, "thumbnailPublicId"), field(fields, "imagePublicId"),
+                            field(fields, "mainImagePublicId"), field(fields, "logoPublicId"),
+                            field(fields, "coverPhotoPublicId")),
+                    stringListField(fields, "galleryImages").stream().map(CloudImage::parse).toList()));
         }
     }
 
@@ -566,6 +637,7 @@ public final class FirestoreGateway implements GhatRepository {
         fields.add(fieldJson("updatedBy", adminUid));
         fields.add(fieldJson("publishedAt", String.valueOf(System.currentTimeMillis())));
         fields.add(fieldJson("publishedBy", adminUid));
+        fields.addAll(mediaFieldsForModule(module, item));
         fields.addAll(moduleFields(module, item.detail));
         String json = fieldsJson(fields.toArray(new String[0]));
         sendAuthorizedPatch(documentUri(collection, item.id), json, idToken);
@@ -742,7 +814,9 @@ public final class FirestoreGateway implements GhatRepository {
                 email,
                 mobile,
                 role,
-                status);
+                status,
+                field(body, "profilePhotoUrl"),
+                field(body, "profilePhotoPublicId"));
     }
 
     public void saveUserProfile(UserProfile profile, String idToken) throws IOException, InterruptedException {
@@ -753,6 +827,8 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("mobile", profile.mobile()),
                 fieldJson("role", profile.role()),
                 fieldJson("status", profile.status()),
+                fieldJson("profilePhotoUrl", profile.profilePhotoUrl()),
+                fieldJson("profilePhotoPublicId", profile.profilePhotoPublicId()),
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())),
                 fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
         sendAuthorizedPatch(documentUri("users", profile.uid()), json, idToken);
@@ -771,6 +847,11 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("description", account.category + " service for Simhastha pilgrims"),
                 fieldJson("operatingHours", "Not provided"),
                 fieldJson("priceRange", "Not provided"),
+                fieldJson("logoUrl", account.logoUrl),
+                fieldJson("logoPublicId", account.logoPublicId),
+                fieldJson("coverPhotoUrl", account.coverPhotoUrl),
+                fieldJson("coverPhotoPublicId", account.coverPhotoPublicId),
+                stringArrayFieldJson("galleryImages", account.galleryImages.stream().map(CloudImage::serialize).toList()),
                 fieldJson("status", "pending"),
                 boolFieldJson("approved", false),
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())),
@@ -800,7 +881,9 @@ public final class FirestoreGateway implements GhatRepository {
         String resolvedOwnerId = valueOr(ownerId, field(fields, "ownerId"));
         return new BusinessProfile(ownerId, resolvedOwnerId, field(fields, "businessName"), field(fields, "ownerName"),
                 field(fields, "category"), field(fields, "location"), field(fields, "description"),
-                field(fields, "status"), boolField(fields, "approved"));
+                field(fields, "status"), boolField(fields, "approved"), field(fields, "logoUrl"),
+                field(fields, "logoPublicId"), field(fields, "coverPhotoUrl"), field(fields, "coverPhotoPublicId"),
+                stringListField(fields, "galleryImages").stream().map(CloudImage::parse).toList());
     }
 
     public List<BusinessInventoryItem> loadBusinessItems(String businessId, String ownerId, String idToken)
@@ -858,6 +941,101 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
         sendAuthorizedPatch(URI.create(documentUrl("users", uid)
                 + "&updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt"), json, idToken);
+    }
+
+    public void updateUserProfileDetails(String uid, String name, String email, String mobile,
+            String dateOfBirth, String gender, String address, String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("name", name),
+                fieldJson("email", email),
+                fieldJson("mobile", mobile),
+                fieldJson("dateOfBirth", dateOfBirth),
+                fieldJson("gender", gender),
+                fieldJson("address", address),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("users", uid)
+                + "&updateMask.fieldPaths=name"
+                + "&updateMask.fieldPaths=email"
+                + "&updateMask.fieldPaths=mobile"
+                + "&updateMask.fieldPaths=dateOfBirth"
+                + "&updateMask.fieldPaths=gender"
+                + "&updateMask.fieldPaths=address"
+                + "&updateMask.fieldPaths=updatedAt"), json, idToken);
+    }
+
+    public void updateUserProfilePhoto(
+        String uid,
+        String profilePhotoUrl,
+        String profilePhotoPublicId,
+        String idToken
+) throws IOException, InterruptedException {
+
+    String json = fieldsJson(
+            fieldJson("profilePhotoUrl", profilePhotoUrl),
+            fieldJson("profilePhotoPublicId", profilePhotoPublicId),
+            fieldJson("updatedAt", String.valueOf(System.currentTimeMillis()))
+    );
+
+    sendAuthorizedPatch(
+            URI.create(documentUrl("users", uid)
+                    + "&updateMask.fieldPaths=profilePhotoUrl"
+                    + "&updateMask.fieldPaths=profilePhotoPublicId"
+                    + "&updateMask.fieldPaths=updatedAt"),
+            json,
+            idToken
+    );
+}
+
+    public void updateBusinessMedia(String businessId, String logoUrl, String logoPublicId,
+            String coverPhotoUrl, String coverPhotoPublicId, List<CloudImage> galleryImages, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("logoUrl", logoUrl),
+                fieldJson("logoPublicId", logoPublicId),
+                fieldJson("coverPhotoUrl", coverPhotoUrl),
+                fieldJson("coverPhotoPublicId", coverPhotoPublicId),
+                stringArrayFieldJson("galleryImages", (galleryImages == null ? List.<CloudImage>of() : galleryImages)
+                        .stream().map(CloudImage::serialize).toList()),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("businesses", businessId)
+                        + "&updateMask.fieldPaths=logoUrl&updateMask.fieldPaths=logoPublicId"
+                        + "&updateMask.fieldPaths=coverPhotoUrl&updateMask.fieldPaths=coverPhotoPublicId"
+                        + "&updateMask.fieldPaths=galleryImages&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    private List<String> mediaFieldsForModule(String module, AppDataStore.ServiceItem item) {
+        if (item == null || (item.imageUrl.isBlank() && item.imagePublicId.isBlank()
+                && (item.galleryImages == null || item.galleryImages.isEmpty()))) {
+            return List.of();
+        }
+        List<String> fields = new ArrayList<>();
+        switch (module) {
+            case "packages" -> {
+                fields.add(fieldJson("packageThumbnailUrl", item.imageUrl));
+                fields.add(fieldJson("packageThumbnailPublicId", item.imagePublicId));
+                fields.add(fieldJson("thumbnailUrl", item.imageUrl));
+                fields.add(fieldJson("thumbnailPublicId", item.imagePublicId));
+            }
+            case "puja" -> {
+                fields.add(fieldJson("pujaImageUrl", item.imageUrl));
+                fields.add(fieldJson("pujaImagePublicId", item.imagePublicId));
+                fields.add(fieldJson("imageUrl", item.imageUrl));
+                fields.add(fieldJson("imagePublicId", item.imagePublicId));
+            }
+            case "stay" -> {
+                fields.add(fieldJson("mainImageUrl", item.imageUrl));
+                fields.add(fieldJson("mainImagePublicId", item.imagePublicId));
+                fields.add(fieldJson("imageUrl", item.imageUrl));
+                fields.add(fieldJson("imagePublicId", item.imagePublicId));
+            }
+            default -> {
+                fields.add(fieldJson("imageUrl", item.imageUrl));
+                fields.add(fieldJson("imagePublicId", item.imagePublicId));
+            }
+        }
+        fields.add(stringArrayFieldJson("galleryImages", item.galleryImages.stream().map(CloudImage::serialize).toList()));
+        return fields;
     }
 
     public void updateDocumentStatus(String collection, String documentId, String status, boolean approved,
@@ -1025,7 +1203,7 @@ public final class FirestoreGateway implements GhatRepository {
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw new IOException("Firestore read failed: " + response.statusCode());
+            throw firestoreFailure("GET", URI.create(url), response);
         }
         return response.body();
     }
@@ -1037,7 +1215,7 @@ public final class FirestoreGateway implements GhatRepository {
                 .POST(HttpRequest.BodyPublishers.ofString(json))
                 .build(), HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw new IOException("Firestore query failed: " + response.statusCode());
+            throw firestoreFailure("POST", uri, response);
         }
         return response.body();
     }
@@ -1085,7 +1263,7 @@ public final class FirestoreGateway implements GhatRepository {
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(json))
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        System.out.println("HTTP STATUS = " + response.statusCode());
+        LOGGER.info("Firestore PATCH response: path=" + uri.getPath() + ", status=" + response.statusCode());
         if (response.statusCode() >= 400) {
             throw firestoreFailure("PATCH", uri, response);
         }
@@ -1093,8 +1271,6 @@ public final class FirestoreGateway implements GhatRepository {
 
     private IOException firestoreFailure(String method, URI uri, HttpResponse<String> response) {
         String body = response.body() == null ? "" : response.body();
-        System.out.println("FIREBASE DOCUMENT PATH = " + uri.getPath());
-        System.out.println("FIREBASE RESPONSE BODY = " + body);
         return new IOException("Firestore " + method + " failed: HTTP " + response.statusCode() + " body=" + body);
     }
 
@@ -1175,13 +1351,49 @@ public final class FirestoreGateway implements GhatRepository {
 
     private List<Document> parseDocuments(String json) {
         List<Document> documents = new ArrayList<>();
-        Matcher matcher = DOCUMENT_PATTERN.matcher(json == null ? "" : json);
+        String source = json == null ? "" : json;
+        Matcher matcher = Pattern.compile("\"name\"\\s*:\\s*\"([^\"]+)\"").matcher(source);
         while (matcher.find()) {
+            int fieldsKey = source.indexOf("\"fields\"", matcher.end());
+            if (fieldsKey < 0) continue;
+            int fieldsStart = source.indexOf('{', fieldsKey);
+            if (fieldsStart < 0) continue;
+            int fieldsEnd = matchingBrace(source, fieldsStart);
+            if (fieldsEnd < 0) continue;
             String name = unescape(matcher.group(1));
             String id = name.substring(name.lastIndexOf('/') + 1);
-            documents.add(new Document(id, matcher.group(2)));
+            documents.add(new Document(id, source.substring(fieldsStart + 1, fieldsEnd)));
+            matcher.region(fieldsEnd, source.length());
         }
         return documents;
+    }
+
+    private int matchingBrace(String text, int openIndex) {
+        int depth = 0;
+        boolean inString = false;
+        boolean escaping = false;
+        for (int index = openIndex; index < text.length(); index++) {
+            char ch = text.charAt(index);
+            if (escaping) {
+                escaping = false;
+                continue;
+            }
+            if (ch == '\\' && inString) {
+                escaping = true;
+                continue;
+            }
+            if (ch == '"') {
+                inString = !inString;
+                continue;
+            }
+            if (inString) continue;
+            if (ch == '{') depth++;
+            else if (ch == '}') {
+                depth--;
+                if (depth == 0) return index;
+            }
+        }
+        return -1;
     }
 
     private String field(String fieldsJson, String name) {
@@ -1451,11 +1663,16 @@ public final class FirestoreGateway implements GhatRepository {
     private record Document(String id, String fields) {
     }
 
-    public record UserProfile(String uid, String name, String email, String mobile, String role, String status) {
+    public record UserProfile(String uid, String name, String email, String mobile, String role, String status,
+            String profilePhotoUrl, String profilePhotoPublicId) {
+        public UserProfile(String uid, String name, String email, String mobile, String role, String status) {
+            this(uid, name, email, mobile, role, status, "", "");
+        }
     }
 
     public record BusinessProfile(String businessId, String ownerId, String businessName, String ownerName,
-            String category, String location, String description, String status, String approved) {
+            String category, String location, String description, String status, String approved, String logoUrl,
+            String logoPublicId, String coverPhotoUrl, String coverPhotoPublicId, List<CloudImage> galleryImages) {
     }
 
     public record BusinessInventoryItem(String itemId, String businessId, String ownerId, String category,
