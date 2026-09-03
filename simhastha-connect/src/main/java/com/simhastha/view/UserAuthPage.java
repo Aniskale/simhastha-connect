@@ -86,6 +86,7 @@ public class UserAuthPage {
                 showInfo("Validation", "Please enter email and password.");
                 return;
             }
+            // The authenticated Firestore profile decides the destination dashboard.
             runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
         });
 

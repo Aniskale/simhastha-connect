@@ -19,31 +19,44 @@ public final class AuthService {
 
     public static CompletableFuture<AuthOutcome> login(String email, String password, String expectedRole) {
         return CompletableFuture.supplyAsync(() -> {
+            String stage = "FIREBASE_AUTH";
             if (!CONFIG.isEnabled()) {
+                diagnostic("FIREBASE_AUTH", "result=skipped firebaseEnabled=false");
                 return AuthOutcome.failure("Firebase is not enabled. Check firebase.properties.");
             }
             try {
+                diagnostic("FIREBASE_AUTH", "result=started");
                 FirebaseAuthGateway.AuthResult auth = AUTH.login(email, password);
                 if (!auth.success) {
+                    diagnostic("FIREBASE_AUTH", "result=failed");
                     return AuthOutcome.failure(auth.errorMessage);
                 }
                 if (auth.uid == null || auth.uid.isBlank()) {
+                    diagnostic("FIREBASE_AUTH", "result=failed missingUid=true");
                     return AuthOutcome.failure("Firebase authentication succeeded, but no authenticated UID was returned.");
                 }
+                diagnostic("FIREBASE_AUTH", "result=success");
 
+                stage = "USER_PROFILE";
+                diagnostic(stage, "result=started");
                 FirestoreGateway.UserProfile profile = FIRESTORE.loadUserProfile(auth.uid, auth.idToken);
                 if (profile == null) {
+                    diagnostic("USER_PROFILE", "result=failed missingProfile=true");
                     return AuthOutcome.failure("No Firestore profile was found at users/" + auth.uid + ". Please contact admin.");
                 }
+                diagnostic("USER_PROFILE", "result=success");
                 if (!VALID_ROLES.contains(profile.role())) {
-                    return AuthOutcome.failure("Your account role is not valid. Expected one of: user, business, transport_operator, admin.");
+                    diagnostic("ROLE_RESOLUTION", "result=failed invalidRole=true");
+                    return AuthOutcome.failure("Your account role is not configured. Please contact the administrator.");
                 }
 
-                boolean adminOverride = "admin".equals(profile.role());
-                if (!adminOverride && !profile.role().equals(expectedRole) && !"any".equals(expectedRole)) {
+                stage = "ROLE_RESOLUTION";
+                if (!profile.role().equals(expectedRole) && !"any".equals(expectedRole)) {
+                    diagnostic("ROLE_RESOLUTION", "result=failed portalRoleMismatch=true");
                     return AuthOutcome.failure("Authentication succeeded, but this account is not authorized for this portal.");
                 }
-                if (adminOverride && !"active".equals(profile.status())) {
+                if ("admin".equals(profile.role()) && !"active".equals(profile.status())) {
+                    diagnostic("ROLE_RESOLUTION", "result=failed inactiveAdmin=true");
                     return AuthOutcome.failure("Admin access requires an active Firestore admin profile.");
                 }
 
@@ -60,7 +73,9 @@ public final class AuthService {
                 if ("business".equals(profile.role()) && !"approved".equals(profile.status())) {
                     return AuthOutcome.failure("Your business registration is awaiting admin approval.");
                 }
+                diagnostic(stage, "result=success role=" + profile.role());
 
+                stage = "SESSION";
                 AppSession.User user = new AppSession.User(
                         auth.uid,
                         auth.email,
@@ -69,16 +84,41 @@ public final class AuthService {
                         profile.name(),
                         profile.status());
                 AppSession.set(user);
-                AppDataStore.refreshFirebaseData(auth.idToken);
+                diagnostic("SESSION", "result=success");
+
+                // Dashboard module data is optional.  It must never turn a completed
+                // Firebase Authentication + profile resolution into a failed login.
+                CompletableFuture.runAsync(() -> refreshDashboardDataSafely(auth.idToken));
                 return AuthOutcome.success(user);
             } catch (FirestoreGateway.PermissionDeniedException exception) {
+                diagnostic(stage, "result=failed error=permissionDenied");
                 return AuthOutcome.failure("Firestore permission denied while reading your account profile.");
             } catch (FirestoreGateway.MalformedProfileException exception) {
+                diagnostic(stage, "result=failed error=malformedProfile");
+                if ("USER_PROFILE".equals(stage) && exception.getMessage() != null
+                        && exception.getMessage().toLowerCase().contains("role")) {
+                    return AuthOutcome.failure("Your account role is not configured. Please contact the administrator.");
+                }
                 return AuthOutcome.failure(exception.getMessage());
             } catch (Exception exception) {
+                diagnostic(stage, "result=failed error=" + exception.getClass().getSimpleName());
                 return AuthOutcome.failure("Unable to complete authentication. Check internet, Firebase, and account permissions.");
             }
         });
+    }
+
+    private static void refreshDashboardDataSafely(String idToken) {
+        try {
+            AppDataStore.refreshFirebaseData(idToken);
+            diagnostic("SESSION", "dashboardDataRefresh=completed");
+        } catch (Exception exception) {
+            // This data is not required to establish an authenticated session.
+            diagnostic("SESSION", "dashboardDataRefresh=failed error=" + exception.getClass().getSimpleName());
+        }
+    }
+
+    private static void diagnostic(String stage, String detail) {
+        System.out.println("AUTH_DIAGNOSTIC stage=" + stage + " " + detail);
     }
 
     public static CompletableFuture<AuthOutcome> registerUser(String name, String mobile, String email, String password) {
