@@ -2,6 +2,8 @@ package com.simhastha.view;
 
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
+import com.simhastha.model.LostFoundReport;
+import com.simhastha.model.OfficialHelpLocation;
 import com.simhastha.service.GhatRepository;
 import java.io.IOException;
 import java.net.URI;
@@ -397,7 +399,7 @@ public final class FirestoreGateway implements GhatRepository {
             records.add(new AppDataStore.LostFoundCaseRecord(
                     document.id,
                     firstNonBlank(field(fields, "type"), field(fields, "reportType")),
-                    firstNonBlank(field(fields, "name"), field(fields, "itemName")),
+                    firstNonBlank(field(fields, "name"), field(fields, "itemName"), field(fields, "title")),
                     field(fields, "age"),
                     field(fields, "gender"),
                     field(fields, "clothing"),
@@ -410,10 +412,308 @@ public final class FirestoreGateway implements GhatRepository {
                     firstNonBlank(field(fields, "status"), "open"),
                     firstNonBlank(field(fields, "priority"), "normal"),
                     field(fields, "createdAt"),
-                    field(fields, "updatedAt")));
+                    field(fields, "updatedAt"),
+                    field(fields, "trackingId"),
+                    field(fields, "imageUrl"),
+                    field(fields, "category"),
+                    "true".equals(boolField(fields, "isDemo"))));
         }
         return records;
     }
+
+    public void saveLostFoundReport(LostFoundReport report, String idToken) throws IOException, InterruptedException {
+        AppSession.User session = AppSession.currentUser();
+        System.out.println("LOST_FOUND_CREATE_DIAGNOSTIC"
+                + " tokenPresent=" + (idToken != null && !idToken.isBlank())
+                + " sessionUid=" + safeDiagnostic(session == null ? "" : session.uid())
+                + " sessionRole=" + safeDiagnostic(session == null ? "" : session.role())
+                + " reportUserId=" + safeDiagnostic(report.userId())
+                + " reporterUserId=" + safeDiagnostic(report.userId())
+                + " reportId=" + safeDiagnostic(report.reportId())
+                + " httpMethod=POST"
+                + " status=" + safeDiagnostic(report.status())
+                + " reportType=" + safeDiagnostic(report.reportType())
+                + " paymentStatus=<not-applicable>"
+                + " projectId=" + safeDiagnostic(config.projectId()));
+        List<String> fields = new ArrayList<>();
+        fields.add(fieldJson("reportId", report.reportId()));
+        fields.add(fieldJson("trackingId", report.trackingId()));
+        fields.add(fieldJson("userId", report.userId()));
+        fields.add(fieldJson("reporterUid", report.userId()));
+        fields.add(fieldJson("reportType", report.reportType()));
+        fields.add(fieldJson("category", report.category()));
+        fields.add(fieldJson("title", report.title()));
+        addOptionalStringField(fields, "description", report.description());
+        if (!report.imageUrls().isEmpty()) addOptionalStringField(fields, "imageUrl", report.imageUrls().get(0));
+        addOptionalStringField(fields, "incidentDate", report.incidentDate());
+        addOptionalStringField(fields, "incidentTime", report.incidentTime());
+        addOptionalStringField(fields, "reporterName", report.reporterName());
+        addOptionalStringField(fields, "reporterPhone", report.reporterPhone());
+        addOptionalStringField(fields, "relation", report.relation());
+        fields.add(fieldJson("priority", report.priority()));
+        fields.add(fieldJson("priorityReason", report.priorityReason()));
+        fields.add(fieldJson("status", report.status()));
+        fields.add(fieldJson("verificationStatus", report.verificationStatus()));
+        fields.add(fieldJson("createdAt", report.createdAt()));
+        fields.add(fieldJson("updatedAt", report.updatedAt()));
+        System.out.println("LOST_FOUND_CREATE_DIAGNOSTIC payloadFields=" + fields.stream()
+                .map(field -> field.substring(1, field.indexOf('"', 1))).toList());
+        String json = fieldsJson(fields.toArray(String[]::new));
+        URI collection = URI.create(collectionUrl("lostFoundReports") + "&documentId=" + enc(report.reportId()));
+        sendAuthorizedPost(collection, json, idToken);
+    }
+
+    public List<LostFoundReport> loadLostFoundReportsForUser(String userId, String idToken) throws IOException, InterruptedException {
+        List<LostFoundReport> reports = new ArrayList<>();
+        for (Document document : loadQueryDocuments("lostFoundReports", "userId", userId, idToken)) reports.add(lostFoundReport(document));
+        return reports;
+    }
+
+    /** Development-only, admin-authorised Firestore seed. Stable IDs make this operation idempotent. */
+    public int seedLostFoundDemoReports(String idToken) throws IOException, InterruptedException {
+        AppSession.User session = AppSession.currentUser();
+        if (session == null || !session.isAdmin()) throw new SecurityException("An admin session is required to seed Lost & Found demo reports.");
+        int inserted = 0;
+        for (LostFoundDemo demo : lostFoundDemos()) {
+            if (documentExists("lostFoundReports", demo.id(), idToken)) continue;
+            List<String> fields = new ArrayList<>();
+            fields.add(fieldJson("reportId", demo.id()));
+            fields.add(fieldJson("trackingId", demo.trackingId()));
+            fields.add(fieldJson("userId", "demo-lost-found-owner"));
+            fields.add(fieldJson("reporterUid", "demo-lost-found-owner"));
+            fields.add(fieldJson("reportType", demo.reportType()));
+            fields.add(fieldJson("category", demo.category()));
+            fields.add(fieldJson("title", demo.title()));
+            fields.add(fieldJson("description", demo.description()));
+            fields.add(fieldJson("priority", demo.priority()));
+            fields.add(fieldJson("priorityReason", "Development demonstration record"));
+            fields.add(fieldJson("status", demo.status()));
+            fields.add(fieldJson("verificationStatus", demo.verificationStatus()));
+            fields.add(boolFieldJson("isDemo", true));
+            fields.add(fieldJson("createdAt", demo.createdAt()));
+            fields.add(fieldJson("updatedAt", demo.createdAt()));
+            URI collection = URI.create(collectionUrl("lostFoundReports") + "&documentId=" + enc(demo.id()));
+            sendAuthorizedPost(collection, fieldsJson(fields.toArray(String[]::new)), idToken);
+            inserted++;
+        }
+        return inserted;
+    }
+
+    public List<OfficialHelpLocation> loadOfficialHelpLocations(String idToken) throws IOException, InterruptedException {
+        List<OfficialHelpLocation> locations = new ArrayList<>();
+        try {
+            HelpCenterQueryResult result = loadVerifiedActiveHelpCenterDocuments(idToken);
+            for (Document document : result.documents()) {
+                String f = document.fields;
+                Double latitude = numberOrNull(f, "latitude");
+                Double longitude = numberOrNull(f, "longitude");
+                if (latitude == null || longitude == null) continue;
+                OfficialHelpLocation location = new OfficialHelpLocation(document.id, field(f, "name"), field(f, "type"), field(f, "area"),
+                        latitude, longitude, field(f, "address"), field(f, "landmark"),
+                        firstNonBlank(field(f, "contactNumber"), field(f, "phone")), field(f, "openingHours"), stringListField(f, "services"),
+                        field(f, "verificationStatus"), "true".equals(boolField(f, "active")), field(f, "createdAt"), field(f, "updatedAt"));
+                if (isUsableOfficialHelpLocation(location)) locations.add(location);
+            }
+            System.out.println("HELP_CENTER_LOAD statusCode=" + result.statusCode() + " documentsReceived=" + result.documents().size()
+                    + " verifiedActiveCount=" + locations.size() + " error=<none>");
+        } catch (IOException | InterruptedException error) {
+            System.out.println("HELP_CENTER_LOAD statusCode=" + statusCodeFrom(error) + " documentsReceived=0 verifiedActiveCount=0 error=" + safeHelpCenterError(error));
+            throw error;
+        }
+        return locations;
+    }
+
+    /** Admin-only listing. This intentionally does not apply the public visibility filter. */
+    public List<OfficialHelpLocation> loadOfficialHelpLocationsForAdmin(String idToken) throws IOException, InterruptedException {
+        requireVerifiedAdminSession(idToken);
+        List<OfficialHelpLocation> locations = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("officialHelpLocations", idToken)) {
+            OfficialHelpLocation location = officialHelpLocation(document);
+            if (location != null) locations.add(location);
+        }
+        return locations;
+    }
+
+    public void saveOfficialHelpLocation(OfficialHelpLocation location, boolean create, String idToken)
+            throws IOException, InterruptedException {
+        requireVerifiedAdminSession(idToken);
+        if (location == null || !notBlank(location.id()) || !notBlank(location.name()) || !notBlank(location.type())
+                || !Double.isFinite(location.latitude()) || !Double.isFinite(location.longitude())
+                || location.latitude() < -90 || location.latitude() > 90 || location.longitude() < -180 || location.longitude() > 180) {
+            throw new IllegalArgumentException("Enter a center name, type, and valid latitude and longitude.");
+        }
+        AppSession.User admin = AppSession.currentUser();
+        if (create) {
+            System.out.println("ADMIN_HELP_CENTER_CREATE authPresent=" + (idToken != null && !idToken.isBlank())
+                    + " role=" + (admin == null ? "<none>" : admin.role()) + " locationId=" + location.id()
+                    + " name=" + location.name() + " verificationStatus=" + location.verificationStatus() + " active=" + location.active());
+        }
+        List<String> fields = new ArrayList<>();
+        fields.add(fieldJson("locationId", location.id()));
+        fields.add(fieldJson("name", location.name()));
+        fields.add(fieldJson("type", location.type()));
+        addOptionalStringField(fields, "area", location.area());
+        addOptionalStringField(fields, "address", location.address());
+        fields.add(numberOrNullFieldJson("latitude", location.latitude()));
+        fields.add(numberOrNullFieldJson("longitude", location.longitude()));
+        addOptionalStringField(fields, "contactNumber", location.phone());
+        addOptionalStringField(fields, "landmark", location.landmark());
+        addOptionalStringField(fields, "openingHours", location.openingHours());
+        fields.add(stringArrayFieldJson("services", location.services()));
+        fields.add(fieldJson("verificationStatus", location.verificationStatus()));
+        fields.add(boolFieldJson("active", location.active()));
+        fields.add(fieldJson("createdAt", location.createdAt()));
+        fields.add(fieldJson("updatedAt", location.updatedAt()));
+        String json = fieldsJson(fields.toArray(String[]::new));
+        try {
+            if (create) {
+                URI collection = URI.create(collectionUrl("officialHelpLocations") + "&documentId=" + enc(location.id()));
+                sendAuthorizedPost(collection, json, idToken);
+            } else {
+                sendAuthorizedPatch(documentUri("officialHelpLocations", location.id()), json, idToken);
+            }
+        } catch (IOException error) {
+            System.out.println("ADMIN_HELP_CENTER_WRITE statusCode=" + statusCodeFrom(error) + " responseBody=" + safeHelpCenterError(error));
+            throw error;
+        }
+    }
+
+    public void deleteOfficialHelpLocation(String locationId, String idToken) throws IOException, InterruptedException {
+        requireVerifiedAdminSession(idToken);
+        if (!notBlank(locationId)) throw new IllegalArgumentException("Help center reference is unavailable.");
+        URI uri = documentUri("officialHelpLocations", locationId);
+        HttpResponse<String> response = client.send(authorizedBuilder(uri, idToken).timeout(Duration.ofSeconds(8)).DELETE().build(),
+                HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) {
+            System.out.println("ADMIN_HELP_CENTER_WRITE statusCode=" + response.statusCode() + " responseBody=" + response.body());
+            throw firestoreFailure("DELETE", uri, response);
+        }
+    }
+
+    private void requireVerifiedAdminSession(String idToken) throws IOException, InterruptedException {
+        AppSession.User session = AppSession.currentUser();
+        if (session == null || !session.isAdmin() || idToken == null || idToken.isBlank()) {
+            throw new SecurityException("An authenticated admin session is required.");
+        }
+        UserProfile profile = loadUserProfile(session.uid(), idToken);
+        if (!"admin".equalsIgnoreCase(profile.role())) {
+            throw new SecurityException("users/" + session.uid() + " must have role = admin.");
+        }
+    }
+
+    private OfficialHelpLocation officialHelpLocation(Document document) {
+        String f = document.fields;
+        Double latitude = numberOrNull(f, "latitude");
+        Double longitude = numberOrNull(f, "longitude");
+        if (latitude == null || longitude == null) return null;
+        return new OfficialHelpLocation(firstNonBlank(field(f, "locationId"), document.id), field(f, "name"), field(f, "type"), field(f, "area"),
+                latitude, longitude, field(f, "address"), field(f, "landmark"), firstNonBlank(field(f, "contactNumber"), field(f, "phone")),
+                field(f, "openingHours"), stringListField(f, "services"), field(f, "verificationStatus"), "true".equals(boolField(f, "active")),
+                field(f, "createdAt"), field(f, "updatedAt"));
+    }
+
+    private HelpCenterQueryResult loadVerifiedActiveHelpCenterDocuments(String idToken) throws IOException, InterruptedException {
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"officialHelpLocations\"}],\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"verificationStatus\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"VERIFIED\"}}},"
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"active\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}}]}}}}";
+        URI endpoint = URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey()));
+        HttpResponse<String> response = client.send(authorizedBuilder(endpoint, idToken)
+                .timeout(Duration.ofSeconds(8))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(query))
+                .build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400) throw new IOException("Firestore help-center query failed: HTTP " + response.statusCode());
+        return new HelpCenterQueryResult(response.statusCode(), parseDocuments(response.body()));
+    }
+
+    private boolean isUsableOfficialHelpLocation(OfficialHelpLocation location) {
+        return location.publiclyVisible() && notBlank(location.name()) && notBlank(location.type())
+                && Double.isFinite(location.latitude()) && Double.isFinite(location.longitude())
+                && location.latitude() >= -90 && location.latitude() <= 90
+                && location.longitude() >= -180 && location.longitude() <= 180;
+    }
+
+    private String statusCodeFrom(Exception error) {
+        String message = error.getMessage() == null ? "" : error.getMessage();
+        java.util.regex.Matcher matcher = Pattern.compile("HTTP\\s+(\\d{3})").matcher(message);
+        return matcher.find() ? matcher.group(1) : "<unknown>";
+    }
+
+    private String safeHelpCenterError(Exception error) {
+        String message = error.getMessage();
+        return message == null || message.isBlank() ? error.getClass().getSimpleName() : message.replaceAll("[\\r\\n]", " ");
+    }
+
+    /** Admin-only, idempotent development seed for the official-help-center dataset. */
+    public int seedOfficialHelpLocations(String idToken) throws IOException, InterruptedException {
+        AppSession.User session = AppSession.currentUser();
+        if (session == null || !session.isAdmin()) throw new SecurityException("An admin session is required to seed help centers.");
+        int inserted = 0;
+        for (OfficialHelpSeed seed : officialHelpSeeds()) {
+            if (documentExists("officialHelpLocations", seed.locationId(), idToken)) continue;
+            String now = "2026-09-03T09:00:00Z";
+            List<String> fields = new ArrayList<>();
+            fields.add(fieldJson("locationId", seed.locationId()));
+            fields.add(fieldJson("name", seed.name()));
+            fields.add(fieldJson("type", "HELP_CENTER"));
+            fields.add(fieldJson("area", seed.area()));
+            fields.add(fieldJson("address", seed.address()));
+            fields.add(numberOrNullFieldJson("latitude", seed.latitude()));
+            fields.add(numberOrNullFieldJson("longitude", seed.longitude()));
+            fields.add(fieldJson("contactNumber", ""));
+            fields.add(stringArrayFieldJson("services", seed.services()));
+            fields.add(fieldJson("verificationStatus", "VERIFIED"));
+            fields.add(boolFieldJson("active", true));
+            fields.add(fieldJson("createdAt", now));
+            fields.add(fieldJson("updatedAt", now));
+            URI collection = URI.create(collectionUrl("officialHelpLocations") + "&documentId=" + enc(seed.locationId()));
+            sendAuthorizedPost(collection, fieldsJson(fields.toArray(String[]::new)), idToken);
+            inserted++;
+        }
+        return inserted;
+    }
+
+    private LostFoundReport lostFoundReport(Document d) {
+        String f = d.fields;
+        String imageUrl = field(f, "imageUrl");
+        return new LostFoundReport(d.id, firstNonBlank(field(f, "trackingId"), d.id), field(f, "userId"), field(f, "reportType"), field(f, "category"), field(f, "title"), field(f, "description"), imageUrl.isBlank() ? List.of() : List.of(imageUrl), field(f, "location"), numberOrNull(f, "latitude"), numberOrNull(f, "longitude"), field(f, "landmark"), field(f, "incidentDate"), field(f, "incidentTime"), field(f, "reporterName"), field(f, "reporterPhone"), field(f, "relation"), field(f, "priority"), field(f, "priorityReason"), field(f, "status"), field(f, "verificationStatus"), field(f, "assignedAdminId"), field(f, "assignedAuthorityId"), field(f, "foundLocationId"), field(f, "collectionInstructions"), field(f, "createdAt"), field(f, "updatedAt"), field(f, "resolvedAt"));
+    }
+
+    private boolean documentExists(String collection, String documentId, String idToken) throws IOException, InterruptedException {
+        HttpResponse<String> response = client.send(authorizedBuilder(documentUri(collection, documentId), idToken)
+                .timeout(Duration.ofSeconds(8)).GET().build(), HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() == 404) return false;
+        if (response.statusCode() >= 400) throw firestoreFailure("GET", documentUri(collection, documentId), response);
+        return true;
+    }
+
+    private List<LostFoundDemo> lostFoundDemos() {
+        String createdAt = "2026-09-03T09:00:00Z";
+        return List.of(
+                new LostFoundDemo("demo-lf-001", "SC-LF-DEMO-001", "LOST", "Missing Person", "Demo Person One", "Fictional demo missing-person report for administrative testing.", "HIGH", "SUBMITTED", "PENDING", createdAt),
+                new LostFoundDemo("demo-lf-002", "SC-LF-DEMO-002", "LOST", "Missing Child", "Demo Child Two", "Fictional demo child report; record is marked found for workflow testing.", "CRITICAL", "FOUND", "VERIFIED", createdAt),
+                new LostFoundDemo("demo-lf-003", "SC-LF-DEMO-003", "LOST", "Lost Mobile", "Demo Mobile Three", "Fictional demo lost mobile report.", "NORMAL", "SUBMITTED", "PENDING", createdAt),
+                new LostFoundDemo("demo-lf-004", "SC-LF-DEMO-004", "LOST", "Lost Bag / Luggage", "Demo Bag Four", "Fictional demo bag report; record is marked found for workflow testing.", "NORMAL", "FOUND", "VERIFIED", createdAt),
+                new LostFoundDemo("demo-lf-005", "SC-LF-DEMO-005", "LOST", "Lost Documents", "Demo Documents Five", "Fictional demo document report.", "MEDIUM", "SUBMITTED", "PENDING", createdAt),
+                new LostFoundDemo("demo-lf-006", "SC-LF-DEMO-006", "FOUND", "Found Wallet", "Demo Wallet Six", "Fictional demo found-wallet report awaiting owner verification.", "MEDIUM", "SUBMITTED", "PENDING", createdAt),
+                new LostFoundDemo("demo-lf-007", "SC-LF-DEMO-007", "FOUND", "Found Item", "Demo Item Seven", "Fictional demo found-item report resolved for workflow testing.", "NORMAL", "RESOLVED", "VERIFIED", createdAt));
+    }
+
+    private List<OfficialHelpSeed> officialHelpSeeds() {
+        List<String> services = List.of("Lost & Found Assistance", "Pilgrim Guidance", "Emergency Referral");
+        return List.of(
+                new OfficialHelpSeed("help-ramkund", "Ramkund Pilgrim Help Center", "Ramkund", "Ramkund area, Panchavati, Nashik, Maharashtra", 20.0064, 73.7904, services),
+                new OfficialHelpSeed("help-panchavati", "Panchavati Simhastha Help Center", "Panchavati", "Panchavati area, Nashik, Maharashtra", 20.0103, 73.7960, services),
+                new OfficialHelpSeed("help-trimbakeshwar", "Trimbakeshwar Pilgrim Assistance Center", "Trimbakeshwar", "Trimbakeshwar area, Nashik district, Maharashtra", 19.9320, 73.5297, services),
+                new OfficialHelpSeed("help-tapovan", "Tapovan Simhastha Help Center", "Tapovan", "Tapovan area, Nashik, Maharashtra", 20.0216, 73.7784, services),
+                new OfficialHelpSeed("help-sadhugram", "Sadhugram Pilgrim Help Center", "Sadhugram", "Sadhugram area, Nashik, Maharashtra", 19.9987, 73.7638, services));
+    }
+
+    private record LostFoundDemo(String id, String trackingId, String reportType, String category, String title,
+            String description, String priority, String status, String verificationStatus, String createdAt) { }
+    private record OfficialHelpSeed(String locationId, String name, String area, String address, double latitude,
+            double longitude, List<String> services) { }
+    private record HelpCenterQueryResult(int statusCode, List<Document> documents) { }
 
     private void loadPublicCollection(List<AppDataStore.ServiceItem> target, String collection, String module,
             String titleField, String fallbackCategory) throws IOException, InterruptedException {
@@ -824,7 +1124,7 @@ public final class FirestoreGateway implements GhatRepository {
                 json, idToken);
     }
 
-    public void saveBooking(AppDataStore.BookingRecord booking, String businessOwnerId, String idToken)
+    public void createBooking(AppDataStore.BookingRecord booking, String businessOwnerId, String idToken)
             throws IOException, InterruptedException {
         String json = fieldsJson(
                 fieldJson("bookingId", booking.bookingId),
@@ -847,7 +1147,14 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("razorpayPaymentId", booking.razorpayPaymentId),
                 fieldJson("createdAt", booking.createdAt),
                 fieldJson("updatedAt", booking.updatedAt));
-        sendAuthorizedPatch(documentUri("bookings", booking.bookingId), json, idToken);
+        AppSession.User user = AppSession.currentUser();
+        System.out.println("BOOKING CREATE: tokenPresent=" + (idToken != null && !idToken.isBlank())
+                + ", uid=" + (user == null ? "<none>" : user.uid())
+                + ", role=" + (user == null ? "<none>" : user.role())
+                + ", bookingUserId=" + booking.userId + ", module=" + booking.moduleType
+                + ", bookingId=" + booking.bookingId + ", method=POST");
+        URI collection = URI.create(collectionUrl("bookings") + "&documentId=" + enc(booking.bookingId));
+        sendAuthorizedPost(collection, json, idToken);
     }
 
     public void saveTransportRoute(AppDataStore.RouteRecord route, String idToken)
@@ -917,6 +1224,15 @@ public final class FirestoreGateway implements GhatRepository {
                         + "&updateMask.fieldPaths=status&updateMask.fieldPaths=adminNote"
                         + "&updateMask.fieldPaths=foundAt&updateMask.fieldPaths=updatedAt&updateMask.fieldPaths=updatedBy"),
                 json, idToken);
+    }
+
+    /** Owner-safe status update: it intentionally avoids admin-only fields. */
+    public void markLostFoundReportFoundByOwner(String reportId, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(fieldJson("status", "FOUND"),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("lostFoundReports", reportId)
+                        + "&updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt"), json, idToken);
     }
 
     public void saveItem(String module, AppDataStore.ServiceItem item) {
@@ -990,6 +1306,17 @@ public final class FirestoreGateway implements GhatRepository {
             }
             throw exception;
         }
+    }
+
+    private List<Document> loadQueryDocuments(String collection, String fieldName, String value, String idToken)
+            throws IOException, InterruptedException {
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"" + escape(collection) + "\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"" + escape(fieldName) + "\"},"
+                + "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + escape(value) + "\"}}}}}";
+        String url = String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey());
+        URI endpoint = URI.create(url);
+        String json = post(endpoint, query, idToken);
+        return parseDocuments(json);
     }
 
     private void patch(String url, String json) {
@@ -1136,6 +1463,25 @@ public final class FirestoreGateway implements GhatRepository {
         return matcher.find() ? matcher.group(1) : "";
     }
 
+    private void addOptionalStringField(List<String> fields, String name, String value) {
+        if (value != null && !value.isBlank()) fields.add(fieldJson(name, value));
+    }
+
+    private void sendAuthorizedPost(URI uri, String json, String idToken) throws IOException, InterruptedException {
+        HttpRequest request = authorizedBuilder(uri, idToken)
+                .timeout(Duration.ofSeconds(8))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json))
+                .build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        System.out.println("HTTP STATUS = " + response.statusCode());
+        if (response.statusCode() >= 400) throw firestoreFailure("POST", uri, response);
+    }
+
+    private Double numberOrNull(String fieldsJson, String name) {
+        try { return Double.valueOf(numberField(fieldsJson, name)); } catch (RuntimeException ignored) { return null; }
+    }
+
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (notBlank(value)) {
@@ -1143,6 +1489,10 @@ public final class FirestoreGateway implements GhatRepository {
             }
         }
         return "";
+    }
+
+    private String safeDiagnostic(String value) {
+        return value == null || value.isBlank() ? "<blank>" : value;
     }
 
     private int parseInt(String value, int fallback) {

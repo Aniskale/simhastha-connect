@@ -2,10 +2,14 @@ package com.simhastha.view;
 
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
+import com.simhastha.model.OfficialHelpLocation;
 import com.simhastha.service.GhatCatalogueService;
 import com.simhastha.service.GhatImageService;
 import com.simhastha.service.GhatImageStorageService;
 import com.simhastha.service.GhatService;
+import com.simhastha.dao.LostFoundReportDao;
+import com.simhastha.service.LostFoundDemoSeeder;
+import com.simhastha.service.OfficialHelpLocationSeeder;
 import java.net.URL;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -44,6 +48,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 import javafx.stage.FileChooser;
+import javafx.stage.Popup;
 
 public class AdminDashboardPage {
 
@@ -58,6 +63,12 @@ public class AdminDashboardPage {
     private Stage stage;
     private String selectedSection = "Dashboard";
     private final Set<String> readNotifications = new HashSet<>();
+    private final Set<String> observedLostFoundReportIds = new HashSet<>();
+    private final Set<String> pendingLostFoundReportIds = new HashSet<>();
+    private boolean lostFoundReportBaselineReady;
+    private final Set<String> shownLostFoundToastIds = new HashSet<>();
+    private Popup lostFoundToast;
+    private javafx.animation.Timeline lostFoundRefreshTimer;
     private String editingRouteId = "";
     private String editingOperationalId = "";
     private String editingOperationalModule = "";
@@ -65,6 +76,11 @@ public class AdminDashboardPage {
     private final GhatCatalogueService ghatCatalogueService = new GhatCatalogueService();
     private final GhatImageService ghatImageService = new GhatImageService();
     private final GhatImageStorageService ghatImageStorageService = new GhatImageStorageService();
+    private final LostFoundDemoSeeder lostFoundDemoSeeder = new LostFoundDemoSeeder(
+            new LostFoundReportDao(new FirestoreGateway(FirebaseConfig.load())));
+    private final OfficialHelpLocationSeeder officialHelpLocationSeeder = new OfficialHelpLocationSeeder(
+            new LostFoundReportDao(new FirestoreGateway(FirebaseConfig.load())));
+    private final LostFoundReportDao lostFoundReportDao = new LostFoundReportDao(new FirestoreGateway(FirebaseConfig.load()));
     private List<Ghat> managedGhats = List.of();
     private VBox managedGhatRows;
 
@@ -83,6 +99,7 @@ public class AdminDashboardPage {
         ThemeManager.addTheme(scene, this);
         ThemeManager.addListener(() -> ThemeManager.applyTo(root));
         refreshAdminData();
+        startLostFoundRefreshTimer();
         return scene;
     }
 
@@ -191,7 +208,80 @@ public class AdminDashboardPage {
         java.util.concurrent.CompletableFuture.runAsync(() -> {
             AppDataStore.refreshFirebaseData(token);
             AppDataStore.refreshAdminOverview(token);
-        }).whenComplete((ignored, error) -> Platform.runLater(() -> showSection(selectedSection)));
+        }).whenComplete((ignored, error) -> Platform.runLater(() -> {
+            captureNewLostFoundReports();
+            showSection(selectedSection);
+            showPendingLostFoundToast();
+        }));
+    }
+
+    private void startLostFoundRefreshTimer() {
+        if (lostFoundRefreshTimer != null) lostFoundRefreshTimer.stop();
+        lostFoundRefreshTimer = new javafx.animation.Timeline(new javafx.animation.KeyFrame(
+                javafx.util.Duration.seconds(20), event -> pollLostFoundReports()));
+        lostFoundRefreshTimer.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        lostFoundRefreshTimer.play();
+    }
+
+    private void pollLostFoundReports() {
+        AppSession.User admin = AppSession.currentUser();
+        if (admin == null || !admin.isAdmin()) return;
+        java.util.concurrent.CompletableFuture.runAsync(() -> AppDataStore.refreshFirebaseData(admin.idToken()))
+                .whenComplete((ignored, error) -> Platform.runLater(() -> {
+                    if (error != null) return;
+                    captureNewLostFoundReports();
+                    showPendingLostFoundToast();
+                }));
+    }
+
+    /** Keeps report notices session-scoped and based solely on records returned by the shared report store. */
+    private void captureNewLostFoundReports() {
+        Set<String> currentIds = new HashSet<>();
+        for (AppDataStore.LostFoundCaseRecord item : AppDataStore.lostFoundCases()) {
+            if (!item.demo && item.caseId != null && !item.caseId.isBlank()) currentIds.add(item.caseId);
+        }
+        if (!lostFoundReportBaselineReady) {
+            observedLostFoundReportIds.addAll(currentIds);
+            lostFoundReportBaselineReady = true;
+            return;
+        }
+        for (String reportId : currentIds) {
+            if (observedLostFoundReportIds.add(reportId)) pendingLostFoundReportIds.add(reportId);
+        }
+    }
+
+    private void showPendingLostFoundToast() {
+        AppDataStore.LostFoundCaseRecord report = AppDataStore.lostFoundCases().stream()
+                .filter(item -> !item.demo && pendingLostFoundReportIds.contains(item.caseId)
+                        && !shownLostFoundToastIds.contains(item.caseId))
+                .findFirst().orElse(null);
+        if (report == null || stage == null) return;
+        shownLostFoundToastIds.add(report.caseId);
+        if (lostFoundToast != null) lostFoundToast.hide();
+        Label heading = strong("New " + ("FOUND".equalsIgnoreCase(report.type) ? "Found" : "Lost") + " & Found Report");
+        VBox copy = new VBox(4, heading,
+                muted(report.type + " • " + (report.category.isBlank() ? "Uncategorised" : report.category)),
+                muted(report.name.isBlank() ? "Untitled report" : report.name),
+                muted("Tracking ID: " + (report.trackingId.isBlank() ? report.caseId : report.trackingId)),
+                muted("Status: " + report.status));
+        Button view = smallButton("View Report");
+        Button close = smallButton("×");
+        lostFoundToast = new Popup();
+        view.setOnAction(event -> {
+            pendingLostFoundReportIds.remove(report.caseId);
+            lostFoundToast.hide();
+            selectedSection = "Lost & Found";
+            setActiveSection(selectedSection);
+            root.setCenter(scroll(lostFoundReportDetails(report)));
+        });
+        close.setOnAction(event -> { pendingLostFoundReportIds.remove(report.caseId); lostFoundToast.hide(); });
+        HBox actions = new HBox(8, view, close);
+        VBox card = new VBox(10, copy, actions);
+        card.getStyleClass().add("pilgrim-rich-card");
+        card.setMaxWidth(330);
+        lostFoundToast.getContent().add(card);
+        lostFoundToast.setAutoHide(false);
+        lostFoundToast.show(stage, Math.max(stage.getX() + 18, stage.getX() + stage.getWidth() - 355), stage.getY() + 82);
     }
 
     private void showSection(String section) {
@@ -1225,29 +1315,230 @@ public class AdminDashboardPage {
                 rows.getChildren().add(lostCaseRow(item));
             }
         }
+        VBox notice = newLostFoundNotice(cases);
+        Button seedDemo = smallButton("Seed Demo Reports (Dev)");
+        seedDemo.setOnAction(event -> seedLostFoundDemoReports(seedDemo));
+        Button seedHelpCenters = smallButton("Seed Help Centers (Dev)");
+        seedHelpCenters.setOnAction(event -> seedOfficialHelpLocations(seedHelpCenters));
+        Button manageHelpCenters = smallButton("Help Centers");
+        manageHelpCenters.setOnAction(event -> root.setCenter(scroll(helpCenterManagementPage())));
         return pageShell("Lost & Found Control Center", "Track priority cases and reporter follow-up.",
                 stats,
+                notice,
+                new HBox(10, createSpacer(), manageHelpCenters, seedDemo, seedHelpCenters),
                 searchBar("Missing ID / Name / Contact"),
                 tabRow("Missing", "Found", "High Priority", "Today"),
                 infoPanel("Case Records", rows));
     }
 
+    private void seedLostFoundDemoReports(Button trigger) {
+        AppSession.User admin = AppSession.currentUser();
+        if (admin == null || !admin.isAdmin()) return;
+        trigger.setDisable(true);
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return lostFoundDemoSeeder.seed(admin.idToken()); }
+            catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+        }).whenComplete((inserted, error) -> Platform.runLater(() -> {
+            trigger.setDisable(false);
+            if (error != null) {
+                showInfo("Demo Seed Failed", "Lost & Found demo reports could not be saved. Check the admin session and deployed rules.");
+                return;
+            }
+            refreshAdminData();
+            showInfo("Demo Reports Ready", inserted + " new demo report(s) were added. Existing stable IDs were skipped.");
+        }));
+    }
+
+    private void seedOfficialHelpLocations(Button trigger) {
+        AppSession.User admin = AppSession.currentUser();
+        if (admin == null || !admin.isAdmin()) return;
+        trigger.setDisable(true);
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return officialHelpLocationSeeder.seed(admin.idToken()); }
+            catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+        }).whenComplete((inserted, error) -> Platform.runLater(() -> {
+            trigger.setDisable(false);
+            if (error != null) {
+                showInfo("Help Center Seed Failed", "Official help centers could not be saved. Check the admin session and deployed rules.");
+                return;
+            }
+            showInfo("Help Centers Ready", inserted + " new official help center(s) were added. Existing stable IDs were skipped.");
+        }));
+    }
+
+    private VBox helpCenterManagementPage() {
+        Button back = smallButton("Back to Lost & Found");
+        back.setOnAction(event -> showSection("Lost & Found"));
+        Button add = smallButton("+ Add Help Center");
+        add.setOnAction(event -> showHelpCenterEditor(null));
+        VBox rows = new VBox(10);
+        AppSession.User admin = AppSession.currentUser();
+        if (admin == null || !admin.isAdmin()) {
+            rows.getChildren().add(muted("An authenticated admin session is required."));
+        } else {
+            try {
+                List<OfficialHelpLocation> centers = lostFoundReportDao.officialHelpLocationsForAdmin(admin.idToken());
+                if (centers.isEmpty()) {
+                    rows.getChildren().add(muted("No help centers have been created yet."));
+                } else {
+                    for (OfficialHelpLocation center : centers) rows.getChildren().add(helpCenterRow(center));
+                }
+            } catch (Exception error) {
+                rows.getChildren().add(muted("We couldn't load help centers. Confirm users/{uid}.role is admin and try again."));
+            }
+        }
+        return pageShell("Help Centers", "Manage the verified official help locations used by Lost & Found assistance.",
+                new HBox(10, back, createSpacer(), add), infoPanel("Official Help Centers", rows));
+    }
+
+    private HBox helpCenterRow(OfficialHelpLocation center) {
+        Button edit = smallButton("Edit");
+        edit.setOnAction(event -> showHelpCenterEditor(center));
+        Button deactivate = smallButton(center.active() ? "Deactivate" : "Activate");
+        deactivate.setOnAction(event -> updateHelpCenterActive(center, !center.active(), deactivate));
+        Button delete = smallButton("Delete");
+        delete.setOnAction(event -> deleteHelpCenter(center, delete));
+        VBox details = new VBox(3, strong(center.name()),
+                muted(center.type() + " • " + center.area()),
+                muted(center.address()),
+                muted("Status: " + center.verificationStatus() + " • " + (center.active() ? "Active" : "Inactive")),
+                muted("Services: " + String.join(", ", center.services())));
+        HBox row = new HBox(10, details, createSpacer(), edit, deactivate, delete);
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getStyleClass().add("pilgrim-data-row");
+        return row;
+    }
+
+    private void showHelpCenterEditor(OfficialHelpLocation source) {
+        boolean creating = source == null;
+        String id = creating ? "help-center-" + java.util.UUID.randomUUID() : source.id();
+        Dialog<ButtonType> dialog = new Dialog<>();
+        dialog.setTitle(creating ? "Add Help Center" : "Edit Help Center");
+        dialog.setResizable(true);
+        TextField name = editorField(creating ? "" : source.name(), "Center Name");
+        TextField type = editorField(creating ? "HELP_CENTER" : source.type(), "Type");
+        TextField area = editorField(creating ? "" : source.area(), "Area");
+        TextField address = editorField(creating ? "" : source.address(), "Address");
+        TextField latitude = editorField(creating ? "" : String.valueOf(source.latitude()), "Latitude");
+        TextField longitude = editorField(creating ? "" : String.valueOf(source.longitude()), "Longitude");
+        latitude.setEditable(false); longitude.setEditable(false);
+        TextField contact = editorField(creating ? "" : source.phone(), "Contact Number");
+        TextField services = editorField(creating ? "" : String.join(", ", source.services()), "Services (comma separated)");
+        ComboBox<String> verification = new ComboBox<>();
+        verification.getItems().addAll("VERIFIED", "PENDING", "REJECTED");
+        verification.setValue(creating ? "VERIFIED" : source.verificationStatus());
+        CheckBox active = new CheckBox("Active"); active.setSelected(creating || source.active());
+        final double[] selectedPoint = {creating ? Double.NaN : source.latitude(), creating ? Double.NaN : source.longitude()};
+        Label selectedLocation = new Label(helpCenterLocationSummary(selectedPoint[0], selectedPoint[1]));
+        selectedLocation.setWrapText(true);
+        Button selectOnMap = smallButton("📍 Select Location on Map");
+        selectOnMap.setOnAction(event -> LostFoundMapView.showSelector(
+                dialog.getDialogPane().getScene() == null ? stage : dialog.getDialogPane().getScene().getWindow(),
+                "Select Help Center Location", selectedPoint[0], selectedPoint[1], (lat, lon) -> {
+                    selectedPoint[0] = lat; selectedPoint[1] = lon;
+                    latitude.setText(formatHelpCenterCoordinate(lat));
+                    longitude.setText(formatHelpCenterCoordinate(lon));
+                    selectedLocation.setText(helpCenterLocationSummary(lat, lon));
+                }));
+        GridPane grid = new GridPane(); grid.setHgap(10); grid.setVgap(8); grid.setPadding(new Insets(12));
+        grid.add(labeled("Center Name", name), 0, 0); grid.add(labeled("Type", type), 1, 0);
+        grid.add(labeled("Area", area), 0, 1); grid.add(labeled("Address", address), 1, 1);
+        grid.add(selectOnMap, 0, 2, 2, 1); grid.add(selectedLocation, 0, 3, 2, 1);
+        grid.add(labeled("Latitude", latitude), 0, 4); grid.add(labeled("Longitude", longitude), 1, 4);
+        grid.add(labeled("Contact Number", contact), 0, 5); grid.add(labeled("Services", services), 1, 5);
+        grid.add(labeled("Verification Status", verification), 0, 6); grid.add(active, 1, 6);
+        dialog.getDialogPane().setContent(grid);
+        ButtonType save = new ButtonType("Save Help Center", ButtonType.OK.getButtonData());
+        dialog.getDialogPane().getButtonTypes().addAll(save, ButtonType.CANCEL);
+        if (dialog.showAndWait().orElse(ButtonType.CANCEL) != save) return;
+        Double lat = parseDouble(latitude.getText());
+        Double lon = parseDouble(longitude.getText());
+        if (name.getText().trim().isBlank() || type.getText().trim().isBlank() || lat == null || lon == null) {
+            showInfo("Help Center details required", "Enter a center name, type, and valid latitude and longitude.");
+            return;
+        }
+        String now = String.valueOf(System.currentTimeMillis());
+        OfficialHelpLocation result = new OfficialHelpLocation(id, name.getText().trim(), type.getText().trim(), area.getText().trim(), lat, lon,
+                address.getText().trim(), "", contact.getText().trim(), "", split(services.getText()), verification.getValue(), active.isSelected(),
+                creating ? now : source.createdAt(), now);
+        saveHelpCenter(result, creating);
+    }
+
+    private String helpCenterLocationSummary(double latitude, double longitude) {
+        if (!Double.isFinite(latitude) || !Double.isFinite(longitude)) return "Selected Location: Not selected";
+        return "Selected Location: Map point selected\nLatitude: " + formatHelpCenterCoordinate(latitude)
+                + "\nLongitude: " + formatHelpCenterCoordinate(longitude);
+    }
+
+    private String formatHelpCenterCoordinate(double value) {
+        return String.format(java.util.Locale.ROOT, "%.6f", value);
+    }
+
+    private void saveHelpCenter(OfficialHelpLocation center, boolean creating) {
+        AppSession.User admin = AppSession.currentUser();
+        if (admin == null || !admin.isAdmin()) { showInfo("Admin session required", "Sign in with a users/{uid} profile whose role is admin."); return; }
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try { lostFoundReportDao.saveOfficialHelpLocation(center, creating, admin.idToken()); }
+            catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+        }).whenComplete((ignored, error) -> Platform.runLater(() -> {
+            if (error != null) { showInfo("Help Center Save Failed", "The shared backend did not accept this change. Check the admin role and deployed rules."); return; }
+            root.setCenter(scroll(helpCenterManagementPage()));
+        }));
+    }
+
+    private void updateHelpCenterActive(OfficialHelpLocation center, boolean active, Button trigger) {
+        trigger.setDisable(true);
+        OfficialHelpLocation updated = new OfficialHelpLocation(center.id(), center.name(), center.type(), center.area(), center.latitude(), center.longitude(),
+                center.address(), center.landmark(), center.phone(), center.openingHours(), center.services(), center.verificationStatus(), active,
+                center.createdAt(), String.valueOf(System.currentTimeMillis()));
+        saveHelpCenter(updated, false);
+    }
+
+    private void deleteHelpCenter(OfficialHelpLocation center, Button trigger) {
+        if (!confirm("Delete Help Center", "Delete " + center.name() + "?")) return;
+        trigger.setDisable(true);
+        AppSession.User admin = AppSession.currentUser();
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try { lostFoundReportDao.deleteOfficialHelpLocation(center.id(), admin.idToken()); }
+            catch (Exception error) { throw new java.util.concurrent.CompletionException(error); }
+        }).whenComplete((ignored, error) -> Platform.runLater(() -> {
+            if (error != null) { trigger.setDisable(false); showInfo("Help Center Delete Failed", "The shared backend did not accept this deletion."); return; }
+            root.setCenter(scroll(helpCenterManagementPage()));
+        }));
+    }
+
+    private VBox newLostFoundNotice(List<AppDataStore.LostFoundCaseRecord> cases) {
+        AppDataStore.LostFoundCaseRecord report = cases.stream()
+                .filter(item -> pendingLostFoundReportIds.contains(item.caseId))
+                .findFirst().orElse(null);
+        if (report == null) return new VBox();
+        ImageView thumbnail = report.imageUrl == null || report.imageUrl.isBlank()
+                ? new ImageView() : new ImageView(new Image(report.imageUrl, 46, 40, true, true, true));
+        thumbnail.setFitWidth(46); thumbnail.setFitHeight(40); thumbnail.setPreserveRatio(true);
+        Label noImage = muted(report.imageUrl == null || report.imageUrl.isBlank() ? "No photo" : "");
+        Button view = smallButton("View Report");
+        view.setOnAction(event -> {
+            pendingLostFoundReportIds.remove(report.caseId);
+            root.setCenter(scroll(lostFoundReportDetails(report)));
+        });
+        Button close = smallButton("×");
+        close.setOnAction(event -> {
+            pendingLostFoundReportIds.remove(report.caseId);
+            showSection("Lost & Found");
+        });
+        VBox copy = new VBox(3, strong("New " + valueOr("Lost & Found", report.type) + " Report"),
+                muted((report.trackingId.isBlank() ? report.caseId : report.trackingId) + " • " + valueOr("Uncategorised", report.category)),
+                muted(valueOr("Just received", report.createdAt) + " • " + valueOr("SUBMITTED", report.status)));
+        HBox row = new HBox(10, thumbnail, noImage, copy, createSpacer(), view, close);
+        row.setAlignment(Pos.CENTER_LEFT);
+        VBox notice = new VBox(row);
+        notice.getStyleClass().add("pilgrim-rich-card");
+        return notice;
+    }
+
     private HBox lostCaseRow(AppDataStore.LostFoundCaseRecord item) {
-        Button view = smallButton("View Case");
-        view.setOnAction(event -> showInfo(valueOr(item.caseId, item.name),
-                "Case ID: " + item.caseId
-                        + "\nType: " + valueOr("Not available", item.type)
-                        + "\nName / Item: " + valueOr("Not available", item.name)
-                        + "\nAge/Gender: " + valueOr("-", item.age) + " / " + valueOr("-", item.gender)
-                        + "\nClothing: " + valueOr("Not available", item.clothing)
-                        + "\nIdentification Marks: " + valueOr("Not available", item.identificationMarks)
-                        + "\nLast Seen: " + valueOr("Not available", item.lastSeenLocation)
-                        + "\nLast Seen Time: " + valueOr("Not available", item.lastSeenDateTime)
-                        + "\nReporter: " + valueOr("Not available", item.reporterName)
-                        + "\nRelation: " + valueOr("Not available", item.relation)
-                        + "\nContact: " + valueOr("Not available", item.contact)
-                        + "\nStatus: " + item.status
-                        + "\nPriority: " + item.priority));
+        Button view = smallButton("View Report");
+        view.setOnAction(event -> root.setCenter(scroll(lostFoundReportDetails(item))));
         Button searching = smallButton("Update Status");
         searching.setOnAction(event -> updateLostCase(item, "searching", searching));
         Button found = smallButton("Mark Found");
@@ -1256,9 +1547,12 @@ public class AdminDashboardPage {
         reunited.setOnAction(event -> updateLostCase(item, "reunited", reunited));
         Button close = smallButton("Close Case");
         close.setOnAction(event -> updateLostCase(item, "closed", close));
-        HBox row = new HBox(10, moduleIcon("Lost & Found", "pilgrim-row-icon"),
-                new VBox(2, strong(valueOr(item.caseId, item.name)),
-                        muted(valueOr("Report", item.type) + " | " + valueOr("No location", item.lastSeenLocation)
+        javafx.scene.image.ImageView thumbnail = item.imageUrl == null || item.imageUrl.isBlank() ? new javafx.scene.image.ImageView() : new javafx.scene.image.ImageView(new javafx.scene.image.Image(item.imageUrl, 52, 42, true, true, true));
+        thumbnail.setFitWidth(52); thumbnail.setFitHeight(42); thumbnail.setPreserveRatio(true);
+        Label demo = item.demo ? badge("DEMO") : new Label();
+        HBox row = new HBox(10, thumbnail, moduleIcon("Lost & Found", "pilgrim-row-icon"),
+                new VBox(2, new HBox(6, strong(item.name.isBlank() ? item.caseId : item.name), demo),
+                        muted((item.trackingId.isBlank() ? item.caseId : item.trackingId) + " | " + valueOr("Report", item.type) + " | " + valueOr("Uncategorised", item.category)
                                 + " | Reporter: " + valueOr("Unknown", item.reporterName)
                                 + " | Contact: " + valueOr("Not available", item.contact)
                                 + " | Status: " + item.status + " | Priority: " + item.priority)),
@@ -1266,6 +1560,33 @@ public class AdminDashboardPage {
         row.getStyleClass().add("pilgrim-data-row");
         row.setAlignment(Pos.CENTER_LEFT);
         return row;
+    }
+
+    private VBox lostFoundReportDetails(AppDataStore.LostFoundCaseRecord item) {
+        Button back = smallButton("Back to Lost & Found");
+        back.setOnAction(event -> showSection("Lost & Found"));
+        ImageView image = item.imageUrl == null || item.imageUrl.isBlank() ? new ImageView()
+                : new ImageView(new Image(item.imageUrl, 420, 250, true, true, true));
+        image.setFitWidth(420); image.setFitHeight(250); image.setPreserveRatio(true);
+        VBox photo = item.imageUrl == null || item.imageUrl.isBlank()
+                ? new VBox(8, sectionTitle("No Photo Uploaded"), muted("The reporter did not attach a photo."))
+                : new VBox(8, image);
+        photo.getStyleClass().add("pilgrim-panel");
+        Button found = smallButton("Mark Found");
+        found.setOnAction(event -> updateLostCase(item, "found", found));
+        return pageShell("Lost & Found Report", "Review the submitted report and update its official status.",
+                back, photo,
+                infoPanel("Report Overview", new VBox(6,
+                        strong(valueOr(item.caseId, item.trackingId)),
+                        muted(valueOr("Report", item.type) + " • " + valueOr("Uncategorised", item.name)),
+                        muted("Status: " + valueOr("open", item.status) + " • Priority: " + valueOr("normal", item.priority)),
+                        muted("Submitted: " + valueOr("Not available", item.createdAt)))),
+                infoPanel("Report Details", new VBox(6,
+                        muted("Description / identifying details: " + valueOr("Not available", item.identificationMarks)),
+                        muted("Reporter: " + valueOr("Not available", item.reporterName)),
+                        muted("Relation: " + valueOr("Not available", item.relation)),
+                        muted("Contact: " + valueOr("Not available", item.contact)))),
+                new HBox(10, found));
     }
 
     private void updateLostCase(AppDataStore.LostFoundCaseRecord item, String status, Button button) {

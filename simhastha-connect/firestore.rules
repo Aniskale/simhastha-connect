@@ -308,19 +308,54 @@ service cloud.firestore {
 
     match /lostFoundReports/{caseId} {
       allow read: if isAdmin()
-        || (isSignedIn() && resource.data.reporterUid == request.auth.uid);
+        || (isSignedIn() && (resource.data.userId == request.auth.uid
+          || resource.data.reporterUid == request.auth.uid));
 
-      allow create: if isSignedIn()
-        && request.resource.data.reporterUid == request.auth.uid;
+      // Admins may create development/demo records; ordinary reporters remain tightly scoped.
+      allow create: if isAdmin() || (
+        isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.reporterUid == request.auth.uid
+        && request.resource.data.reportType in ['LOST', 'FOUND']
+        && request.resource.data.status == 'SUBMITTED'
+        && request.resource.data.verificationStatus == 'PENDING'
+        && request.resource.data.keys().hasAll([
+          'reportId', 'trackingId', 'userId', 'reporterUid', 'reportType',
+          'category', 'title', 'priority', 'priorityReason', 'status',
+          'verificationStatus', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'reportId', 'trackingId', 'userId', 'reporterUid', 'reportType',
+          'category', 'title', 'description', 'imageUrl', 'incidentDate',
+          'incidentTime', 'reporterName', 'reporterPhone', 'relation',
+          'priority', 'priorityReason', 'status', 'verificationStatus',
+          'createdAt', 'updatedAt'
+        ])
+      );
 
       allow update: if isAdmin()
         || (isSignedIn()
-          && resource.data.reporterUid == request.auth.uid
+          && (resource.data.userId == request.auth.uid || resource.data.reporterUid == request.auth.uid)
+          && request.resource.data.userId == resource.data.userId
           && request.resource.data.reporterUid == resource.data.reporterUid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'status', 'updatedAt', 'reporterNote'
           ]));
 
+      allow delete: if isAdmin();
+    }
+
+    match /officialHelpLocations/{locationId} {
+      allow read: if isAdmin() || (resource.data.verificationStatus == 'VERIFIED' && resource.data.active == true);
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /userNotifications/{notificationId} {
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isAdmin();
+      allow update: if (isSignedIn() && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'acknowledgedAt', 'updatedAt'])) || isAdmin();
       allow delete: if isAdmin();
     }
 

@@ -130,7 +130,7 @@ public final class AppPaymentCoordinator {
             AppDataStore.updateBookingStatus(bookingId, "PAYMENT_PROCESSING", "PENDING");
             new PaymentDialog(PaymentServiceFactory.get()).show(owner, request)
                     .whenComplete((result, throwable) -> Platform.runLater(() -> handlePaymentResult(booking, result)));
-        } catch (PaymentException exception) {
+        } catch (PaymentException | IllegalStateException exception) {
             showInfo("Payment unavailable", exception.getMessage());
         }
     }
@@ -147,8 +147,7 @@ public final class AppPaymentCoordinator {
                     booking.moduleType, booking.catalogItemId, booking.businessId, booking.title, booking.customerName,
                     booking.dateText, booking.location, booking.quantity, booking.nights, booking.amountPaise,
                     booking.currency, "CONFIRMED", "PAID", result.internalPaymentId(), result.razorpayPaymentId());
-            AppDataStore.bookings().remove(booking);
-            AppDataStore.addBooking(confirmed);
+            AppDataStore.replacePersistedBookingSnapshot(confirmed);
             AppDataStore.TicketRecord ticket = ticketService.issueTicket(confirmed);
             notificationService.bookingConfirmed(confirmed, ticket);
             TicketViewDialog.show(ticket);

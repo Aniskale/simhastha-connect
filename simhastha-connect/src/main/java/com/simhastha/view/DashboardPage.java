@@ -1,6 +1,11 @@
 package com.simhastha.view;
 
 import com.simhastha.model.Ghat;
+import com.simhastha.model.LostFoundReport;
+import com.simhastha.model.OfficialHelpLocation;
+import com.simhastha.dao.LostFoundReportDao;
+import com.simhastha.service.LostFoundReportService;
+import com.simhastha.service.GhatImageStorageService;
 import com.simhastha.service.GhatService;
 import com.simhastha.service.GhatSnanTimeCalculator;
 import com.simhastha.service.GhatOperationalStateService;
@@ -17,6 +22,8 @@ import java.net.URL;
 import java.net.URI;
 import java.util.List;
 import java.util.OptionalInt;
+import java.io.File;
+import java.nio.file.Files;
 
 import javafx.application.Platform;
 import javafx.animation.Animation;
@@ -42,6 +49,7 @@ import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.stage.FileChooser;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
@@ -61,6 +69,8 @@ public class DashboardPage {
 
     private BorderPane root;
     private final AppPaymentCoordinator paymentCoordinator = new AppPaymentCoordinator();
+    private final LostFoundReportService lostFoundReportService = new LostFoundReportService(new LostFoundReportDao(new FirestoreGateway(FirebaseConfig.load())));
+    private final GhatImageStorageService lostFoundImageStorage = new GhatImageStorageService();
     private final java.util.Map<String, Button> navButtons = new java.util.LinkedHashMap<>();
     private LocationOption selectedFromLocation;
     private LocationOption selectedToLocation;
@@ -2410,19 +2420,76 @@ public class DashboardPage {
     }
 
     private VBox lostFoundPage() {
-        HBox actions = new HBox(12,
-                richCard("lost", "Report Lost Person", "Name, age, clothing and last seen area.", "Report"),
-                richCard("lost", "Report Found Item", "Item type, location found and contact counter.", "Submit"));
-        HBox.setHgrow(actions.getChildren().get(0), Priority.ALWAYS);
-        HBox.setHgrow(actions.getChildren().get(1), Priority.ALWAYS);
+        VBox content = new VBox(14);
+        Button lost = new Button("Report Lost"); lost.getStyleClass().add("primary-button"); lost.setOnAction(e -> content.getChildren().setAll(lostFoundForm("LOST")));
+        Button found = new Button("Report Found"); found.getStyleClass().add("pilgrim-small-action"); found.setOnAction(e -> content.getChildren().setAll(lostFoundForm("FOUND")));
+        Button track = new Button("Track My Reports"); track.getStyleClass().add("pilgrim-small-action"); track.setOnAction(e -> content.getChildren().setAll(trackLostFoundReports()));
+        Button help = new Button("Help Near Me"); help.getStyleClass().add("pilgrim-small-action"); help.setOnAction(e -> content.getChildren().setAll(lostFoundHelpNearMe()));
+        HBox actions = new HBox(12, lostFoundAction("Report Lost", "Create a private missing person or lost-item report.", lost), lostFoundAction("Report Found", "Submit a found person or item for official verification.", found), lostFoundAction("Track My Reports", "View updates for reports created by your account.", track), lostFoundAction("Help Near Me", "Find verified official assistance centres.", help));
+        actions.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
+        return pageShell("Lost & Found Assistance", "Report a missing person or lost belonging, report something you found, track your reports, or find nearby official assistance.", actions, content);
+    }
 
-        return pageShell("Lost & Found", "Official support for lost persons and found items.",
-                actions,
-                filterRow("Item/Person Type", "Last Seen Area", "Date", "Search"),
-                twoColumnGrid(
-                        richCard("lost", "Lost Person Help Desk", "Report with clear identity details and contact number.", "Help"),
-                        richCard("lost", "Found Item Counter", "Submit items only at verified counters.", "Counter"),
-                        richCard("announcement", "Public Announcement Support", "Official announcement support for urgent cases.", "Notice")));
+    private VBox lostFoundAction(String title, String detail, Button action) { VBox card = new VBox(9, strong(title), paragraph(detail), action); card.getStyleClass().add("pilgrim-rich-card"); card.setMinWidth(210); return card; }
+    private VBox lostFoundForm(String type) {
+        AppSession.User user = AppSession.currentUser(); if (user == null) return new VBox(8, strong("Login required"), muted("Please sign in before submitting a report."));
+        ComboBox<String> category = stayCombo("What are you reporting?", type.equals("LOST") ? new String[]{"Missing Person", "Missing Child", "Missing Senior Citizen", "Lost Mobile", "Lost Electronics", "Lost Bag / Luggage", "Lost Documents", "Lost Wallet / Money", "Lost Jewellery / Valuable", "Other Lost Item"} : new String[]{"Found Person", "Found Child", "Found Senior Citizen", "Found Mobile", "Found Electronics", "Found Bag", "Found Documents", "Found Wallet", "Found Jewellery", "Other Found Object"});
+        TextField title = AppUi.textField("Full name or item name"), time = AppUi.textField("Time"), description = AppUi.textField("Description and identifying details"), contact = AppUi.textField("Reporter phone"), relation = AppUi.textField("Relation to person (optional)");
+        DatePicker date = new DatePicker(); date.setPromptText("Date"); Label message = muted(""); final File[] selectedPhoto = {null};
+        ImageView preview = new ImageView(); preview.setFitWidth(190); preview.setFitHeight(120); preview.setPreserveRatio(true); preview.setVisible(false);
+        Label photoName = muted("No photo selected"); Button upload = new Button("Upload Photo"); upload.getStyleClass().add("pilgrim-small-action"); Button remove = new Button("Remove Photo"); remove.getStyleClass().add("pilgrim-small-action"); remove.setDisable(true);
+        upload.setOnAction(e -> { FileChooser chooser = new FileChooser(); chooser.setTitle("Select Lost & Found Photo"); chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Images", "*.png", "*.jpg", "*.jpeg", "*.webp")); File file = chooser.showOpenDialog(root.getScene() == null ? null : root.getScene().getWindow()); if (file == null) return; try { long size = Files.size(file.toPath()); String mime = Files.probeContentType(file.toPath()); System.out.println("LOST FOUND IMAGE UPLOAD: stage=FILE_SELECT provider=local file=" + file.getName() + " exists=" + file.isFile() + " size=" + size + " mime=" + (mime == null ? "unknown" : mime)); if (size > 8L * 1024 * 1024) { message.setText("Choose an image smaller than 8 MB."); return; } selectedPhoto[0] = file; Image localPreview = new Image(file.toURI().toString(), 190, 120, true, true, true); localPreview.errorProperty().addListener((obs, old, failed) -> { if (failed) { System.out.println("LostFound image upload failed: stage=PREVIEW provider=local message=" + localPreview.getException()); message.setText("The selected image could not be previewed."); } }); preview.setImage(localPreview); preview.setVisible(true); photoName.setText(file.getName()); upload.setText("Change Photo"); remove.setDisable(false); } catch (Exception error) { System.out.println("LostFound image upload failed: stage=PREVIEW provider=local message=" + error.getMessage()); message.setText("The selected image could not be read."); } });
+        remove.setOnAction(e -> { selectedPhoto[0] = null; preview.setImage(null); preview.setVisible(false); photoName.setText("No photo selected"); upload.setText("Upload Photo"); remove.setDisable(true); });
+        VBox photoCard = new VBox(8, sectionTitle("Photo / Image Upload"), muted("Add a clear photo when it helps identify the person or item."), preview, photoName, new HBox(8, upload, remove)); photoCard.getStyleClass().add("pilgrim-panel");
+        Button help = new Button("Near Help Centers"); help.getStyleClass().add("pilgrim-small-action"); help.setOnAction(e -> root.setCenter(scroll(pageShell("Lost & Found Assistance", "Find verified official assistance centres.", lostFoundHelpNearMe())))); Button submit = new Button("Submit Report"); submit.getStyleClass().add("primary-button");
+        submit.setOnAction(e -> {
+            String selectedCategory = cleanLostFoundValue(category.getValue());
+            String reportTitle = cleanLostFoundValue(title.getText());
+            String reportDescription = cleanLostFoundValue(description.getText());
+            System.out.println("LOST_FOUND_FORM_DEBUG reportType=" + type + " category=" + selectedCategory
+                    + " title=" + reportTitle + " imageSelected=" + (selectedPhoto[0] != null));
+            if (selectedCategory.isBlank() || reportTitle.isBlank()) {
+                message.setText("Enter the report category and name or item details.");
+                return;
+            }
+
+            submit.setDisable(true);
+            List<String> imageUrls = List.of();
+            if (selectedPhoto[0] != null) {
+                try {
+                    imageUrls = List.of(lostFoundImageStorage.store(selectedPhoto[0].toPath(), "lost-found-" + java.util.UUID.randomUUID()));
+                    System.out.println("LOST FOUND IMAGE UPLOAD: stage=IMAGE_UPLOAD provider=local uploadSuccess=true returnedUrlPresent=true");
+                } catch (Exception error) {
+                    System.out.println("LostFound image upload failed: stage=IMAGE_UPLOAD provider=local message=" + error.getMessage());
+                    submit.setDisable(false);
+                    message.setText("Image upload failed. Please retry.");
+                    return;
+                }
+            }
+            try {
+                LostFoundReport draft = new LostFoundReport("", "", user.uid(), type, selectedCategory, reportTitle,
+                        reportDescription, imageUrls, "", null, null, "", date.getValue() == null ? "" : date.getValue().toString(),
+                        cleanLostFoundValue(time.getText()), user.displayName(), cleanLostFoundValue(contact.getText()),
+                        cleanLostFoundValue(relation.getText()), "", "", "", "", "", "", "", "", "", "", "");
+                LostFoundReport saved = lostFoundReportService.create(draft, user.idToken());
+                root.setCenter(scroll(pageShell("Report Submitted Successfully", "Your report has been sent to the Simhastha Lost & Found assistance system.", strong("Tracking ID: " + saved.trackingId()), trackLostFoundReports())));
+            } catch (Exception error) {
+                System.out.println("LostFound report persistence failed: stage=REPORT_FIRESTORE_CREATE message=" + error.getMessage());
+                submit.setDisable(false);
+                message.setText(error.getMessage() == null ? "Unable to submit your report. Please check your connection and try again." : error.getMessage());
+            }
+        });
+        GridPane grid = new GridPane(); grid.setHgap(10); grid.setVgap(10); Node[] fields = {category,title,date,time,description,contact,relation}; for (int i=0;i<fields.length;i++) grid.add(fields[i],i%2,i/2);
+        HBox bottomActions = new HBox(10, help, submit); bottomActions.setAlignment(Pos.CENTER_RIGHT);
+        VBox form = new VBox(12, sectionTitle(type.equals("LOST") ? "Report Lost" : "Report Found"), muted("Reporter contact information is private and not publicly displayed."), grid, photoCard, bottomActions, message); form.getStyleClass().add("pilgrim-panel"); return form;
+    }
+    private VBox trackLostFoundReports() { AppSession.User user = AppSession.currentUser(); VBox rows = new VBox(9, sectionTitle("My Lost & Found Reports")); if (user == null) { rows.getChildren().add(muted("Please sign in to view reports.")); return rows; } try { List<LostFoundReport> reports = lostFoundReportService.myReports(user.uid(), user.idToken()); if (reports.isEmpty()) rows.getChildren().add(muted("No Lost & Found reports submitted yet.")); else reports.forEach(report -> { ImageView thumbnail = report.imageUrls().isEmpty() ? new ImageView() : createImage(report.imageUrls().get(0), 72, 54, 0.5, 0.5); thumbnail.setFitWidth(72); thumbnail.setFitHeight(54); Label noPhoto = muted(report.imageUrls().isEmpty() ? "No Photo Uploaded" : ""); VBox text = new VBox(4, strong(report.trackingId()), muted(report.reportType() + " • " + report.category() + " • " + report.status()), muted(report.createdAt())); Button view = new Button("View Details"); view.getStyleClass().add("pilgrim-small-action"); view.setOnAction(event -> root.setCenter(scroll(pageShell("Lost & Found Report", "Your submitted report details.", lostFoundReportDetails(report))))); HBox card = new HBox(10, thumbnail, noPhoto, text, createSpacer(), view); card.setAlignment(Pos.CENTER_LEFT); card.getStyleClass().add("pilgrim-data-row"); rows.getChildren().add(card); }); } catch (Exception error) { rows.getChildren().add(muted("We couldn't load your reports right now. Please try again.")); } return rows; }
+    private VBox lostFoundReportDetails(LostFoundReport report) { ImageView image = report.imageUrls().isEmpty() ? new ImageView() : createImage(report.imageUrls().get(0), 420, 250, 0.5, 0.5); image.setFitWidth(420); image.setFitHeight(250); VBox imagePanel = report.imageUrls().isEmpty() ? new VBox(8, sectionTitle("No Photo Uploaded"), muted("This report was submitted without a photo.")) : new VBox(8, image); imagePanel.getStyleClass().add("pilgrim-panel"); Button back = new Button("Back to My Reports"); back.getStyleClass().add("pilgrim-small-action"); back.setOnAction(event -> root.setCenter(scroll(pageShell("Lost & Found Assistance", "Track your submitted reports.", trackLostFoundReports())))); VBox body = new VBox(12, back, imagePanel, strong(report.trackingId()), muted(report.reportType() + " • " + report.category()), paragraph(report.description()), muted("Status: " + report.status()), muted("Created: " + report.createdAt())); if ("LOST".equalsIgnoreCase(report.reportType()) && !"FOUND".equalsIgnoreCase(report.status()) && !"RESOLVED".equalsIgnoreCase(report.status())) { Button found = new Button("Mark As Found"); found.getStyleClass().add("primary-button"); found.setOnAction(event -> { found.setDisable(true); try { lostFoundReportService.markFoundByOwner(report.reportId(), AppSession.currentUser().idToken()); root.setCenter(scroll(pageShell("Lost & Found Assistance", "Track your submitted reports.", trackLostFoundReports()))); } catch (Exception error) { found.setDisable(false); } }); body.getChildren().add(found); } return body; }
+    private VBox lostFoundHelpNearMe() { AppSession.User user = AppSession.currentUser(); VBox content = new VBox(10, sectionTitle("Help Near Me")); if (user == null) { content.getChildren().add(muted("Please sign in to view verified help centers.")); return content; } try { List<OfficialHelpLocation> centers = new LostFoundReportDao(new FirestoreGateway(FirebaseConfig.load())).officialHelpLocations(user.idToken()); if (centers.isEmpty()) { content.getChildren().add(muted("No verified official help locations are currently available.")); return content; } Button map = new Button("View Help Centers on Map"); map.getStyleClass().add("primary-button"); map.setOnAction(event -> LostFoundMapView.showHelpCenters(root.getScene() == null ? null : root.getScene().getWindow(), centers)); content.getChildren().addAll(muted(centers.size() + " verified official help center(s) are available."), map); for (OfficialHelpLocation center : centers) { Button directions = new Button("Directions"); directions.getStyleClass().add("pilgrim-small-action"); directions.setOnAction(event -> LostFoundMapView.openDirections(center)); VBox card = new VBox(5, strong(center.name()), muted(center.area() + " • " + center.type()), muted(center.address()), muted("Services: " + String.join(", ", center.services())), directions); card.getStyleClass().add("pilgrim-rich-card"); content.getChildren().add(card); } } catch (Exception error) { content.getChildren().add(muted("We couldn't load verified help centers right now. Please try again.")); } return content; }
+    private ComboBox<String> stayCombo(String prompt, String... items) { ComboBox<String> combo = new ComboBox<>(); combo.setPromptText(prompt); combo.getItems().addAll(items); combo.getStyleClass().add("input-combo"); combo.setMaxWidth(Double.MAX_VALUE); return combo; }
+
+    private String cleanLostFoundValue(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private VBox schedulePage() {

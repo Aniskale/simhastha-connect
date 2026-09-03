@@ -176,9 +176,16 @@ public final class AppDataStore {
     }
 
     public static BookingRecord addBooking(BookingRecord booking) {
+        saveBookingRequired(booking);
+        bookings.removeIf(existing -> existing.bookingId.equals(booking.bookingId));
         bookings.add(booking);
-        saveBookingIfPossible(booking);
         return booking;
+    }
+
+    /** Replaces the local representation after an already-persisted status update. */
+    public static void replacePersistedBookingSnapshot(BookingRecord booking) {
+        bookings.removeIf(existing -> existing.bookingId.equals(booking.bookingId));
+        bookings.add(booking);
     }
 
     public static void updateBookingStatus(String bookingId, String bookingStatus, String paymentStatus) {
@@ -603,6 +610,10 @@ public final class AppDataStore {
         public final String priority;
         public final String createdAt;
         public final String updatedAt;
+        public final String trackingId;
+        public final String imageUrl;
+        public final String category;
+        public final boolean demo;
 
         public LostFoundCaseRecord(String caseId, String type, String name, String age, String gender,
                 String clothing, String identificationMarks, String lastSeenLocation, String lastSeenDateTime,
@@ -624,12 +635,50 @@ public final class AppDataStore {
             this.priority = clean(priority).isBlank() ? "normal" : clean(priority);
             this.createdAt = clean(createdAt);
             this.updatedAt = clean(updatedAt);
+            this.trackingId = "";
+            this.imageUrl = "";
+            this.category = "";
+            this.demo = false;
+        }
+
+        public LostFoundCaseRecord(String caseId, String type, String name, String age, String gender,
+                String clothing, String identificationMarks, String lastSeenLocation, String lastSeenDateTime,
+                String reporterName, String relation, String contact, String status, String priority,
+                String createdAt, String updatedAt, String trackingId, String imageUrl) {
+            this(caseId, type, name, age, gender, clothing, identificationMarks, lastSeenLocation, lastSeenDateTime,
+                    reporterName, relation, contact, status, priority, createdAt, updatedAt, trackingId, imageUrl, "", false);
+        }
+
+        public LostFoundCaseRecord(String caseId, String type, String name, String age, String gender,
+                String clothing, String identificationMarks, String lastSeenLocation, String lastSeenDateTime,
+                String reporterName, String relation, String contact, String status, String priority,
+                String createdAt, String updatedAt, String trackingId, String imageUrl, String category, boolean demo) {
+            this.caseId = clean(caseId);
+            this.type = clean(type);
+            this.name = clean(name);
+            this.age = clean(age);
+            this.gender = clean(gender);
+            this.clothing = clean(clothing);
+            this.identificationMarks = clean(identificationMarks);
+            this.lastSeenLocation = clean(lastSeenLocation);
+            this.lastSeenDateTime = clean(lastSeenDateTime);
+            this.reporterName = clean(reporterName);
+            this.relation = clean(relation);
+            this.contact = clean(contact);
+            this.status = clean(status).isBlank() ? "open" : clean(status);
+            this.priority = clean(priority).isBlank() ? "normal" : clean(priority);
+            this.createdAt = clean(createdAt);
+            this.updatedAt = clean(updatedAt);
+            this.trackingId = clean(trackingId);
+            this.imageUrl = clean(imageUrl);
+            this.category = clean(category);
+            this.demo = demo;
         }
 
         public LostFoundCaseRecord withStatus(String status) {
             return new LostFoundCaseRecord(caseId, type, name, age, gender, clothing, identificationMarks,
                     lastSeenLocation, lastSeenDateTime, reporterName, relation, contact, status, priority,
-                    createdAt, String.valueOf(System.currentTimeMillis()));
+                    createdAt, String.valueOf(System.currentTimeMillis()), trackingId, imageUrl, category, demo);
         }
     }
 
@@ -922,11 +971,11 @@ public final class AppDataStore {
         }
     }
 
-    private static void saveBookingIfPossible(BookingRecord booking) {
+    private static void saveBookingRequired(BookingRecord booking) {
         try {
-            firestore.saveBooking(booking, businessOwnerIdFor(booking.businessId), currentToken());
-        } catch (Exception ignored) {
-            // Local cache remains usable if rules/backend own this write path.
+            firestore.createBooking(booking, businessOwnerIdFor(booking.businessId), currentToken());
+        } catch (Exception exception) {
+            throw new IllegalStateException("Booking could not be persisted. No booking was created.", exception);
         }
     }
 
