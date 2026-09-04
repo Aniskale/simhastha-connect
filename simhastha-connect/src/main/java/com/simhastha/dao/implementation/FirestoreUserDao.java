@@ -24,7 +24,7 @@ public final class FirestoreUserDao implements UserDao {
             return Optional.empty();
         }
         return Optional.of(new UserProfile(profile.uid(), profile.name(), profile.email(), profile.mobile(),
-                profile.role(), profile.status()));
+                profile.role(), profile.status(), profile.profilePhotoUrl(), profile.profilePhotoPublicId()));
     }
 
     @Override
@@ -35,7 +35,8 @@ public final class FirestoreUserDao implements UserDao {
     @Override
     public void saveProfile(UserProfile profile, String idToken) throws IOException, InterruptedException {
         gateway.saveUserProfile(new FirestoreGateway.UserProfile(profile.uid(), profile.name(), profile.email(),
-                profile.mobile(), profile.role(), profile.status()), idToken);
+                profile.mobile(), profile.role(), profile.status(), profile.profilePhotoUrl(),
+                profile.profilePhotoPublicId()), idToken);
     }
 
     @Override

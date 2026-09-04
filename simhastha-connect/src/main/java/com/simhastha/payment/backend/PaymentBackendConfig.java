@@ -7,16 +7,16 @@ public final class PaymentBackendConfig {
     private final String keySecret;
     private final String webhookSecret;
     private final String firestoreProjectId;
-    private final String firestoreBearerToken;
+    private final String serviceAccountPath;
 
     private PaymentBackendConfig(boolean enabled, String keyId, String keySecret, String webhookSecret,
-            String firestoreProjectId, String firestoreBearerToken) {
+            String firestoreProjectId, String serviceAccountPath) {
         this.enabled = enabled;
         this.keyId = keyId;
         this.keySecret = keySecret;
         this.webhookSecret = webhookSecret;
         this.firestoreProjectId = firestoreProjectId;
-        this.firestoreBearerToken = firestoreBearerToken;
+        this.serviceAccountPath = serviceAccountPath;
     }
 
     public static PaymentBackendConfig load() {
@@ -29,15 +29,16 @@ public final class PaymentBackendConfig {
                 System.getProperty("payments.firestore.projectId"),
                 System.getenv("PAYMENTS_FIRESTORE_PROJECT_ID"),
                 System.getenv("FIREBASE_PROJECT_ID"));
-        String firestoreBearerToken = firstNonBlank(
-                System.getProperty("payments.firestore.bearerToken"),
-                System.getenv("PAYMENTS_FIRESTORE_BEARER_TOKEN"));
+        String serviceAccountPath = firstNonBlank(
+                System.getProperty("payments.firebase.serviceAccountPath"),
+                System.getenv("PAYMENTS_FIREBASE_SERVICE_ACCOUNT_PATH"),
+                System.getenv("GOOGLE_APPLICATION_CREDENTIALS"));
         boolean enabled = "true".equalsIgnoreCase(firstNonBlank(
                 System.getProperty("payments.backend.enabled"),
                 System.getenv("PAYMENTS_BACKEND_ENABLED"),
                 "false"));
         return new PaymentBackendConfig(enabled && keyId != null && keySecret != null, keyId, keySecret,
-                webhookSecret, firestoreProjectId, firestoreBearerToken);
+                webhookSecret, firestoreProjectId, serviceAccountPath);
     }
 
     public boolean isEnabled() {
@@ -64,13 +65,16 @@ public final class PaymentBackendConfig {
         return firestoreProjectId;
     }
 
-    public String firestoreBearerToken() {
-        return firestoreBearerToken;
+    public String serviceAccountPath() {
+        return serviceAccountPath;
     }
 
+    /** @deprecated The legacy REST repository is not used by the backend server. */
+    @Deprecated
+    public String firestoreBearerToken() { return ""; }
+
     public boolean hasFirestoreConfig() {
-        return firestoreProjectId != null && !firestoreProjectId.isBlank()
-                && firestoreBearerToken != null && !firestoreBearerToken.isBlank();
+        return serviceAccountPath != null && !serviceAccountPath.isBlank();
     }
 
     private static String firstNonBlank(String... values) {

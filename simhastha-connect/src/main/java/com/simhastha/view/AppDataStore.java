@@ -15,6 +15,7 @@ import com.simhastha.dao.implementation.FirestoreUserDao;
 import com.simhastha.gateway.firebase.FirebaseConfig;
 import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.model.BusinessMedia;
+import com.simhastha.model.CloudImage;
 import com.simhastha.model.PublicBusinessItem;
 import com.simhastha.util.AppSession;
 
@@ -51,6 +52,7 @@ public final class AppDataStore {
     private static final List<TransportOperatorRecord> transportOperators = new ArrayList<>();
     private static final List<LostFoundCaseRecord> lostFoundCases = new ArrayList<>();
     private static final List<RouteRecord> transportRoutes = new ArrayList<>();
+    private static final List<FaqRecord> faqs = new ArrayList<>();
     private static final Set<String> remoteModules = new HashSet<>();
     private static final FirestoreGateway firestore = new FirestoreGateway(FirebaseConfig.load());
     private static final UserDao userDao = new FirestoreUserDao(firestore);
@@ -130,6 +132,7 @@ public final class AppDataStore {
                 "Every user-facing module can be updated from Admin Dashboard.", "About"));
         about.add(new ServiceItem("Approval-first Marketplace",
                 "Business and transport entries become public only after admin approval.", "About"));
+        seedFaqs();
         loadFirebaseDataIfAvailable();
     }
 
@@ -214,12 +217,63 @@ public final class AppDataStore {
     public static void rememberPublicBusiness(com.simhastha.model.PublicBusinessListing listing) {
         if (listing == null || listing.businessId() == null || listing.businessId().isBlank()) return;
         businesses.removeIf(existing -> listing.businessId().equals(existing.businessId));
+        String logoUrl = listing.media().stream().filter(media -> "logo".equalsIgnoreCase(media.type()))
+                .map(BusinessMedia::url).findFirst().orElse("");
+        String logoPublicId = listing.media().stream().filter(media -> "logo".equalsIgnoreCase(media.type()))
+                .map(BusinessMedia::publicId).findFirst().orElse("");
+        String coverPhotoUrl = listing.coverPhotoUrl();
+        String coverPhotoPublicId = listing.media().stream().filter(BusinessMedia::cover)
+                .map(BusinessMedia::publicId).findFirst().orElse("");
+        List<CloudImage> galleryImages = listing.media().stream()
+                .filter(media -> "gallery".equalsIgnoreCase(media.type()))
+                .map(media -> new CloudImage(media.url(), media.publicId()))
+                .toList();
         businesses.add(new BusinessRecord(listing.businessId(), listing.ownerId(), listing.name(), "", listing.category(),
                 listing.description(), listing.location(), listing.address(), listing.area(), listing.city(),
                 listing.latitude(), listing.longitude(), listing.locationUpdatedAt(), listing.mobile(), listing.email(),
-                listing.operatingHours(), listing.priceRange(), "active", true, "", ""));
+                listing.operatingHours(), listing.priceRange(), "active", true, logoUrl, logoPublicId, coverPhotoUrl,
+                coverPhotoPublicId, galleryImages, "", ""));
         rememberBusinessMedia(listing.businessId(), listing.media());
         for (PublicBusinessItem item : listing.items()) rememberBusinessItem(item);
+    }
+
+    public static List<FaqRecord> faqs() {
+        return faqs;
+    }
+
+    public static void saveFaq(FaqRecord faq) {
+        if (faq == null) {
+            return;
+        }
+        boolean updated = false;
+        for (int i = 0; i < faqs.size(); i++) {
+            if (faqs.get(i).id.equals(faq.id)) {
+                faqs.set(i, faq);
+                updated = true;
+                break;
+            }
+        }
+        if (!updated) {
+            faqs.add(faq);
+        }
+        if (firestore.isEnabled()) {
+            try {
+                firestore.saveFaq(faq, currentToken());
+            } catch (Exception ignored) {
+                // Local FAQ changes stay available even if the remote sync is temporarily unavailable.
+            }
+        }
+    }
+
+    public static void deleteFaq(String id) {
+        faqs.removeIf(faq -> faq.id.equals(id));
+        if (firestore.isEnabled()) {
+            try {
+                firestore.deleteFaq(id, currentToken());
+            } catch (Exception ignored) {
+                // Keep the admin UI responsive if the remote delete fails.
+            }
+        }
     }
 
     public static BusinessRecord businessForOwner(String ownerId) {
@@ -381,6 +435,16 @@ public final class AppDataStore {
         }
     }
 
+    public static void updateLocalUserProfile(String uid, String name, String email, String mobile) {
+        if (uid == null || uid.isBlank()) {
+            return;
+        }
+        users.replaceAll(user -> user.uid.equals(uid)
+                ? new UserRecord(uid, name, email, mobile, user.role, user.status, user.createdAt,
+                        String.valueOf(System.currentTimeMillis()))
+                : user);
+    }
+
     public static void updateBusinessStatus(String businessId, String status, boolean approved) throws ApprovalUpdateException {
         try {
             businessDao.updateStatus(businessId, status, approved, currentToken());
@@ -500,6 +564,9 @@ public final class AppDataStore {
         public final String title;
         public final String detail;
         public final String category;
+        public final String imageUrl;
+        public final String imagePublicId;
+        public final List<CloudImage> galleryImages;
 
         public ServiceItem(String title, String detail, String category) {
             this(slug(category + "-" + title), moduleKey(category), title, detail, category);
@@ -510,11 +577,19 @@ public final class AppDataStore {
         }
 
         public ServiceItem(String id, String module, String title, String detail, String category) {
+            this(id, module, title, detail, category, "", "", List.of());
+        }
+
+        public ServiceItem(String id, String module, String title, String detail, String category,
+                String imageUrl, String imagePublicId, List<CloudImage> galleryImages) {
             this.id = id;
             this.module = module;
             this.title = title;
             this.detail = detail;
             this.category = category;
+            this.imageUrl = clean(imageUrl);
+            this.imagePublicId = clean(imagePublicId);
+            this.galleryImages = galleryImages == null ? List.of() : List.copyOf(galleryImages);
         }
     }
 
@@ -584,6 +659,28 @@ public final class AppDataStore {
         }
     }
 
+    public static final class FaqRecord {
+        public final String id;
+        public final String category;
+        public final String question;
+        public final String answer;
+        public final boolean active;
+        public final String sortOrder;
+
+        public FaqRecord(String id, String category, String question, String answer, boolean active, String sortOrder) {
+            this.id = clean(id).isBlank() ? "faq-" + UUID.randomUUID() : clean(id);
+            this.category = clean(category).isBlank() ? "General" : clean(category);
+            this.question = clean(question);
+            this.answer = clean(answer);
+            this.active = active;
+            this.sortOrder = clean(sortOrder).isBlank() ? "99" : clean(sortOrder);
+        }
+
+        public FaqRecord withActive(boolean active) {
+            return new FaqRecord(id, category, question, answer, active, sortOrder);
+        }
+    }
+
     public static final class BusinessRecord {
         public final String businessId;
         public final String ownerId;
@@ -604,6 +701,11 @@ public final class AppDataStore {
         public final String priceRange;
         public final String status;
         public final boolean approved;
+        public final String logoUrl;
+        public final String logoPublicId;
+        public final String coverPhotoUrl;
+        public final String coverPhotoPublicId;
+        public final List<CloudImage> galleryImages;
         public final String createdAt;
         public final String updatedAt;
 
@@ -611,13 +713,35 @@ public final class AppDataStore {
                 String description, String location, String mobile, String email, String operatingHours,
                 String priceRange, String status, boolean approved, String createdAt, String updatedAt) {
             this(businessId, ownerId, businessName, ownerName, category, description, location, "", "", "", "", "",
-                    "", mobile, email, operatingHours, priceRange, status, approved, createdAt, updatedAt);
+                    "", mobile, email, operatingHours, priceRange, status, approved, "", "", "", "", List.of(),
+                    createdAt, updatedAt);
         }
 
         public BusinessRecord(String businessId, String ownerId, String businessName, String ownerName, String category,
                 String description, String location, String address, String area, String city, String latitude,
                 String longitude, String locationUpdatedAt, String mobile, String email, String operatingHours,
                 String priceRange, String status, boolean approved, String createdAt, String updatedAt) {
+            this(businessId, ownerId, businessName, ownerName, category, description, location, address, area, city,
+                    latitude, longitude, locationUpdatedAt, mobile, email, operatingHours, priceRange, status, approved,
+                    "", "", "", "", List.of(), createdAt, updatedAt);
+        }
+
+        public BusinessRecord(String businessId, String ownerId, String businessName, String ownerName, String category,
+                String description, String location, String mobile, String email, String operatingHours,
+                String priceRange, String status, boolean approved, String logoUrl, String logoPublicId,
+                String coverPhotoUrl, String coverPhotoPublicId, List<CloudImage> galleryImages,
+                String createdAt, String updatedAt) {
+            this(businessId, ownerId, businessName, ownerName, category, description, location, "", "", "", "", "",
+                    "", mobile, email, operatingHours, priceRange, status, approved, logoUrl, logoPublicId,
+                    coverPhotoUrl, coverPhotoPublicId, galleryImages, createdAt, updatedAt);
+        }
+
+        public BusinessRecord(String businessId, String ownerId, String businessName, String ownerName, String category,
+                String description, String location, String address, String area, String city, String latitude,
+                String longitude, String locationUpdatedAt, String mobile, String email, String operatingHours,
+                String priceRange, String status, boolean approved, String logoUrl, String logoPublicId,
+                String coverPhotoUrl, String coverPhotoPublicId, List<CloudImage> galleryImages, String createdAt,
+                String updatedAt) {
             this.businessId = clean(businessId);
             this.ownerId = clean(ownerId);
             this.businessName = clean(businessName);
@@ -637,6 +761,11 @@ public final class AppDataStore {
             this.priceRange = clean(priceRange);
             this.status = clean(status).isBlank() ? "pending" : clean(status);
             this.approved = approved;
+            this.logoUrl = clean(logoUrl);
+            this.logoPublicId = clean(logoPublicId);
+            this.coverPhotoUrl = clean(coverPhotoUrl);
+            this.coverPhotoPublicId = clean(coverPhotoPublicId);
+            this.galleryImages = galleryImages == null ? List.of() : List.copyOf(galleryImages);
             this.createdAt = clean(createdAt);
             this.updatedAt = clean(updatedAt);
         }
@@ -644,7 +773,8 @@ public final class AppDataStore {
         public BusinessRecord withStatus(String status, boolean approved) {
             return new BusinessRecord(businessId, ownerId, businessName, ownerName, category, description, location,
                     address, area, city, latitude, longitude, locationUpdatedAt, mobile, email, operatingHours,
-                    priceRange, status, approved, createdAt,
+                    priceRange, status, approved, logoUrl, logoPublicId, coverPhotoUrl, coverPhotoPublicId,
+                    galleryImages, createdAt,
                     String.valueOf(System.currentTimeMillis()));
         }
     }
@@ -896,6 +1026,119 @@ public final class AppDataStore {
         loadFirebaseDataIfAvailable("");
     }
 
+    private static void seedFaqs() {
+        if (!faqs.isEmpty()) {
+            return;
+        }
+        seedFaq("faq-general-simhastha", "General", "What is Simhastha and why is it celebrated in Nashik?",
+                "Simhastha is a major Hindu religious gathering held every 12 years in Nashik and Trimbakeshwar. Devotees take holy snan at sacred ghats and use Simhastha Connect for trusted travel, stay, puja and safety support.", 1);
+        seedFaq("faq-general-app", "General", "What can I do inside Simhastha Connect?",
+                "You can view packages, transport, stays, puja services, ghats, emergency help, announcements, schedules and booking status from one dashboard.", 2);
+        seedFaq("faq-general-language", "General", "Can pilgrims use the app for quick guidance?",
+                "Yes. The dashboard keeps important services, alerts and support options in simple sections so pilgrims can find help quickly.", 3);
+        seedFaq("faq-general-notifications", "General", "How do notifications work?",
+                "Notifications show booking updates, admin announcements, safety alerts and route guidance relevant to your account.", 4);
+        seedFaq("faq-general-profile", "General", "Why should I keep my profile updated?",
+                "Updated name, mobile number, email and address help support teams identify your booking, contact you and provide faster assistance.", 5);
+
+        seedFaq("faq-2027-dates", "Simhastha 2027", "When will Simhastha 2027 take place?",
+                "Official dates and daily schedules will appear in the All Day Schedule and Announcement sections as administrators publish them.", 6);
+        seedFaq("faq-2027-official", "Simhastha 2027", "Where will official updates appear?",
+                "Use Announcements & Live Updates for venue changes, crowd advisories, traffic changes, important instructions and emergency notices.", 7);
+        seedFaq("faq-2027-planning", "Simhastha 2027", "How should I plan my visit?",
+                "Check the schedule, stay options, travel route, ghat guidance and live announcements before finalizing your journey.", 8);
+        seedFaq("faq-2027-crowd", "Simhastha 2027", "Will crowd updates be available?",
+                "Important crowd and route advisories can be shared through announcements, notifications and emergency guidance pages.", 9);
+        seedFaq("faq-2027-family", "Simhastha 2027", "What should families prepare before arriving?",
+                "Save emergency contacts, keep identity details ready, update profile information and follow official route and ghat instructions.", 10);
+
+        seedFaq("faq-ghats-main", "Ghats & Snan", "Which are the main ghats for holy snan in Nashik?",
+                "Ramkund, Godavari ghats, Panchavati area and other approved snan points will appear with live safety, crowd and route guidance.", 11);
+        seedFaq("faq-ghats-timing", "Ghats & Snan", "How do I know the best snan timing?",
+                "Open Ghats & Snan and All Day Schedule to check available timing, important rituals and updated guidance from the team.", 12);
+        seedFaq("faq-ghats-safety", "Ghats & Snan", "What precautions should I follow at ghats?",
+                "Follow barricades, avoid overcrowded steps, keep children close and contact emergency support if medical or safety help is needed.", 13);
+        seedFaq("faq-ghats-elderly", "Ghats & Snan", "Is there guidance for elderly pilgrims?",
+                "Use ghat information, route guidance and emergency support to identify safer movement areas and assistance options.", 14);
+        seedFaq("faq-ghats-route", "Ghats & Snan", "Can ghat entry routes change?",
+                "Yes. Routes may change for crowd control. Check announcements and transport guidance before moving toward a ghat.", 15);
+
+        seedFaq("faq-travel-reach", "Travel & Transport", "How can I reach Nashik during Simhastha?",
+                "Use the Transport section for routes, timings, operator details, pickup points, parking and crowd-aware travel guidance.", 16);
+        seedFaq("faq-travel-parking", "Travel & Transport", "Where can I check parking information?",
+                "Transport and announcements can show parking updates, pickup zones and route changes shared by administrators.", 17);
+        seedFaq("faq-travel-route-change", "Travel & Transport", "Can transport routes change during crowd control?",
+                "Yes. Check live announcements and transport notifications before starting your journey.", 18);
+        seedFaq("faq-travel-bus", "Travel & Transport", "Will bus and operator details be available?",
+                "Approved transport operator details and available travel information can be listed in the Transport section.", 19);
+        seedFaq("faq-travel-last-mile", "Travel & Transport", "How do I manage last-mile travel near ghats?",
+                "Check official route instructions, avoid restricted areas and use transport updates for walking paths, pickup points and parking guidance.", 20);
+
+        seedFaq("faq-stay-find", "Stay & Accommodation", "Where can I find accommodation during Simhastha?",
+                "The Stay section lists approved stays and other hotels, lodges, dharamshalas and guest houses around Nashik.", 21);
+        seedFaq("faq-stay-verified", "Stay & Accommodation", "Are all stays verified by Simhastha Connect?",
+                "Approved stays are marked as trusted. Other stays are shown for discovery and should be checked before booking.", 22);
+        seedFaq("faq-stay-location", "Stay & Accommodation", "Can I check stay location before booking?",
+                "Yes. Use the stay details and map/location information where available before planning travel.", 23);
+        seedFaq("faq-stay-family", "Stay & Accommodation", "Are family stay options available?",
+                "Stay listings may include hotels, lodges, dharamshalas, guest houses and homestays suitable for different pilgrim needs.", 24);
+        seedFaq("faq-stay-contact", "Stay & Accommodation", "How do I confirm stay availability?",
+                "Open the stay details, review booking instructions and contact the listed provider or support flow when available.", 25);
+
+        seedFaq("faq-puja-book", "Puja & Rituals", "How can I book Puja services through Simhastha Connect?",
+                "Open Puja Services, choose an available service, review the details and follow the booking or payment flow shown in the app.", 26);
+        seedFaq("faq-puja-documents", "Puja & Rituals", "What details are needed for puja booking?",
+                "Keep your name, contact number, selected puja type, preferred timing and any required devotee details ready.", 27);
+        seedFaq("faq-puja-location", "Puja & Rituals", "Where will puja location details appear?",
+                "The selected puja service can show location, timing, provider notes and booking instructions.", 28);
+        seedFaq("faq-puja-change", "Puja & Rituals", "Can puja timing or venue change?",
+                "Important changes can appear through announcements, notifications or the booking details page.", 29);
+        seedFaq("faq-puja-support", "Puja & Rituals", "Who can help with puja booking confusion?",
+                "Use Puja Services details first. For urgent help, contact support or emergency guidance from the dashboard.", 30);
+
+        seedFaq("faq-emergency-safety", "Emergency & Safety", "What safety measures are in place for devotees?",
+                "Emergency contacts, medical help, police assistance, crowd advisories and location-change alerts are available from Emergency and Announcement pages.", 31);
+        seedFaq("faq-emergency-lost", "Emergency & Safety", "What should I do if I lose an item or get separated?",
+                "Use Lost & Found for item or person reports and call emergency support if immediate safety help is needed.", 32);
+        seedFaq("faq-emergency-medical", "Emergency & Safety", "How do I get medical help?",
+                "Open Emergency & Medical to find important help options and follow official instructions shown in the app.", 33);
+        seedFaq("faq-emergency-alerts", "Emergency & Safety", "How will critical alerts reach me?",
+                "Critical alerts can appear in notifications, announcements and emergency guidance based on administrator updates.", 34);
+        seedFaq("faq-emergency-family", "Emergency & Safety", "What should I do if a family member is missing?",
+                "Use Lost & Found, stay near a safe official point and contact emergency support with the person's latest known location and details.", 35);
+
+        seedFaq("faq-booking-status", "Bookings & Payments", "Where can I see my booking status?",
+                "Open My Bookings to review upcoming, completed and pending service bookings along with payment status.", 36);
+        seedFaq("faq-booking-payment", "Bookings & Payments", "How do I know if payment is successful?",
+                "Successful payment or booking status will appear in My Bookings and related confirmation details.", 37);
+        seedFaq("faq-booking-cancel", "Bookings & Payments", "Can I cancel a booking?",
+                "Cancellation options depend on the selected service. Check booking details or contact support for help.", 38);
+        seedFaq("faq-booking-receipt", "Bookings & Payments", "Where can I find receipt or booking reference?",
+                "Open My Bookings and select the booking to view reference, status and available verification details.", 39);
+        seedFaq("faq-booking-support", "Bookings & Payments", "Who can help if my booking is not visible?",
+                "Update your profile, check the correct account and contact support with your mobile number, email and payment reference if available.", 40);
+    }
+
+    private static void seedFaq(String id, String category, String question, String answer, int sortOrder) {
+        faqs.add(new FaqRecord(id, category, question, answer, true, String.valueOf(sortOrder)));
+    }
+
+    private static void mergeFaqs(List<FaqRecord> remoteFaqs) {
+        for (FaqRecord remoteFaq : remoteFaqs) {
+            boolean updated = false;
+            for (int i = 0; i < faqs.size(); i++) {
+                if (faqs.get(i).id.equals(remoteFaq.id)) {
+                    faqs.set(i, remoteFaq);
+                    updated = true;
+                    break;
+                }
+            }
+            if (!updated) {
+                faqs.add(remoteFaq);
+            }
+        }
+    }
+
     private static void loadFirebaseDataIfAvailable(String idToken) {
         if (!firestore.isEnabled()) {
             return;
@@ -926,6 +1169,14 @@ public final class AppDataStore {
                 // Keep the last known user snapshot if user listing is temporarily unavailable.
             }
             try {
+                List<FaqRecord> remoteFaqs = firestore.loadFaqs(idToken);
+                if (!remoteFaqs.isEmpty()) {
+                    mergeFaqs(remoteFaqs);
+                }
+            } catch (Exception ignored) {
+                // FAQ defaults remain available if remote FAQ loading is temporarily unavailable.
+            }
+            try {
                 List<BusinessRecord> latestBusinesses = businessDao.findAll(idToken);
                 businesses.clear();
                 businesses.addAll(latestBusinesses);
@@ -940,7 +1191,10 @@ public final class AppDataStore {
                             businessRecord.businessName,
                             businessRecord.category + " | " + businessRecord.location + " | "
                                     + businessRecord.description,
-                            "Business"));
+                            "Business",
+                            businessRecord.coverPhotoUrl.isBlank() ? businessRecord.logoUrl : businessRecord.coverPhotoUrl,
+                            businessRecord.coverPhotoPublicId.isBlank() ? businessRecord.logoPublicId : businessRecord.coverPhotoPublicId,
+                            businessRecord.galleryImages));
                 }
             }
             try {

@@ -63,6 +63,10 @@ public final class BusinessMarketplaceService {
                 LOGGER.log(Level.WARNING, "Skipping malformed business record: " + safeBusinessId(business), exception);
             }
         }
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        listings.forEach(listing -> ids.add(listing.businessId()));
+        PresentationBusinessCatalog.listings().stream().filter(listing -> !ids.contains(listing.businessId()))
+                .forEach(listings::add);
         return listings;
     }
 

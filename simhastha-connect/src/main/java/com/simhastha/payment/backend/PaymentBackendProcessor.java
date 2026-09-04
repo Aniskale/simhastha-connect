@@ -24,14 +24,22 @@ public final class PaymentBackendProcessor {
     private final PaymentBackendConfig config;
     private final PaymentRepository repository;
     private final BookingPaymentConfirmationService confirmationService;
+    private final BusinessInventoryHoldService inventoryHoldService;
     private final Set<String> processedWebhooks = ConcurrentHashMap.newKeySet();
 
     public PaymentBackendProcessor(RazorpayOrderCreator orderCreator, PaymentBackendConfig config,
             PaymentRepository repository, BookingPaymentConfirmationService confirmationService) {
+        this(orderCreator, config, repository, confirmationService, new UnavailableBusinessInventoryHoldService());
+    }
+
+    public PaymentBackendProcessor(RazorpayOrderCreator orderCreator, PaymentBackendConfig config,
+            PaymentRepository repository, BookingPaymentConfirmationService confirmationService,
+            BusinessInventoryHoldService inventoryHoldService) {
         this.orderCreator = orderCreator;
         this.config = config;
         this.repository = repository;
         this.confirmationService = confirmationService;
+        this.inventoryHoldService = inventoryHoldService;
     }
 
     public PaymentOrder createOrder(PaymentRequest request, String idempotencyKey) throws PaymentException {
@@ -43,11 +51,19 @@ public final class PaymentBackendProcessor {
             return toOrder(existing.get());
         }
 
-        PaymentOrder order = orderCreator.createOrder(request);
-        PaymentRecord record = PaymentRecord.created(request, order);
-        repository.save(record);
-        LOGGER.info("Payment order created: " + record.internalPaymentId());
-        return order;
+        inventoryHoldService.createHold(request);
+        try {
+            PaymentOrder order = orderCreator.createOrder(request);
+            PaymentRecord record = PaymentRecord.created(request, order);
+            repository.save(record);
+            LOGGER.info("Payment order created: " + record.internalPaymentId());
+            return order;
+        } catch (PaymentException exception) {
+            inventoryHoldService.releaseHold(request, "Razorpay order creation failed.");
+            LOGGER.warning("Order creation failed and inventory hold was released for " + request.bookingId()
+                    + ": " + exception.getMessage());
+            throw exception;
+        }
     }
 
     public PaymentResult verifyPayment(PaymentVerificationRequest request) throws PaymentException {
@@ -71,8 +87,10 @@ public final class PaymentBackendProcessor {
             return fail(record, request.razorpayPaymentId(), "Payment verification failed.", "SIGNATURE_INVALID");
         }
 
-        PaymentRecord paid = repository.save(record.withStatus(PaymentStatus.PAID,
-                VerificationStatus.VERIFIED, request.razorpayPaymentId(), ""));
+        PaymentRecord paid = record.withStatus(PaymentStatus.PAID,
+                VerificationStatus.VERIFIED, request.razorpayPaymentId(), "");
+        inventoryHoldService.confirmHold(paid);
+        paid = repository.save(paid);
         triggerConfirmation(paid);
         LOGGER.info("Payment verification succeeded for " + paid.internalPaymentId());
         return successResult(paid, "Payment verified successfully.");
@@ -85,6 +103,7 @@ public final class PaymentBackendProcessor {
         }
         PaymentRecord cancelled = repository.save(record.withStatus(PaymentStatus.CANCELLED,
                 VerificationStatus.NOT_STARTED, "", "Checkout cancelled by user."));
+        inventoryHoldService.releaseHold(cancelled, "Checkout cancelled by user.");
         LOGGER.info("Payment checkout cancelled for " + cancelled.internalPaymentId());
         return new PaymentResult(cancelled.internalPaymentId(), cancelled.razorpayOrderId(),
                 cancelled.razorpayPaymentId(), "", PaymentStatus.CANCELLED,
@@ -154,10 +173,17 @@ public final class PaymentBackendProcessor {
             return;
         }
 
-        PaymentRecord updated = repository.save(record.withStatus(status, verification, paymentId,
-                status == PaymentStatus.FAILED ? "Razorpay webhook reported payment failure." : ""));
+        PaymentRecord updated = record.withStatus(status, verification, paymentId,
+                status == PaymentStatus.FAILED ? "Razorpay webhook reported payment failure." : "");
         if (status == PaymentStatus.PAID) {
+            inventoryHoldService.confirmHold(updated);
+            updated = repository.save(updated);
             triggerConfirmation(updated);
+        } else if (status == PaymentStatus.FAILED) {
+            inventoryHoldService.releaseHold(updated, "Razorpay webhook reported payment failure.");
+            updated = repository.save(updated);
+        } else {
+            updated = repository.save(updated);
         }
         LOGGER.info("Payment status transitioned from webhook: " + updated.internalPaymentId() + " -> " + status);
     }
@@ -188,6 +214,7 @@ public final class PaymentBackendProcessor {
             throws PaymentException {
         PaymentRecord failed = repository.save(record.withStatus(PaymentStatus.FAILED, VerificationStatus.FAILED,
                 paymentId, message));
+        inventoryHoldService.releaseHold(failed, message);
         return new PaymentResult(failed.internalPaymentId(), failed.razorpayOrderId(), failed.razorpayPaymentId(),
                 "", PaymentStatus.FAILED, message, errorCode);
     }

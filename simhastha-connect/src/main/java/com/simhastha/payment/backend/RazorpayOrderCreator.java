@@ -10,6 +10,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import com.simhastha.payment.MoneyUtil;
 import com.simhastha.payment.PaymentException;
@@ -19,6 +21,7 @@ import com.simhastha.payment.PaymentStatus;
 import com.simhastha.payment.api.PaymentJson;
 
 public final class RazorpayOrderCreator {
+    private static final Logger LOGGER = Logger.getLogger(RazorpayOrderCreator.class.getName());
 
     private static final URI RAZORPAY_ORDERS_URI = URI.create("https://api.razorpay.com/v1/orders");
 
@@ -41,21 +44,25 @@ public final class RazorpayOrderCreator {
         amountValidator.validateTrustedAmount(request);
 
         long amountInPaise = MoneyUtil.toSmallestUnit(request.amount(), request.currency());
+        LOGGER.info("Trusted payment amount resolved: booking=" + request.bookingId() + ", amountPaise=" + amountInPaise);
         String internalPaymentId = "pay_" + UUID.randomUUID().toString().replace("-", "");
         String receipt = safeReceipt(request.moduleType().name() + "_" + request.bookingId());
         String payload = razorpayOrderPayload(request, amountInPaise, receipt, internalPaymentId);
 
         HttpRequest httpRequest = HttpRequest.newBuilder(RAZORPAY_ORDERS_URI)
-                .timeout(Duration.ofSeconds(15))
+                // Return a specific backend failure before the JavaFX client's 15-second request deadline.
+                .timeout(Duration.ofSeconds(10))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Basic " + basicAuth())
                 .POST(HttpRequest.BodyPublishers.ofString(payload))
                 .build();
 
         try {
+            LOGGER.info("Razorpay order HTTP request started: booking=" + request.bookingId());
             HttpResponse<String> response = client.send(httpRequest, HttpResponse.BodyHandlers.ofString());
+            LOGGER.info("Razorpay order HTTP status: " + response.statusCode() + " for booking=" + request.bookingId());
             if (response.statusCode() >= 400) {
-                throw new PaymentException("Razorpay order creation failed.");
+                throw new PaymentException("Razorpay order creation failed with HTTP " + response.statusCode() + ".");
             }
             String razorpayOrderId = PaymentJson.value(response.body(), "id");
             if (razorpayOrderId.isBlank()) {
@@ -64,6 +71,7 @@ public final class RazorpayOrderCreator {
             return new PaymentOrder(internalPaymentId, razorpayOrderId, config.keyId(), amountInPaise,
                     request.currency(), PaymentStatus.CREATED, receipt, Instant.now());
         } catch (IOException exception) {
+            LOGGER.log(Level.SEVERE, "Razorpay order request failed for booking=" + request.bookingId(), exception);
             throw new PaymentException("Razorpay is currently unavailable.", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();

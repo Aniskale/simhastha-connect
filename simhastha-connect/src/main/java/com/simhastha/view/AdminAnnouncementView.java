@@ -1,0 +1,89 @@
+package com.simhastha.view;
+
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.function.Consumer;
+import javafx.geometry.Insets;
+import javafx.scene.Node;
+import javafx.scene.control.Button;
+import javafx.scene.control.Alert;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.ComboBox;
+import javafx.scene.control.Label;
+import javafx.scene.control.TextArea;
+import javafx.scene.control.TextField;
+import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
+
+/** Admin UI backed only by AnnouncementDemoStore. */
+public final class AdminAnnouncementView {
+    private static final List<String> CATEGORIES = List.of("Government Notice", "Police / Security", "Traffic", "Transport", "Ghat / Crowd", "Medical / Emergency", "Event / Religious", "Weather", "Lost & Found", "General");
+    private final Consumer<Node> show;
+    public AdminAnnouncementView(Consumer<Node> show) { this.show = show; }
+
+    public Node managementPage() {
+        VBox rows = new VBox(8); render(rows, "", "All", "All", "All");
+        TextField search = field("Search announcements", ""); ComboBox<String> category = combo("Category", all(CATEGORIES), "All");
+        ComboBox<String> priority = combo("Priority", List.of("All", "CRITICAL", "HIGH", "IMPORTANT", "NORMAL"), "All"); ComboBox<String> status = combo("Status", List.of("All", "DRAFT", "SCHEDULED", "LIVE", "NEW", "UPDATED", "ENDED"), "All");
+        Runnable refresh = () -> render(rows, search.getText(), category.getValue(), priority.getValue(), status.getValue());
+        search.textProperty().addListener((o,a,b)->refresh.run()); category.setOnAction(e->refresh.run()); priority.setOnAction(e->refresh.run()); status.setOnAction(e->refresh.run());
+        Button create = primary("+ Create Announcement"); create.setOnAction(e -> show.accept(form(null)));
+        HBox filters = new HBox(10, search, category, priority, status, spacer(), create); filters.getStyleClass().add("pilgrim-filter-row"); HBox.setHgrow(search, Priority.ALWAYS);
+        return shell("Announcement Management", "Manage local/demo announcements.", filters, panel("Announcements", rows));
+    }
+
+    private Node form(AnnouncementDemoStore.Announcement existing) {
+        TextField title=field("Title", value(existing, AnnouncementDemoStore.Announcement::title)), shortD=field("Short Description", value(existing, AnnouncementDemoStore.Announcement::shortDescription)), department=field("Department", value(existing, AnnouncementDemoStore.Announcement::department)), affected=field("Affected Area", value(existing, AnnouncementDemoStore.Announcement::affectedArea));
+        TextArea fullD=area("Full Description", value(existing, AnnouncementDemoStore.Announcement::fullDescription));
+        ComboBox<String> category=combo("Category", CATEGORIES, existing==null?"General":existing.category()), priority=combo("Priority",List.of("CRITICAL","HIGH","IMPORTANT","NORMAL"),existing==null?"NORMAL":existing.priority().name()), status=combo("Status",List.of("DRAFT","SCHEDULED","LIVE","ENDED"),existing==null?"DRAFT":existing.status());
+        TextField name=field("Location Name",value(existing,AnnouncementDemoStore.Announcement::locationName)), address=field("Address / Landmark",value(existing,AnnouncementDemoStore.Announcement::address)), zone=field("Zone",value(existing,AnnouncementDemoStore.Announcement::zone)), sector=field("Sector",value(existing,AnnouncementDemoStore.Announcement::sector)), ghat=field("Ghat / Venue",value(existing,AnnouncementDemoStore.Announcement::ghat)), latitude=field("Latitude",existing==null?"":Double.toString(existing.latitude())), longitude=field("Longitude",existing==null?"":Double.toString(existing.longitude()));
+        latitude.setEditable(false); longitude.setEditable(false);
+        CheckBox changed=check("This is a location change",existing!=null&&existing.locationChange()); TextField previous=field("Previous Location",value(existing,AnnouncementDemoStore.Announcement::previousLocation)), next=field("New Location",value(existing,AnnouncementDemoStore.Announcement::newLocation)), reason=field("Reason for Change",value(existing,AnnouncementDemoStore.Announcement::changeReason));
+        Button selectMap=primary("📍 Select Location on Map"); selectMap.setOnAction(e -> AnnouncementLocationSelector.show(selectMap.getScene().getWindow(), number(latitude.getText(),20.0064), number(longitude.getText(),73.7904), selected -> {
+            latitude.setText(Double.toString(selected.latitude())); longitude.setText(Double.toString(selected.longitude()));
+            if (name.getText().isBlank() && nearAarti(selected.latitude(), selected.longitude())) { name.setText("Aarti Ghat — Sector B"); zone.setText("Godavari Zone"); sector.setText("Sector B"); ghat.setText("Aarti Ghat"); }
+            if (changed.isSelected()) next.setText(name.getText());
+        }));
+        GridPane locationFields=grid(name,address,zone,sector,ghat,latitude,longitude,selectMap); VBox locationFieldsBox=new VBox(10,locationFields);
+        VBox changeFields=new VBox(10,grid(previous,next,reason)); changeFields.visibleProperty().bind(changed.selectedProperty()); changeFields.managedProperty().bind(changeFields.visibleProperty());
+        VBox selectedSummary = new VBox(4, label("📍 Selected Location"), detail("Coordinates are filled after you confirm a point on the map."));
+        selectedSummary.getStyleClass().add("announcement-location-summary");
+        selectedSummary.visibleProperty().bind(latitude.textProperty().isNotEmpty()); selectedSummary.managedProperty().bind(selectedSummary.visibleProperty());
+        latitude.textProperty().addListener((obs, oldValue, newValue) -> selectedSummary.getChildren().setAll(label("📍 Selected Location"), detail(name.getText().isBlank() ? "Map-selected destination" : name.getText()), detail("Latitude: " + latitude.getText() + "   Longitude: " + longitude.getText())));
+        longitude.textProperty().addListener((obs, oldValue, newValue) -> selectedSummary.getChildren().setAll(label("📍 Selected Location"), detail(name.getText().isBlank() ? "Map-selected destination" : name.getText()), detail("Latitude: " + latitude.getText() + "   Longitude: " + longitude.getText())));
+        name.textProperty().addListener((obs, oldValue, newValue) -> selectedSummary.getChildren().setAll(label("📍 Selected Location"), detail(name.getText().isBlank() ? "Map-selected destination" : name.getText()), detail("Latitude: " + latitude.getText() + "   Longitude: " + longitude.getText())));
+        VBox locationContent = new VBox(10, detail("Select the exact announcement location from the map."), locationFieldsBox, selectedSummary);
+        CheckBox action=check("Action Required",existing!=null&&existing.actionRequired()); TextField instruction=field("User instruction text",value(existing,AnnouncementDemoStore.Announcement::actionInstruction)); CheckBox dashboard=check("Show Dashboard Alert",existing!=null&&existing.showDashboardAlert()), emergency=check("Show as Emergency Banner",existing!=null&&existing.emergencyBanner());
+        Button preview=secondary("Preview"); preview.setOnAction(e->show.accept(preview(read(existing,title,shortD,fullD,category,priority,department,status,name,address,zone,sector,ghat,latitude,longitude,changed,previous,next,reason,affected,action,instruction,dashboard,emergency))));
+        Button saveDraft=secondary("Save Draft"); saveDraft.setOnAction(e->{ AnnouncementDemoStore.Announcement item=AnnouncementDemoStore.withStatus(read(existing,title,shortD,fullD,category,priority,department,status,name,address,zone,sector,ghat,latitude,longitude,changed,previous,next,reason,affected,action,instruction,dashboard,emergency),"DRAFT"); AnnouncementDemoStore.publish(item); message("Draft saved successfully."); show.accept(managementPage()); });
+        Button publish=primary(existing==null?"Save & Publish":"Update & Publish"); publish.setOnAction(e->{ AnnouncementDemoStore.Announcement item=read(existing,title,shortD,fullD,category,priority,department,status,name,address,zone,sector,ghat,latitude,longitude,changed,previous,next,reason,affected,action,instruction,dashboard,emergency); if(item.title().isBlank()||item.shortDescription().isBlank()){message("Enter an announcement title and short description before publishing.");return;} if(item.locationChange()&&(!Double.isFinite(item.latitude())||item.latitude()==0||!Double.isFinite(item.longitude())||item.longitude()==0)){message("Select the new location on the map before publishing this location change.");return;} AnnouncementDemoStore.publish(AnnouncementDemoStore.withStatus(item,"LIVE")); message(existing==null?"Announcement published successfully.":"Announcement updated and published successfully."); show.accept(managementPage()); });
+        Button cancel=secondary("Cancel");cancel.setOnAction(e->show.accept(managementPage())); HBox actionBar=new HBox(10,saveDraft,spacer(),cancel,preview,publish); actionBar.getStyleClass().add("announcement-admin-action-bar");
+        return shell(existing==null?"Create Announcement":"Edit Announcement","Create and manage official Simhastha updates.", panel("Basic Information",new VBox(10,title,shortD,fullD,grid(category,priority,department,affected,status))), panel("Location",locationContent), panel("Location Change",new VBox(8,changed,changeFields)), panel("Instructions & Impact",new VBox(8,action,instruction)), panel("Display & Priority",new VBox(8,dashboard,emergency)), actionBar);
+    }
+
+    private Node preview(AnnouncementDemoStore.Announcement a) {
+        Button back = secondary("Back to Edit");
+        back.setOnAction(e -> show.accept(form(a)));
+        Button publish = primary("Publish (Demo Only)");
+        publish.setOnAction(e -> {
+            AnnouncementDemoStore.publish(AnnouncementDemoStore.withStatus(a, "LIVE"));
+            show.accept(managementPage());
+        });
+        VBox card = new VBox(7,
+                label(a.title()),
+                detail(a.shortDescription()),
+                detail("Location: " + destination(a)),
+                detail("Valid until: " + time(a.validUntil())));
+        HBox actions = new HBox(10, back, spacer(), publish);
+        return shell("Preview Announcement", "This publishes only to the shared local demo store.",
+                panel("User Card Preview", card), actions);
+    }
+    private void render(VBox rows,String query,String category,String priority,String status){rows.getChildren().clear();for(AnnouncementDemoStore.Announcement a:AnnouncementDemoStore.all())if((query.isBlank()||a.title().toLowerCase().contains(query.toLowerCase()))&&("All".equals(category)||a.category().equals(category))&&("All".equals(priority)||a.priority().name().equals(priority))&&("All".equals(status)||a.status().equals(status)))rows.getChildren().add(row(a));if(rows.getChildren().isEmpty())rows.getChildren().add(detail("No local announcements match these filters."));}
+    private Node row(AnnouncementDemoStore.Announcement a){Button edit=secondary("Edit");edit.setOnAction(e->show.accept(form(a)));Button preview=secondary("Preview");preview.setOnAction(e->show.accept(preview(a)));Button delete=secondary("Delete");delete.setOnAction(e->{AnnouncementDemoStore.remove(a.id());show.accept(managementPage());});VBox info=new VBox(3,label(a.title()),detail(a.category()+" • "+a.priority()+" • "+a.department()),detail(destination(a)+" • "+time(a.lastUpdated())));HBox row=new HBox(10,info,spacer(),preview,edit,delete);row.getStyleClass().add("pilgrim-data-row");return row;}
+    private AnnouncementDemoStore.Announcement read(AnnouncementDemoStore.Announcement old,TextField title,TextField shortD,TextArea fullD,ComboBox<String> category,ComboBox<String> priority,TextField dept,ComboBox<String> status,TextField name,TextField address,TextField zone,TextField sector,TextField ghat,TextField lat,TextField lon,CheckBox changed,TextField previous,TextField next,TextField reason,TextField affected,CheckBox action,TextField instruction,CheckBox dashboard,CheckBox emergency){AnnouncementDemoStore.Announcement draft=AnnouncementDemoStore.draft(title.getText(),shortD.getText(),fullD.getText(),category.getValue(),AnnouncementDemoStore.Priority.valueOf(priority.getValue()),dept.getText(),status.getValue(),true,name.getText(),address.getText(),zone.getText(),sector.getText(),"",ghat.getText(),number(lat.getText(),0),number(lon.getText(),0),changed.isSelected(),previous.getText(),next.getText(),reason.getText(),affected.getText(),action.isSelected(),instruction.getText(),"","",dashboard.isSelected(),emergency.isSelected());return old==null?draft:AnnouncementDemoStore.replaceContent(old,draft);}
+    private static boolean nearAarti(double lat,double lon){return Math.abs(lat-20.0064)<.003&&Math.abs(lon-73.7904)<.003;} private static double number(String s,double fallback){try{return Double.parseDouble(s);}catch(Exception e){return fallback;}} private static String destination(AnnouncementDemoStore.Announcement a){return a.locationChange()?a.newLocation():a.locationName();} private static String time(java.time.LocalDateTime d){return d.format(DateTimeFormatter.ofPattern("dd MMM, hh:mm a"));} private static List<String> all(List<String> v){return java.util.stream.Stream.concat(java.util.stream.Stream.of("All"),v.stream()).toList();} private static String value(AnnouncementDemoStore.Announcement a,java.util.function.Function<AnnouncementDemoStore.Announcement,String> f){return a==null?"":f.apply(a);} private static TextField field(String p,String v){TextField f=AppUi.textField(p);f.setText(v);return f;} private static TextArea area(String p,String v){TextArea a=new TextArea(v);a.setPromptText(p);a.getStyleClass().add("input-field");a.setPrefRowCount(3);return a;} private static ComboBox<String> combo(String p,List<String> v,String selected){ComboBox<String> c=new ComboBox<>();c.getItems().addAll(v);c.setPromptText(p);c.setValue(selected);c.getStyleClass().add("input-combo");return c;} private static CheckBox check(String t,boolean selected){CheckBox c=new CheckBox(t);c.setSelected(selected);return c;} private static GridPane grid(Node... nodes){GridPane g=new GridPane();g.setHgap(10);g.setVgap(10);for(int i=0;i<nodes.length;i++){g.add(nodes[i],i%2,i/2);GridPane.setHgrow(nodes[i],Priority.ALWAYS);}return g;} private static VBox shell(String t,String s,Node...nodes){VBox v=new VBox(10,label(t),detail(s));v.getStyleClass().add("pilgrim-dashboard-main");v.setPadding(new Insets(12,22,28,22));v.getChildren().addAll(nodes);return v;} private static VBox panel(String t,Node content){VBox v=new VBox(8,label(t),content);v.getStyleClass().add("pilgrim-panel");return v;} private static Label label(String t){Label l=new Label(t);l.getStyleClass().add("pilgrim-card-title");l.setWrapText(true);return l;} private static Label detail(String t){Label l=new Label(t);l.getStyleClass().add("pilgrim-card-detail");l.setWrapText(true);return l;} private static Button primary(String t){Button b=new Button(t);b.getStyleClass().add("primary-button");return b;} private static Button secondary(String t){Button b=new Button(t);b.getStyleClass().add("pilgrim-small-action");return b;} private static Region spacer(){Region r=new Region();HBox.setHgrow(r,Priority.ALWAYS);return r;}
+    private static void message(String text){AppUi.showInfo("Announcement", text, null);}
+}

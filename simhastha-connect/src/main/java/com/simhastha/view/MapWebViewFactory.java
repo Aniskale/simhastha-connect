@@ -41,29 +41,45 @@ public final class MapWebViewFactory {
 
     public static Node businessSelector(BusinessLocation initial, BiConsumer<Double, Double> onPick,
             Runnable onLoaded, Runnable onFailed) {
+        long startedAt = System.nanoTime();
         double lat = parse(initial == null ? "" : initial.latitude(), DEFAULT_LAT);
         double lon = parse(initial == null ? "" : initial.longitude(), DEFAULT_LON);
+        LOGGER.info("Business location selector WebView load started at " + number(lat) + ", " + number(lon));
         WebView webView = webView();
         WebEngine engine = webView.getEngine();
         java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean();
         attachDiagnostics(engine, "Business location selector");
         engine.getLoadWorker().stateProperty().addListener((observable, oldState, state) -> {
             if (state == Worker.State.SUCCEEDED) {
+                LOGGER.info("Business location selector WebView load succeeded in " + elapsedMillis(startedAt) + " ms.");
                 JSObject window = (JSObject) engine.executeScript("window");
                 SelectorBridge bridge = new SelectorBridge(onPick,
                         () -> { completed.set(true); if (onLoaded != null) onLoaded.run(); },
-                        () -> { completed.set(true); if (onFailed != null) onFailed.run(); });
+                        () -> { completed.set(true); if (onFailed != null) onFailed.run(); }, startedAt);
                 window.setMember("javaBridge", bridge);
                 notifyExistingState(engine, bridge::mapReady, bridge::mapFailed);
+                if (scriptBoolean(engine, "window.__firstTileVisible === true")) bridge.mapFirstTileVisible();
             } else if (state == Worker.State.FAILED || state == Worker.State.CANCELLED) {
                 LOGGER.log(Level.WARNING, "Business location selector map failed to load.",
                         engine.getLoadWorker().getException());
                 if (onFailed != null) Platform.runLater(onFailed);
             }
         });
+        LOGGER.info("Business location selector map HTML load started.");
         engine.loadContent(selectorHtml(lat, lon));
         mapWatchdog(completed, engine, onFailed, "Business location selector");
         return shell(webView);
+    }
+
+    /** Recalculates the existing Leaflet viewport after the selector dialog has its final size. */
+    public static void invalidateBusinessSelectorMap(Node selector) {
+        if (selector == null) return;
+        Node candidate = selector instanceof WebView ? selector : selector.lookup(".web-view");
+        if (!(candidate instanceof WebView webView)) {
+            LOGGER.warning("Business location selector WebView was unavailable for resizing.");
+            return;
+        }
+        invalidateMap(webView.getEngine(), "Business location selector");
     }
 
     public static Node businessMarkerMap(List<MapLocation> locations, String selectedBusinessId,
@@ -195,11 +211,14 @@ public final class MapWebViewFactory {
         private final BiConsumer<Double, Double> onPick;
         private final Runnable onLoaded;
         private final Runnable onFailed;
+        private final long startedAt;
+        private final java.util.concurrent.atomic.AtomicBoolean firstTileLogged = new java.util.concurrent.atomic.AtomicBoolean();
 
-        SelectorBridge(BiConsumer<Double, Double> onPick, Runnable onLoaded, Runnable onFailed) {
+        SelectorBridge(BiConsumer<Double, Double> onPick, Runnable onLoaded, Runnable onFailed, long startedAt) {
             this.onPick = onPick;
             this.onLoaded = onLoaded;
             this.onFailed = onFailed;
+            this.startedAt = startedAt;
         }
 
         public void mapClicked(double latitude, double longitude) {
@@ -207,10 +226,18 @@ public final class MapWebViewFactory {
         }
 
         public void mapReady() {
+            LOGGER.info("Business location selector Leaflet map ready in " + elapsedMillis(startedAt) + " ms.");
             if (onLoaded != null) Platform.runLater(onLoaded);
         }
 
+        public void mapFirstTileVisible() {
+            if (firstTileLogged.compareAndSet(false, true)) {
+                LOGGER.info("Business location selector first tiles visible in " + elapsedMillis(startedAt) + " ms.");
+            }
+        }
+
         public void mapFailed() {
+            LOGGER.warning("Business location selector JavaScript map reported failure.");
             if (onFailed != null) Platform.runLater(onFailed);
         }
 
@@ -259,23 +286,27 @@ public final class MapWebViewFactory {
         WebView webView = new WebView();
         webView.setContextMenuEnabled(false);
         webView.getEngine().setJavaScriptEnabled(true);
+        LOGGER.info("JavaFX WebView initialized; JavaScript is enabled.");
         webView.setMinWidth(0);
         webView.setPrefWidth(780);
+        webView.setMaxWidth(Double.MAX_VALUE);
         webView.setMinHeight(300);
         webView.setPrefHeight(420);
+        webView.setMaxHeight(Double.MAX_VALUE);
         return webView;
     }
 
     private static StackPane shell(WebView webView) {
         StackPane shell = new StackPane(webView);
+        shell.setMinHeight(300);
+        shell.setPrefHeight(420);
+        shell.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
         shell.getStyleClass().add("simhastha-map-web-shell");
         shell.sceneProperty().addListener((observable, oldScene, scene) -> {
             if (scene != null) {
                 Platform.runLater(() -> {
                     try {
-                        webView.getEngine().executeScript(
-                                "window.dispatchEvent(new Event('resize'));"
-                                        + "if(window.map&&window.map.invalidateSize)window.map.invalidateSize();");
+                        invalidateMap(webView.getEngine(), "Map");
                     } catch (RuntimeException exception) {
                         LOGGER.log(Level.FINE, "Map resize notification could not be sent.", exception);
                     }
@@ -283,6 +314,16 @@ public final class MapWebViewFactory {
             }
         });
         return shell;
+    }
+
+    private static void invalidateMap(WebEngine engine, String mapName) {
+        try {
+            Object resized = engine.executeScript("(function(){if(!window.map||!window.map.invalidateSize)return false;"
+                    + "window.dispatchEvent(new Event('resize'));window.map.invalidateSize(true);return true;})()");
+            if (Boolean.TRUE.equals(resized)) LOGGER.info(mapName + " map invalidated/resized.");
+        } catch (RuntimeException exception) {
+            LOGGER.log(Level.FINE, mapName + " resize notification could not be sent.", exception);
+        }
     }
 
     private static void attachDiagnostics(WebEngine engine, String label) {
@@ -303,7 +344,8 @@ public final class MapWebViewFactory {
             } else if (scriptBoolean(engine, "window.__mapFailed === true")) {
                 onFailed.run();
             }
-        } catch (Exception ignored) {
+        } catch (Exception exception) {
+            LOGGER.log(Level.FINE, "Unable to inspect the completed map JavaScript state.", exception);
         }
     }
 
@@ -316,17 +358,16 @@ public final class MapWebViewFactory {
     }
 
     private static String selectorHtml(double latitude, double longitude) {
-        return (baseHead() + """
-                <body><div id="map"></div><div id="loading">Loading map...</div><div id="error">Map could not be loaded. Check map/network configuration.</div>
+        return (selectorHead() + """
+                <body><style>html,body{width:100%;height:100%;margin:0;padding:0;overflow:hidden}body{position:relative}#map{position:absolute;inset:0;width:100%;height:100%;margin:0;padding:0}</style><div id="map"></div><div id="loading">Loading map...</div><div id="error">Map could not be loaded. Check map/network configuration.</div>
                 <script>
                 window.onerror=function(message,source,line,column,error){console.error('Map JavaScript error: '+message+' @ '+line+':'+column);failMap();return true;};
                 var marker;
                 var tileProvider=TILE_PROVIDER_JSON;
                 function failMap(){window.__mapFailed=true;document.getElementById('loading').style.display='none';document.getElementById('error').style.display='flex';if(window.javaBridge)window.javaBridge.mapFailed();}
                 function readyMap(){window.__mapReady=true;document.getElementById('loading').style.display='none';if(window.javaBridge)window.javaBridge.mapReady();}
-                function attachTiles(map){var layer=L.tileLayer(tileProvider.url,{maxZoom:tileProvider.maxZoom,attribution:tileProvider.attribution});layer.on('tileerror',function(e){console.error('Map tile failed from '+tileProvider.name+'. '+(e&&e.coords?JSON.stringify(e.coords):''));if(window.javaBridge)window.javaBridge.mapTileFailed(tileProvider.name);});layer.addTo(map);return layer;}
-                setTimeout(function(){if(!window.__mapReady&&!window.__leafletFallbackStarted)loadLeafletFallback();},5000);
-                setTimeout(function(){if(!window.__mapReady)failMap();},10000);
+                function firstTileVisible(){if(window.__firstTileVisible)return;window.__firstTileVisible=true;if(window.javaBridge)window.javaBridge.mapFirstTileVisible();}
+                function attachTiles(map){var layer=L.tileLayer(tileProvider.url,{maxZoom:tileProvider.maxZoom,attribution:tileProvider.attribution,keepBuffer:0,updateWhenIdle:true,fadeAnimation:false,zoomAnimation:false});layer.once('tileload',firstTileVisible);layer.on('tileerror',function(e){console.error('Map tile failed from '+tileProvider.name+'. '+(e&&e.coords?JSON.stringify(e.coords):''));if(window.javaBridge)window.javaBridge.mapTileFailed(tileProvider.name);});layer.addTo(map);return layer;}
                 function boot(){try{if(window.__mapBooted)return;window.__mapBooted=true;if(!window.L){failMap();return;}
                   window.map=L.map('map',{zoomControl:true}).setView([SELECTOR_LAT,SELECTOR_LON],15);
                   var map=window.map;
@@ -334,10 +375,10 @@ public final class MapWebViewFactory {
                   marker=L.marker([SELECTOR_LAT,SELECTOR_LON],{draggable:true}).addTo(map);
                   marker.on('dragend',function(e){var p=e.target.getLatLng();if(window.javaBridge)window.javaBridge.mapClicked(p.lat,p.lng);});
                   map.on('click',function(e){marker.setLatLng(e.latlng);if(window.javaBridge)window.javaBridge.mapClicked(e.latlng.lat,e.latlng.lng);});
-                  setTimeout(function(){map.invalidateSize();readyMap();},120);}catch(e){console.error(e);failMap();}}
-                function loadLeafletFallback(){if(window.__leafletFallbackStarted)return;window.__leafletFallbackStarted=true;var script=document.createElement('script');script.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js';script.onload=boot;script.onerror=function(){var second=document.createElement('script');second.src='https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js';second.onload=boot;second.onerror=failMap;document.head.appendChild(second);};document.head.appendChild(script);}
-                if(window.L){boot();}else{setTimeout(function(){if(window.L&&!window.__mapReady)boot();},800);}
-                </script><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onload="boot()" onerror="loadLeafletFallback()"></script></body></html>
+                  requestAnimationFrame(function(){map.invalidateSize(true);readyMap();});}catch(e){console.error(e);failMap();}}
+                function loadLeafletFallback(){if(window.__leafletFallbackStarted)return;window.__leafletFallbackStarted=true;var script=document.createElement('script');script.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js';script.onload=boot;script.onerror=failMap;document.head.appendChild(script);}
+                if(window.L){boot();}
+                </script><script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" onload="boot()" onerror="loadLeafletFallback()"></script></body></html>
                 """).replace("TILE_PROVIDER_JSON", tileProviderJson())
                 .replace("SELECTOR_LAT", number(latitude)).replace("SELECTOR_LON", number(longitude));
     }
@@ -384,6 +425,15 @@ public final class MapWebViewFactory {
                 #route-summary{margin-top:6px;color:#704829;font-size:12px}.leaflet-popup-content{color:#3d1b12;font-size:13px;line-height:1.45}.popup-actions{display:flex;gap:6px;margin-top:9px}.popup-actions button{border:0;border-radius:7px;padding:7px 10px;background:#7a0f12;color:#fffaf0;font-weight:700;cursor:pointer}.popup-actions button+button{background:#fff8e9;color:#7a0f12;border:1px solid #d7b27c}
                 </style></head>
                 """;
+    }
+
+    private static String selectorHead() {
+        return baseHead().replace("https://unpkg.com/leaflet@1.9.4/dist/leaflet.css",
+                "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css");
+    }
+
+    private static long elapsedMillis(long startedAt) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt);
     }
 
     private static String markerJson(List<MapLocation> locations) {
