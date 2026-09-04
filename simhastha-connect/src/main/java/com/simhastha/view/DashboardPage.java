@@ -1,8 +1,20 @@
 package com.simhastha.view;
 
+import java.awt.Desktop;
+import java.net.URL;
+import java.net.URI;
+import java.util.List;
+
 import com.simhastha.config.CloudinaryFolders;
+import com.simhastha.gateway.firebase.FirebaseConfig;
+import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.service.CloudinaryService;
+import com.simhastha.service.AuthService;
 import com.simhastha.model.CloudinaryUploadResult;
+import com.simhastha.model.EmergencyAlert;
+import com.simhastha.model.EmergencyDevelopmentServices;
+import com.simhastha.model.EmergencyReport;
+import com.simhastha.model.EmergencyService;
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
 import com.simhastha.service.GhatService;
@@ -30,6 +42,10 @@ import java.net.URI;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.UUID;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -50,7 +66,6 @@ import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
-import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.DateCell;
@@ -60,13 +75,15 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ScrollPane;
-import javafx.scene.control.Slider;
+import javafx.scene.control.Spinner;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextArea;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelWriter;
+import javafx.scene.image.WritableImage;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
-import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
@@ -77,10 +94,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.shape.Arc;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
-import javafx.scene.shape.Rectangle;
-import javafx.scene.web.WebEngine;
-import javafx.scene.web.WebView;
-import javafx.stage.FileChooser;
+import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
@@ -92,10 +106,21 @@ public class DashboardPage {
     private static final double GHAT_CARD_IMAGE_HEIGHT = 122;
     private BorderPane root;
     private final AppPaymentCoordinator paymentCoordinator = new AppPaymentCoordinator();
+    private final BusinessMarketplaceController businessMarketplaceController = new BusinessMarketplaceController();
     private final java.util.Map<String, Button> navButtons = new java.util.LinkedHashMap<>();
+    private String activeModule = "home";
+    private boolean pujaRefreshInProgress;
+    private Timeline pujaLiveRefresh;
     private LocationOption selectedFromLocation;
     private LocationOption selectedToLocation;
+    private static final java.util.Map<String, Image> IMAGE_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.Map<String, Place> TRANSPORT_PLACES = createTransportPlaces();
+    private List<PublicBusinessListing> marketplaceBusinesses = List.of();
+    private FlowPane marketplaceGrid;
+    private Label marketplaceStatus;
+    private TextField marketplaceSearch;
+    private HBox marketplaceStatsStrip;
+    private String selectedMarketplaceCategory = "All";
     private static final java.util.List<LocationOption> INDIA_LOCATION_OPTIONS = loadIndiaLocationOptions();
     private static final int LOCATION_SEARCH_LIMIT = 30;
     private static final java.util.concurrent.ExecutorService LOCATION_SEARCH_EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
@@ -165,6 +190,34 @@ public class DashboardPage {
     private String editedProfileBirthDate = "15 Aug 1995";
     private String editedProfileGender = "Male";
     private String profileSuccessMessage;
+    private final FirestoreGateway emergencyFirestore = new FirestoreGateway(FirebaseConfig.load());
+    private List<EmergencyServiceDemo> emergencyServices = List.of();
+    private boolean emergencyServicesLoading;
+    private String emergencyServicesError = "";
+    private boolean usingEmergencyDevelopmentFallback;
+    private EmergencyAlert activeEmergencyAlert;
+    private boolean emergencyAlertsLoading;
+    private String emergencyAlertsError = "";
+    private boolean usingEmergencyAlertPreview;
+    private String selectedEmergencyCategory = "All";
+    private String selectedEmergencyFilter = "All";
+    private EmergencyServiceDemo selectedEmergencyFacility;
+    private EmergencyReport currentEmergency;
+    private EmergencyDemoRequest currentDemoEmergency;
+    private boolean emergencySubmissionInProgress;
+    private boolean emergencyStateLoading;
+    private boolean emergencyPageActive;
+    private Timeline emergencyStatusRefresh;
+    private boolean emergencyReportFormVisible;
+    private boolean emergencyDetailsExpanded;
+    private boolean sosConfirmationVisible;
+    private String emergencyFeedback = "";
+    private String emergencyMapMessage = "";
+    private static final double EMERGENCY_DEMO_USER_LATITUDE = 20.0105;
+    private static final double EMERGENCY_DEMO_USER_LONGITUDE = 73.7925;
+    private EmergencyMapView emergencyMapView;
+    private String emergencyMapFocusId = "";
+    private boolean emergencyRouteActive;
 
     public Scene createScene(Stage stage) {
         hydrateProfilePhotoFromSession();
@@ -213,9 +266,7 @@ public class DashboardPage {
                 nav("schedule", "All Day Schedule", false),
                 nav("business", "Business", false),
                 nav("bookings", "My Bookings", false),
-                nav("announcement", "Announcement", false),
-                nav("faq", "FAQs / Help Center", false),
-                nav("about", "About Us", false));
+                nav("announcement", "Announcement", false));
 
         Button logout = sidebarAction("logout", "Logout");
         logout.setOnAction(eventAction -> {
@@ -291,6 +342,8 @@ public class DashboardPage {
     private void showHomePage() {
         stopGhatRefresh();
         stopScheduleRefresh();
+        emergencyPageActive = false;
+        stopEmergencyRefresh();
         setActiveModule("home");
         root.setCenter(scroll(createHomePage()));
     }
@@ -303,6 +356,12 @@ public class DashboardPage {
     if (!"schedule".equals(module)) {
         stopScheduleRefresh();
     }
+        emergencyPageActive = "emergency".equals(module);
+        if (emergencyPageActive) {
+            startEmergencyRefresh();
+        } else {
+            stopEmergencyRefresh();
+        }
         setActiveModule(module);
         if ("stay".equals(module)) {
             root.setCenter(scroll(stayPage()));
@@ -313,7 +372,12 @@ public class DashboardPage {
             case "transport" -> transportPage();
             case "puja" -> pujaPage();
             case "ghat" -> ghatsPage();
-            case "emergency" -> emergencyPage();
+            case "emergency" -> {
+                loadCurrentEmergencyAsync();
+                loadEmergencyServicesAsync();
+                loadEmergencyAlertsAsync();
+                yield emergencyPage();
+            }
             case "lost" -> lostFoundPage();
             case "schedule" -> schedulePage();
             case "business" -> businessPage();
@@ -324,10 +388,49 @@ public class DashboardPage {
             default -> genericModulePage(module);
         };
         root.setCenter(scroll(page));
+        if ("puja".equals(module) || "bookings".equals(module)) {
+            refreshPujaDataAsync(module);
+        }
     }
 
     private void setActiveModule(String module) {
+        activeModule = module;
         navButtons.keySet().forEach(key -> setNavSelected(key, key.equals(module)));
+        if ("puja".equals(module) || "bookings".equals(module)) {
+            startPujaLiveRefresh();
+        } else {
+            stopPujaLiveRefresh();
+        }
+    }
+
+    private void refreshPujaDataAsync(String module) {
+        if (pujaRefreshInProgress || !AppDataStore.isFirebaseEnabled()) {
+            return;
+        }
+        pujaRefreshInProgress = true;
+        String token = AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken();
+        java.util.concurrent.CompletableFuture.runAsync(() -> AppDataStore.refreshPujaFirebaseData(token))
+                .whenComplete((ignored, error) -> javafx.application.Platform.runLater(() -> {
+                    pujaRefreshInProgress = false;
+                    if (module.equals(activeModule)) {
+                        Node focusOwner = root == null || root.getScene() == null ? null : root.getScene().getFocusOwner();
+                        if (focusOwner instanceof javafx.scene.control.TextInputControl) {
+                            return;
+                        }
+                        Node refreshed = "bookings".equals(module) ? myBookingsPage() : pujaPage();
+                        root.setCenter(scroll(refreshed));
+                    }
+                }));
+    }
+
+    private void startPujaLiveRefresh() {
+        stopPujaLiveRefresh();
+    }
+
+    private void stopPujaLiveRefresh() {
+        if (pujaLiveRefresh != null) {
+            pujaLiveRefresh.stop();
+        }
     }
 
     private void setNavSelected(String module, boolean selected) {
@@ -415,6 +518,8 @@ public class DashboardPage {
                 metric("24/7", "Support"));
         metrics.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
 
+        // TEMPORARY RAZORPAY API TEST
+        // Remove after module payment integration is verified.
         Button paymentTest = new Button("Test Razorpay Payment");
         paymentTest.getStyleClass().add("developer-payment-test-button");
         paymentTest.setOnAction(event -> paymentCoordinator.startDeveloperRazorpayTest(
@@ -422,11 +527,9 @@ public class DashboardPage {
         HBox developerTest = new HBox(paymentTest);
         developerTest.setAlignment(Pos.CENTER_RIGHT);
         developerTest.getStyleClass().add("developer-payment-test-row");
-        developerTest.setManaged(false);
-        developerTest.setVisible(false);
 
         return pageShell("Dashboard", "Official Nashik Simhastha 2027 control and information platform",
-        searchBar(), announcementTicker(), services, simhasthaMapCard(), lower, metrics, developerTest);
+                searchBar(), announcementTicker(), services, simhasthaMapCard(), lower, metrics, developerTest);
     }
 
     private HBox topControls() {
@@ -2415,6 +2518,17 @@ public class DashboardPage {
         }
     }
 
+    private record PujaService(String serviceId, String name, String type, String description, String duration,
+            String availableSlots, int price, String location, String mode, String languages, boolean availableToday, String image,
+            String providerId, String providerName, String bookingStatus) {
+        private PujaService(String name, String type, String description, String duration, int price, String location,
+                String mode, String languages, boolean availableToday, String image) {
+            this("mock-" + name.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "-"),
+                    name, type, description, duration, "Varies", price, location, mode, languages, availableToday, image,
+                    "", "Simhastha Verified Desk", "OPEN");
+        }
+    }
+
     private static String[] baseIndianCities() {
         return new String[] {
                 "Agartala", "Agra", "Ahmedabad", "Ahmednagar", "Aizawl", "Ajmer", "Akola", "Alappuzha", "Aligarh", "Alwar", "Amaravati", "Ambala", "Amravati", "Amritsar", "Anand", "Anantapur", "Asansol", "Aurangabad", "Ayodhya",
@@ -2555,18 +2669,8 @@ public class DashboardPage {
     }
 
     private VBox packagesPage() {
-        if (!AppDataStore.items("packages").isEmpty()) {
-            return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
-                    adminControlledGrid("packages", "Pay Securely"));
-        }
-        return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
-                twoColumnGrid(
-                        paidCard("packages", "Divine Nashik Package",
-                                "Ramkund, Trimbakeshwar and guided darshan support\nTraveller pass generated after verified payment.",
-                                "Pay Securely", "package-divine-nashik", 1, 1),
-                        paidCard("packages", "Family Seva Package",
-                                "Family assistance, route help and puja desk coordination\nIncludes a reusable booking pass.",
-                                "Pay Securely", "package-family-seva", 1, 1)));
+        // Part 1 catalogue discovery deliberately remains separate from payment and booking flows.
+        return (VBox) new KumbhPackagesPage(page -> root.setCenter(scroll(page)), () -> showModulePage("bookings")).create();
     }
 
     private VBox transportJourneyPlanner() {
@@ -2978,15 +3082,1108 @@ public class DashboardPage {
     }
 
     private VBox pujaPage() {
-        if (!AppDataStore.items("puja").isEmpty()) {
-            return pageShell("Puja Services", "Traditional puja support, verified counters and darshan guidance.",
-                    adminControlledGrid("puja", "View Details"));
+        java.util.List<PujaService> services = visiblePujaServices();
+        TextField search = AppUi.textField("Search Puja, Temple, Priest or Location...");
+        search.getStyleClass().add("puja-search-field");
+
+        ComboBox<String> type = pujaFilter("Puja Type", pujaFilterOptions("All Types",
+                services.stream().map(PujaService::type).toList()));
+        ComboBox<String> location = pujaFilter("Location", pujaFilterOptions("All Locations",
+                services.stream().map(PujaService::location).toList()));
+        ComboBox<String> language = pujaFilter("Language", pujaLanguageFilterOptions(services));
+        ComboBox<String> mode = pujaFilter("Mode", pujaFilterOptions("Any Mode",
+                services.stream().map(PujaService::mode).toList()));
+        ComboBox<String> price = pujaFilter("Price", pujaPriceFilterOptions(services));
+        CheckBox today = new CheckBox("Available Today");
+        today.getStyleClass().add("puja-today-filter");
+
+        javafx.scene.layout.FlowPane serviceCards = new javafx.scene.layout.FlowPane(14, 14);
+        serviceCards.getStyleClass().add("puja-service-grid");
+
+        Runnable render = () -> renderPujaCards(serviceCards, services, search.getText(), type.getValue(),
+                location.getValue(), language.getValue(), mode.getValue(), price.getValue(), today.isSelected());
+        Runnable resetFilters = () -> {
+            search.clear();
+            type.setValue("All Types");
+            location.setValue("All Locations");
+            language.setValue("All Languages");
+            mode.setValue("Any Mode");
+            price.setValue("Any Price");
+            today.setSelected(false);
+            render.run();
+        };
+        search.textProperty().addListener((observable, oldValue, newValue) -> render.run());
+        search.setOnAction(event -> render.run());
+        type.setOnAction(event -> render.run());
+        location.setOnAction(event -> render.run());
+        language.setOnAction(event -> render.run());
+        mode.setOnAction(event -> render.run());
+        price.setOnAction(event -> render.run());
+        today.setOnAction(event -> render.run());
+        render.run();
+
+        return pageShell("Puja Services", "Safe & Trusted Spiritual Booking",
+                pujaTrustBanner(),
+                pujaFilterPanel(search, type, location, language, mode, price, today, render, resetFilters),
+                pujaProviderRegistrationBanner(),
+                pujaSection("Available / Popular Puja Services", serviceCards),
+                pujaUserSupportSections(services));
+    }
+
+    private HBox pujaUserSupportSections(java.util.List<PujaService> services) {
+        VBox priests = pujaMiniInfoSection("Verified Priests", "\uE77B",
+                AppDataStore.approvedPujaProviders().isEmpty()
+                        ? "Approved priest/provider profiles will appear here after admin verification."
+                        : AppDataStore.approvedPujaProviders().stream()
+                                .limit(3)
+                                .map(provider -> valueOr(provider.providerId, provider.fullName))
+                                .reduce((left, right) -> left + "\n" + right)
+                                .orElse(""));
+        VBox darshan = pujaMiniInfoSection("Official Darshan Services", "\uE8D7",
+                services.stream().anyMatch(service -> service.type().toLowerCase(java.util.Locale.ROOT).contains("darshan"))
+                        ? "Admin-approved darshan services are listed in the Puja cards above."
+                        : "Only admin-created or admin-approved special darshan services will be shown.");
+        VBox locations = pujaMiniInfoSection("Authorized Puja Locations", "\uE707",
+                services.stream().map(PujaService::location).distinct().limit(3)
+                        .reduce((left, right) -> left + "\n" + right)
+                        .orElse("Ramkund\nTrimbakeshwar\nPanchavati"));
+        VBox safety = pujaMiniInfoSection("Puja Safety Center", "\uE72E",
+                "Book only verified services. Do not pay unknown agents. Report suspicious activity from the official support flow.");
+        HBox row = new HBox(12, priests, darshan, locations, safety);
+        row.getStyleClass().add("puja-user-support-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().forEach(node -> HBox.setHgrow(node, Priority.ALWAYS));
+        return row;
+    }
+
+    private VBox pujaMiniInfoSection(String title, String icon, String text) {
+        VBox card = new VBox(8,
+                AppUi.symbolIcon(icon, "puja-trust-icon"),
+                strong(title),
+                muted(text));
+        card.getStyleClass().add("puja-mini-info-card");
+        card.setMaxWidth(Double.MAX_VALUE);
+        return card;
+    }
+
+    private HBox pujaProviderRegistrationBanner() {
+        VBox copy = new VBox(5,
+                strong("Are you a priest or verified spiritual service provider?"),
+                muted("Submit your documents for admin verification. Only approved providers appear to pilgrims."));
+        Button register = new Button("Register Provider");
+        register.getStyleClass().add("transport-primary-button");
+        register.setOnAction(event -> showPujaProviderRegistrationPage());
+        HBox banner = new HBox(14, AppUi.symbolIcon("\uE73E", "puja-trust-icon"), copy, createSpacer(), register);
+        banner.getStyleClass().add("puja-provider-register-banner");
+        banner.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return banner;
+    }
+
+    private void showPujaProviderRegistrationPage() {
+        TextField fullName = AppUi.textField("Name");
+        TextField profilePhoto = AppUi.textField("Profile photo path / URL");
+        TextField phone = AppUi.textField("Phone");
+        TextField email = AppUi.textField("Email");
+        TextField address = AppUi.textField("Address");
+        TextField experience = AppUi.textField("Experience");
+        TextField specialization = AppUi.textField("Specialization");
+        TextField languages = AppUi.textField("Languages");
+        TextField temple = AppUi.textField("Temple / Organization");
+        TextField identity = AppUi.textField("Identity document path / reference");
+        TextField certificates = AppUi.textField("Supporting certificates path / reference");
+        TextField services = AppUi.textField("Services offered");
+        TextField locations = AppUi.textField("Service locations");
+
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("puja"));
+
+        Button submit = new Button("Submit for Admin Verification");
+        submit.getStyleClass().add("transport-primary-button");
+        submit.setOnAction(event -> submitPujaProviderRegistration(fullName, profilePhoto, phone, email, address,
+                experience, specialization, languages, temple, identity, certificates, services, locations));
+
+        VBox basic = pujaRegistrationGroup("Basic Details", fullName, phone, email, address);
+        VBox expertise = pujaRegistrationGroup("Experience & Specialization", experience, specialization, languages, temple);
+        VBox documents = pujaRegistrationGroup("Documents & Services", profilePhoto, identity, certificates, services, locations);
+        VBox note = infoPanel("Verification Flow",
+                "Provider Registration → Document Submission → Admin Review → Admin Approval → Provider Visible to Users\n\n"
+                        + "Important: Providers cannot create unauthorized VIP Darshan. Official Special Darshan is shown only when admin-created or admin-approved.");
+        HBox top = new HBox(10, back, createSpacer(), badge("Status: PENDING after submit"));
+        top.setAlignment(Pos.CENTER_LEFT);
+        VBox content = pageShell("Provider Registration", "Submit documents for Simhastha verified priest/provider approval.",
+                top,
+                pujaTrustBanner(),
+                infoPanel("Provider Details", basic, expertise, documents, new HBox(10, createSpacer(), submit)),
+                note);
+        root.setCenter(scroll(content));
+    }
+
+    private VBox pujaRegistrationGroup(String title, TextField... fields) {
+        GridPane grid = new GridPane();
+        grid.setHgap(12);
+        grid.setVgap(12);
+        for (int i = 0; i < fields.length; i++) {
+            fields[i].setMaxWidth(Double.MAX_VALUE);
+            grid.add(fields[i], i % 2, i / 2);
+            GridPane.setHgrow(fields[i], Priority.ALWAYS);
         }
-        return pageShell("Puja Services", "Traditional puja support, verified counters and darshan guidance.",
-                twoColumnGrid(
-                        paidCard("puja", "Ramkund Rudrabhishek Help Desk", "Pandit Booking\nReceipt Guidance\nPuja Slot Assistance", "Pay Securely", "puja-rudrabhishek", 1, 1),
-                        paidCard("puja", "Trimbakeshwar Darshan Support", "Temple Direction\nPuja Counter Guidance\nElderly Assistance", "Pay Securely", "puja-trimbakeshwar-darshan", 1, 1),
-                        richCard("puja", "Pind Daan Information Counter", "Ritual Requirements\nTiming Windows\nVerified Contact Support", "Timings")));
+        VBox group = new VBox(10, strong(title), grid);
+        group.getStyleClass().add("admin-puja-editor-group");
+        return group;
+    }
+
+    private void submitPujaProviderRegistration(TextField fullName, TextField profilePhoto, TextField phone,
+            TextField email, TextField address, TextField experience, TextField specialization, TextField languages,
+            TextField temple, TextField identity, TextField certificates, TextField services, TextField locations) {
+        if (fullName.getText().isBlank() || phone.getText().isBlank() || email.getText().isBlank()
+                || identity.getText().isBlank() || services.getText().isBlank() || locations.getText().isBlank()) {
+            showInfo("Missing Details", "Please enter full name, phone, email, identity document, services offered and service locations.");
+            return;
+        }
+        String offered = services.getText().trim();
+        if (offered.toLowerCase(java.util.Locale.ROOT).contains("vip darshan")) {
+            showInfo("Unauthorized Service Blocked",
+                    "Providers cannot create or publish unauthorized VIP Darshan. Official Special Darshan must be admin-created or admin-approved.");
+            return;
+        }
+        try {
+            AppDataStore.registerPujaProvider(new AppDataStore.PujaProviderRecord(
+                    "", fullName.getText(), profilePhoto.getText(), phone.getText(), email.getText(), address.getText(),
+                    experience.getText(), specialization.getText(), languages.getText(), temple.getText(),
+                    identity.getText(), certificates.getText(), offered, locations.getText(),
+                    "pending", false, "", ""));
+            showInfo("Registration Submitted",
+                    "Your provider registration is pending admin review. It will appear to pilgrims only after approval.");
+            showModulePage("puja");
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Registration Failed", exception.getMessage());
+        }
+    }
+
+    private HBox pujaTrustBanner() {
+        HBox banner = new HBox(12,
+                pujaTrustItem("\uE73E", "Verified Providers", "Priests and service counters are checked before listing."),
+                pujaTrustItem("\uE8C7", "Transparent Pricing", "Starting prices are shown clearly before booking."),
+                pujaTrustItem("\uE72E", "Secure Booking", "Booking details stay inside the official flow."),
+                pujaTrustItem("\uE8D7", "No Agent Payments", "Do not pay unofficial middlemen or unknown agents."));
+        banner.getStyleClass().add("puja-trust-banner");
+        return banner;
+    }
+
+    private VBox pujaTrustItem(String icon, String title, String detail) {
+        VBox item = new VBox(7, AppUi.symbolIcon(icon, "puja-trust-icon"), strong(title), muted(detail));
+        item.getStyleClass().add("puja-trust-item");
+        HBox.setHgrow(item, Priority.ALWAYS);
+        return item;
+    }
+
+    private java.util.List<String> pujaFilterOptions(String defaultValue, java.util.List<String> rawValues) {
+        java.util.LinkedHashSet<String> values = new java.util.LinkedHashSet<>();
+        values.add(defaultValue);
+        rawValues.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::trim)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .forEach(values::add);
+        return new java.util.ArrayList<>(values);
+    }
+
+    private java.util.List<String> pujaLanguageFilterOptions(java.util.List<PujaService> services) {
+        java.util.LinkedHashSet<String> values = new java.util.LinkedHashSet<>();
+        values.add("All Languages");
+        services.stream()
+                .map(PujaService::languages)
+                .filter(value -> value != null && !value.isBlank())
+                .flatMap(value -> java.util.Arrays.stream(value.split(",")))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .forEach(values::add);
+        return new java.util.ArrayList<>(values);
+    }
+
+    private java.util.List<String> pujaPriceFilterOptions(java.util.List<PujaService> services) {
+        java.util.List<String> values = new java.util.ArrayList<>();
+        values.add("Any Price");
+        boolean hasUnder500 = services.stream().anyMatch(service -> service.price() > 0 && service.price() < 500);
+        boolean hasMid = services.stream().anyMatch(service -> service.price() >= 500 && service.price() <= 1500);
+        boolean hasHigh = services.stream().anyMatch(service -> service.price() > 1500);
+        if (hasUnder500) {
+            values.add("Under Rs. 500");
+        }
+        if (hasMid) {
+            values.add("Rs. 500 - Rs. 1500");
+        }
+        if (hasHigh) {
+            values.add("Above Rs. 1500");
+        }
+        return values;
+    }
+
+    private ComboBox<String> pujaFilter(String prompt, java.util.List<String> values) {
+        ComboBox<String> combo = new ComboBox<>();
+        combo.getItems().addAll(values);
+        combo.setValue(values.isEmpty() ? prompt : values.get(0));
+        combo.setPromptText(prompt);
+        combo.getStyleClass().add("puja-filter-combo");
+        combo.setMaxWidth(Double.MAX_VALUE);
+        return combo;
+    }
+
+    private VBox pujaFilterPanel(TextField search, ComboBox<String> type, ComboBox<String> location,
+            ComboBox<String> language, ComboBox<String> mode, ComboBox<String> price, CheckBox today,
+            Runnable render, Runnable resetFilters) {
+        Button clearSearch = new Button("×");
+        clearSearch.getStyleClass().add("puja-search-clear-button");
+        clearSearch.setOnAction(event -> {
+            search.clear();
+            render.run();
+        });
+
+        Label searchIcon = AppUi.symbolIcon("\uE721", "puja-search-box-icon");
+        StackPane searchIconBlock = new StackPane(searchIcon);
+        searchIconBlock.getStyleClass().add("puja-search-icon-block");
+
+        HBox searchBox = new HBox(0,
+                searchIconBlock,
+                search,
+                label("ॐ  मंदिर  ⌁", "puja-search-decoration"),
+                clearSearch);
+        searchBox.getStyleClass().add("puja-search-box");
+        searchBox.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(search, Priority.ALWAYS);
+
+        Button searchButton = new Button("Search");
+        searchButton.setGraphic(AppUi.symbolIcon("\uE721", "puja-search-button-icon"));
+        searchButton.getStyleClass().add("puja-main-search-button");
+        searchButton.setOnAction(event -> render.run());
+
+        HBox todayBox = new HBox(8, AppUi.symbolIcon("\uE787", "puja-filter-icon"), today);
+        todayBox.getStyleClass().add("puja-today-toggle-box");
+        todayBox.setAlignment(Pos.CENTER);
+
+        HBox topRow = new HBox(12, searchBox, todayBox, searchButton);
+        topRow.getStyleClass().add("puja-filter-top-row");
+        topRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(searchBox, Priority.ALWAYS);
+
+        decoratePujaFilter(type, "\uEC29", "Puja Type", "All Types");
+        decoratePujaFilter(location, "\uE707", "Location", "All Locations");
+        decoratePujaFilter(language, "\uE8D4", "Language", "All Languages");
+        decoratePujaFilter(mode, "\uE8A5", "Mode", "Any Mode");
+        decoratePujaFilter(price, "\uE8C7", "Price", "Any Price");
+
+        Button reset = new Button("Reset All");
+        reset.setGraphic(AppUi.symbolIcon("\uE72C", "puja-filter-icon"));
+        reset.getStyleClass().add("puja-reset-filter-button");
+        reset.setOnAction(event -> resetFilters.run());
+
+        javafx.scene.layout.FlowPane filters = new javafx.scene.layout.FlowPane(10, 10,
+                type, location, language, mode, price, reset);
+        filters.getStyleClass().add("puja-filter-second-row");
+        filters.setAlignment(Pos.CENTER_LEFT);
+
+        VBox panel = new VBox(13, topRow, filters);
+        panel.getStyleClass().add("puja-filter-panel");
+        return panel;
+    }
+
+    private void decoratePujaFilter(ComboBox<String> combo, String icon, String label, String defaultValue) {
+        combo.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(label);
+                    setGraphic(AppUi.symbolIcon(icon, "puja-filter-icon"));
+                } else {
+                    setText(item.equals(defaultValue) ? label : item);
+                    setGraphic(AppUi.symbolIcon(icon, "puja-filter-icon"));
+                }
+            }
+        });
+    }
+
+    private VBox pujaSection(String title, Node body) {
+        VBox section = new VBox(12, sectionTitle(title), body);
+        section.getStyleClass().add("puja-section");
+        return section;
+    }
+
+    private void renderPujaCards(javafx.scene.layout.FlowPane container, java.util.List<PujaService> services, String query,
+            String type, String location, String language, String mode, String price, boolean availableToday) {
+        java.util.List<Node> cards = services.stream()
+                .filter(service -> pujaMatches(service, query, type, location, language, mode, price, availableToday))
+                .map(service -> (Node) pujaServiceCard(service))
+                .toList();
+        if (cards.isEmpty()) {
+            Button clear = new Button("Clear Filters");
+            clear.getStyleClass().add("transport-primary-button");
+            VBox empty = new VBox(10,
+                    sectionTitle("No Puja Services Found"),
+                    muted("Try changing your search or filters."),
+                    clear);
+            empty.getStyleClass().add("puja-empty-state");
+            clear.setOnAction(event -> {
+                Node parent = container.getParent();
+                while (parent != null && !(parent instanceof VBox)) {
+                    parent = parent.getParent();
+                }
+                showModulePage("puja");
+            });
+            container.getChildren().setAll(empty);
+        } else {
+            container.getChildren().setAll(cards);
+        }
+    }
+
+    private boolean pujaMatches(PujaService service, String query, String type, String location, String language,
+            String mode, String price, boolean availableToday) {
+        String search = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
+        String searchable = String.join(" ",
+                valueOr("", service.name()),
+                valueOr("", service.description()),
+                valueOr("", service.type()),
+                valueOr("", service.location()),
+                valueOr("", service.providerName()),
+                valueOr("", service.languages()),
+                valueOr("", service.mode())).toLowerCase(java.util.Locale.ROOT);
+        boolean queryOk = search.isBlank() || searchable.contains(search);
+        String serviceType = valueOr("", service.type());
+        String serviceLocation = valueOr("", service.location());
+        String serviceLanguages = valueOr("", service.languages());
+        String serviceMode = valueOr("", service.mode());
+        boolean typeOk = type == null || "All Types".equals(type) || serviceType.equalsIgnoreCase(type);
+        boolean locationOk = location == null || "All Locations".equals(location)
+                || serviceLocation.toLowerCase(java.util.Locale.ROOT).contains(location.toLowerCase(java.util.Locale.ROOT));
+        boolean languageOk = language == null || "All Languages".equals(language)
+                || serviceLanguages.toLowerCase(java.util.Locale.ROOT).contains(language.toLowerCase(java.util.Locale.ROOT));
+        boolean modeOk = mode == null || "Any Mode".equals(mode)
+                || serviceMode.equalsIgnoreCase(mode)
+                || serviceMode.toLowerCase(java.util.Locale.ROOT).contains(mode.toLowerCase(java.util.Locale.ROOT))
+                || "Both".equalsIgnoreCase(serviceMode);
+        boolean todayOk = !availableToday || service.availableToday();
+        boolean priceOk = switch (price == null ? "Any Price" : price) {
+            case "Under Rs. 500" -> service.price() < 500;
+            case "Rs. 500 - Rs. 1500" -> service.price() >= 500 && service.price() <= 1500;
+            case "Above Rs. 1500" -> service.price() > 1500;
+            default -> true;
+        };
+        return queryOk && typeOk && locationOk && languageOk && modeOk && todayOk && priceOk;
+    }
+
+    private VBox pujaServiceCard(PujaService service) {
+        ImageView image = createImage(service.image(), 260, 118, 0.5, 0.5);
+        image.getStyleClass().add("puja-card-image");
+        HBox meta = new HBox(7, badge(service.mode()), badge(service.availableToday() ? "Today" : "Scheduled"), badge("Verified"));
+        meta.setAlignment(Pos.CENTER_LEFT);
+
+        VBox details = new VBox(5,
+                muted("Temple / Ghat: " + service.location()),
+                muted("Puja Type: " + service.type()),
+                muted("Location: " + service.location()),
+                muted("Duration: " + service.duration()),
+                muted("Provider: " + valueOr("Simhastha Verified Desk", service.providerName())),
+                muted("Languages: " + service.languages()),
+                muted("Mode: " + service.mode()),
+                label("Starting Rs. " + service.price(), "puja-price"));
+
+        Button view = new Button("View Details");
+        view.getStyleClass().add("puja-secondary-button");
+        view.setOnAction(event -> openPujaServiceDetailsPage(service.serviceId()));
+
+        Button book = new Button("Book Now");
+        book.getStyleClass().add("transport-primary-button");
+        book.setDisable("CLOSED".equalsIgnoreCase(service.bookingStatus()) || "DISABLED".equalsIgnoreCase(service.bookingStatus()));
+        book.setOnAction(event -> openPujaServiceDetailsPage(service.serviceId()));
+
+        HBox actions = new HBox(8, view, book);
+        VBox card = new VBox(10, image, meta, strong(service.name()), paragraph(service.description()), details, actions);
+        card.getStyleClass().add("puja-service-card");
+        return card;
+    }
+
+    private PujaService findPujaService(String serviceId) {
+        return visiblePujaServices().stream()
+                .filter(service -> service.serviceId().equals(serviceId))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private void openPujaServiceDetailsPage(String serviceId) {
+        PujaService service = findPujaService(serviceId);
+        if (service == null) {
+            showInfo("Puja Service Not Found", "This Puja service is not available now.");
+            showModulePage("puja");
+            return;
+        }
+        setActiveModule("puja");
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("puja"));
+
+        ImageView image = createImage(service.image(), 300, 175, 0.5, 0.5);
+        image.getStyleClass().add("puja-details-image");
+
+        HBox imageBadges = new HBox(7,
+                badge("Verified"),
+                badge(service.availableToday() ? "Available" : "Scheduled"),
+                badge(service.mode()));
+        imageBadges.setAlignment(Pos.CENTER_LEFT);
+        VBox imagePane = new VBox(8, image, imageBadges);
+        imagePane.getStyleClass().add("puja-details-image-card");
+        imagePane.setPrefWidth(320);
+
+        VBox details = new VBox(8,
+                sectionTitle(service.name()),
+                badge("✓ Simhastha Verified"),
+                compactPujaInfoGrid(
+                        pujaDetailCard("Temple / Ghat", service.location()),
+                        pujaDetailCard("Location", service.location()),
+                        pujaDetailCard("Puja Type", service.type()),
+                        pujaDetailCard("Starting Price", "Rs. " + service.price()),
+                        pujaDetailCard("Duration", service.duration()),
+                        pujaDetailCard("Available Slots", service.availableSlots()),
+                        pujaDetailCard("Provider / Pandit", valueOr("Best available verified priest", service.providerName())),
+                        pujaDetailCard("Languages", service.languages()),
+                        pujaDetailCard("Mode", service.mode())));
+        details.getStyleClass().add("puja-details-center-column");
+
+        Button bookFromSummary = new Button("Book This Puja");
+        bookFromSummary.getStyleClass().add("transport-primary-button");
+        bookFromSummary.setMaxWidth(Double.MAX_VALUE);
+        bookFromSummary.setOnAction(event -> openPujaBookingPage(service.serviceId()));
+
+        VBox booking = new VBox(8,
+                sectionTitle("Booking Summary"),
+                pujaSummaryRow("Starting Price", "Rs. " + service.price()),
+                pujaSummaryRow("Availability", service.availableToday() ? "Available" : "Scheduled"),
+                pujaSummaryRow("Provider Status", "Verified"),
+                bookFromSummary);
+        booking.getStyleClass().add("puja-booking-summary-card");
+        booking.setPrefWidth(285);
+        booking.setMaxWidth(310);
+
+        HBox hero = new HBox(14, imagePane, details, booking);
+        hero.getStyleClass().addAll("puja-details-panel", "puja-details-hero-compact");
+        HBox.setHgrow(details, Priority.ALWAYS);
+
+        HBox lower = new HBox(12,
+                infoPanel("About This Puja", paragraph(service.description())),
+                infoPanel("What's Included", pujaIncludedList(service)));
+        lower.getStyleClass().add("puja-details-lower-compact");
+        HBox.setHgrow(lower.getChildren().get(0), Priority.ALWAYS);
+        HBox.setHgrow(lower.getChildren().get(1), Priority.ALWAYS);
+
+        HBox trust = new HBox(10,
+                badge("✓ Verified Provider"),
+                badge("✓ Transparent Pricing"),
+                badge("✓ Secure Booking"),
+                badge("✓ No Agent Payments"));
+        trust.getStyleClass().add("puja-details-trust-card");
+
+        Button slots = new Button("View Available Slots");
+        slots.getStyleClass().add("puja-secondary-button");
+        slots.setOnAction(event -> showInfo("Available Slots",
+                valueOr("Slots are configured by the verified provider.", service.availableSlots())));
+        Button book = new Button("Proceed to Book Puja");
+        book.getStyleClass().add("transport-primary-button");
+        book.setOnAction(event -> openPujaBookingPage(service.serviceId()));
+        HBox bottomActions = new HBox(10, trust, createSpacer(), slots, book);
+        bottomActions.getStyleClass().add("puja-details-bottom-actions");
+        bottomActions.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(trust, Priority.ALWAYS);
+
+        VBox shell = pageShell("Puja Service Details", "Review verified Puja details before booking.",
+                back, hero, lower, bottomActions);
+        shell.getStyleClass().add("puja-details-compact-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private VBox pujaDetailCard(String title, String value) {
+        VBox card = new VBox(5, muted(title), strong(valueOr("Not available", value)));
+        card.getStyleClass().add("puja-mini-panel");
+        return card;
+    }
+
+    private GridPane compactPujaInfoGrid(Node... nodes) {
+        GridPane grid = twoColumnGrid(nodes);
+        grid.getStyleClass().add("puja-compact-info-grid");
+        return grid;
+    }
+
+    private GridPane compactPujaInfoGridColumns(int columns, Node... nodes) {
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        for (int index = 0; index < nodes.length; index++) {
+            grid.add(nodes[index], index % columns, index / columns);
+            GridPane.setHgrow(nodes[index], Priority.ALWAYS);
+            if (nodes[index] instanceof Region region) {
+                region.setMaxWidth(Double.MAX_VALUE);
+            }
+        }
+        for (int index = 0; index < columns; index++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(100.0 / columns);
+            column.setHgrow(Priority.ALWAYS);
+            grid.getColumnConstraints().add(column);
+        }
+        grid.getStyleClass().add("puja-compact-info-grid");
+        return grid;
+    }
+
+    private VBox pujaIncludedList(PujaService service) {
+        VBox list = new VBox(8,
+                muted("✓ Verified Pandit / Provider"),
+                muted("✓ Temple / Ghat Service: " + service.location()),
+                muted("✓ Mode: " + service.mode()));
+        if (!service.languages().isBlank()) {
+            list.getChildren().add(muted("✓ Languages: " + service.languages()));
+        }
+        return list;
+    }
+
+    private Button pujaBackButton(String text) {
+        Button button = new Button(text);
+        button.getStyleClass().addAll("puja-secondary-button", "puja-back-button");
+        return button;
+    }
+
+    private void showPujaServiceDetails(PujaService service) {
+        openPujaServiceDetailsPage(service.serviceId());
+    }
+
+    private void createPujaBooking(Button button, PujaService service) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            showInfo("Login required", "Please login before creating a puja booking.");
+            return;
+        }
+        if ("CLOSED".equalsIgnoreCase(service.bookingStatus()) || "DISABLED".equalsIgnoreCase(service.bookingStatus())) {
+            showInfo("Booking unavailable", "This Puja service is currently not available for booking.");
+            return;
+        }
+        openPujaBookingPage(service.serviceId());
+    }
+
+    private void openPujaBookingPage(String serviceId) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            showInfo("Login required", "Please login before creating a puja booking.");
+            return;
+        }
+        PujaService service = findPujaService(serviceId);
+        if (service == null || "CLOSED".equalsIgnoreCase(service.bookingStatus())
+                || "DISABLED".equalsIgnoreCase(service.bookingStatus())) {
+            showInfo("Booking unavailable", "This Puja service is currently not available for booking.");
+            showModulePage("puja");
+            return;
+        }
+        setActiveModule("puja");
+
+        DatePicker date = new DatePicker(java.time.LocalDate.now().plusDays(1));
+        date.getStyleClass().add("puja-booking-input");
+        date.setDayCellFactory(picker -> new DateCell() {
+            @Override
+            public void updateItem(java.time.LocalDate item, boolean empty) {
+                super.updateItem(item, empty);
+                setDisable(empty || item.isBefore(java.time.LocalDate.now()));
+            }
+        });
+
+        ComboBox<String> time = new ComboBox<>();
+        time.getItems().addAll(slotOptions(service));
+        time.getSelectionModel().selectFirst();
+        time.getStyleClass().add("puja-booking-input");
+
+        Spinner<Integer> devotees = new Spinner<>(1, 20, 1);
+        devotees.setEditable(true);
+        devotees.getStyleClass().add("puja-booking-spinner");
+
+        ComboBox<String> language = new ComboBox<>();
+        language.getItems().addAll(languageOptions(service));
+        language.getSelectionModel().selectFirst();
+        language.getStyleClass().add("puja-booking-input");
+
+        ComboBox<String> mode = new ComboBox<>();
+        mode.getItems().addAll("Offline", "Online / Remote");
+        mode.getSelectionModel().select(service.mode().toLowerCase(java.util.Locale.ROOT).contains("online")
+                ? "Online / Remote" : "Offline");
+        mode.getStyleClass().add("puja-booking-input");
+
+        ComboBox<String> location = new ComboBox<>();
+        location.getItems().addAll(valueOr("Approved Puja Zone", service.location()), "Temple", "Ghat",
+                "Authorized Puja Zone", "Camp");
+        location.getSelectionModel().selectFirst();
+        location.getStyleClass().add("puja-booking-input");
+
+        ComboBox<AppDataStore.PujaProviderRecord> provider = pujaProviderCombo();
+        TextField name = new TextField(displayName(user));
+        name.getStyleClass().add("puja-booking-input");
+        TextField email = new TextField(valueOr("", user.email()));
+        email.getStyleClass().add("puja-booking-input");
+        TextField phone = new TextField(currentUserPhone(user.uid()));
+        phone.getStyleClass().add("puja-booking-input");
+
+        CheckBox samagri = new CheckBox("Include Puja Samagri - Not configured");
+        samagri.getStyleClass().add("puja-booking-check");
+        samagri.setDisable(true);
+        CheckBox prasad = new CheckBox("Include Prasad - Not configured");
+        prasad.getStyleClass().add("puja-booking-check");
+        prasad.setDisable(true);
+
+        TextArea special = new TextArea();
+        special.setPromptText("Write any special requirements...");
+        special.setPrefRowCount(3);
+        special.getStyleClass().add("puja-booking-notes");
+
+        VBox summaryRows = new VBox(8);
+        Runnable updateSummary = () -> renderPujaBookingSummary(summaryRows, service, date.getValue(), time.getValue(),
+                location.getValue(), provider.getValue(), devotees.getValue(), language.getValue(), mode.getValue());
+        date.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        time.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        devotees.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        language.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        mode.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        location.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        provider.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        updateSummary.run();
+
+        GridPane bookingGrid = new GridPane();
+        bookingGrid.setHgap(12);
+        bookingGrid.setVgap(12);
+        addBookingField(bookingGrid, 0, "Selected Puja *", strong(service.name()));
+        addBookingField(bookingGrid, 1, "Booking Date *", date);
+        addBookingField(bookingGrid, 2, "Preferred Time *", time);
+        addBookingField(bookingGrid, 3, "No. of Devotees *", devotees);
+        addBookingField(bookingGrid, 4, "Language *", language);
+        addBookingField(bookingGrid, 5, "Puja Mode *", mode);
+        addBookingField(bookingGrid, 6, "Location *", location);
+        addBookingField(bookingGrid, 7, "Priest / Provider *", provider);
+        bookingGrid.getStyleClass().add("puja-booking-form-grid");
+
+        GridPane userGrid = new GridPane();
+        userGrid.setHgap(12);
+        userGrid.setVgap(12);
+        addBookingField(userGrid, 0, "Full Name", name);
+        addBookingField(userGrid, 1, "Email", email);
+        addBookingField(userGrid, 2, "Mobile Number", phone);
+
+        VBox left = new VBox(14, sectionTitle("Booking Details"), bookingGrid,
+                sectionTitle("User Details"), userGrid,
+                new VBox(8, sectionTitle("Additional Options"), samagri, prasad),
+                new VBox(8, sectionTitle("Special Requirements"), special));
+        left.getStyleClass().add("puja-booking-left-panel");
+
+        VBox secure = new VBox(5, strong("🔒 Secure Payment"), muted("Temporary demo payment flow"),
+                muted("Real Razorpay integration will be connected later."));
+        secure.getStyleClass().add("puja-secure-payment-card");
+        Button cancel = new Button("Cancel");
+        cancel.getStyleClass().add("puja-secondary-button");
+        cancel.setOnAction(event -> openPujaServiceDetailsPage(service.serviceId()));
+        Button pay = new Button("Proceed to Payment →");
+        pay.getStyleClass().add("transport-primary-button");
+        pay.setOnAction(event -> confirmPujaBookingFromPage(pay, user, service, date, time, devotees, language,
+                mode, location, provider, samagri, prasad, special, name, email, phone));
+        HBox actions = new HBox(10, cancel, createSpacer(), pay);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox right = new VBox(14, sectionTitle("Booking Summary"), summaryRows, secure, actions);
+        right.getStyleClass().add("puja-booking-summary-card");
+        right.setPrefWidth(390);
+        HBox layout = new HBox(16, left, right);
+        HBox.setHgrow(left, Priority.ALWAYS);
+
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> openPujaServiceDetailsPage(service.serviceId()));
+        HBox top = new HBox(12,
+                new VBox(4, sectionTitle("Book Puja"), muted("Complete your verified Simhastha Puja booking request.")),
+                createSpacer(), back);
+        top.setAlignment(Pos.CENTER_LEFT);
+
+        HBox footer = new HBox(12,
+                pujaMiniInfoSection("Verified Priests", "\uE73E", "All priests are verified by Simhastha Connect"),
+                pujaMiniInfoSection("Trusted & Secure", "\uE72E", "Booking and payment flow stays safe"),
+                pujaMiniInfoSection("Official Counters", "\uE80F", "Puja at authorized counters only"),
+                pujaMiniInfoSection("24/7 Support", "\uE717", "We are here to help anytime"));
+        footer.getStyleClass().add("puja-user-support-row");
+        footer.getChildren().forEach(node -> HBox.setHgrow(node, Priority.ALWAYS));
+
+        VBox shell = pageShell("Book Puja", "Proceed with a safe and verified spiritual booking.", top, layout, footer);
+        shell.getStyleClass().add("puja-booking-compact-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private ComboBox<AppDataStore.PujaProviderRecord> pujaProviderCombo() {
+        ComboBox<AppDataStore.PujaProviderRecord> provider = new ComboBox<>();
+        provider.getItems().add(null);
+        provider.getItems().addAll(AppDataStore.approvedPujaProviders());
+        provider.setConverter(new javafx.util.StringConverter<>() {
+            @Override
+            public String toString(AppDataStore.PujaProviderRecord item) {
+                return item == null ? "Assign Best Available Verified Priest" : item.fullName + " • " + item.specialization;
+            }
+
+            @Override
+            public AppDataStore.PujaProviderRecord fromString(String value) {
+                return null;
+            }
+        });
+        provider.getSelectionModel().selectFirst();
+        provider.getStyleClass().add("puja-booking-input");
+        return provider;
+    }
+
+    private String currentUserPhone(String uid) {
+        return AppDataStore.users().stream()
+                .filter(record -> record.uid.equals(uid))
+                .map(record -> record.mobile)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse("");
+    }
+
+    private void renderPujaBookingSummary(VBox rows, PujaService service, java.time.LocalDate date, String time,
+            String location, AppDataStore.PujaProviderRecord provider, int devotees, String language, String mode) {
+        long base = Math.max(0, service.price());
+        long total = base;
+        rows.getChildren().setAll(
+                pujaSummaryRow("Puja", service.name()),
+                pujaSummaryRow("Date", date == null ? "Select date" : date.toString()),
+                pujaSummaryRow("Time", valueOr("Select time", time)),
+                pujaSummaryRow("Location", valueOr("Select location", location)),
+                pujaSummaryRow("Priest / Provider", provider == null ? "Best available verified priest" : provider.fullName),
+                pujaSummaryRow("Devotees", String.valueOf(devotees)),
+                pujaSummaryRow("Language", valueOr("Select language", language)),
+                pujaSummaryRow("Mode", valueOr("Offline", mode)),
+                pujaSummaryDivider(),
+                pujaSummaryRow("Base Puja Price", "Rs. " + base),
+                pujaSummaryRow("Puja Samagri", "Not configured"),
+                pujaSummaryRow("Prasad", "Not configured"),
+                pujaSummaryRow("Service Fee", "Rs. 0"),
+                label("TOTAL AMOUNT: Rs. " + total, "puja-total-amount"));
+    }
+
+    private HBox pujaSummaryRow(String labelText, String value) {
+        HBox row = new HBox(8, muted(labelText), createSpacer(), strong(valueOr("Not available", value)));
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private Region pujaSummaryDivider() {
+        Region divider = new Region();
+        divider.setPrefHeight(1);
+        divider.getStyleClass().add("puja-summary-divider");
+        return divider;
+    }
+
+    private void confirmPujaBookingFromPage(Button pay, AppSession.User user, PujaService service,
+            DatePicker date, ComboBox<String> time, Spinner<Integer> devotees, ComboBox<String> language,
+            ComboBox<String> mode, ComboBox<String> location, ComboBox<AppDataStore.PujaProviderRecord> provider,
+            CheckBox samagri, CheckBox prasad, TextArea special, TextField name, TextField email, TextField phone) {
+        PujaService freshService = findPujaService(service.serviceId());
+        if (freshService == null) {
+            showInfo("Service Unavailable", "This Puja service is no longer available.");
+            return;
+        }
+        if (date.getValue() == null || date.getValue().isBefore(java.time.LocalDate.now())) {
+            showInfo("Invalid Date", "Select today or a future booking date.");
+            return;
+        }
+        if (time.getValue() == null || time.getValue().isBlank() || location.getValue() == null
+                || location.getValue().isBlank() || devotees.getValue() == null || devotees.getValue() < 1) {
+            showInfo("Missing Details", "Select time, location and devotees before proceeding.");
+            return;
+        }
+        if (name.getText() == null || name.getText().isBlank()) {
+            showInfo("Missing User Name", "Enter devotee name before proceeding.");
+            return;
+        }
+        int slotCapacity = parseCapacity(freshService.availableSlots());
+        if (slotCapacity > 0 && devotees.getValue() > slotCapacity) {
+            showInfo("Slot Full", "This service has only " + slotCapacity + " configured slots.");
+            return;
+        }
+        long base = Math.max(0, freshService.price());
+        long total = base;
+        if (total <= 0) {
+            showInfo("Payment Amount Required",
+                    "This Puja service has Rs. 0 as total amount. Please ask admin to set a valid price before booking.");
+            return;
+        }
+        pay.setDisable(true);
+        try {
+            AppDataStore.PujaProviderRecord selectedProvider = provider.getValue();
+            String bookingId = "PUJA-" + java.time.LocalDate.now().getYear() + "-"
+                    + java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase(java.util.Locale.ROOT);
+            AppDataStore.PujaBookingRecord booking = new AppDataStore.PujaBookingRecord(bookingId, user.uid(),
+                    name.getText(), phone.getText(), email.getText(), freshService.serviceId(), freshService.name(),
+                    freshService.type(), selectedProvider == null ? freshService.providerId() : selectedProvider.providerId,
+                    selectedProvider == null ? valueOr("Best Available Verified Priest", freshService.providerName()) : selectedProvider.fullName,
+                    freshService.location(), date.getValue().toString(), time.getValue(), location.getValue(),
+                    devotees.getValue(), language.getValue(), mode.getValue(), total, "PAYMENT_PENDING", "PENDING",
+                    "", "", "", location.getValue(), samagri.isSelected(), 0, prasad.isSelected(),
+                    0, base, 0, total, special.getText(), "", "", "", "", "", "", "", "", "");
+            AppDataStore.savePujaBooking(booking);
+            startPujaRazorpayPayment(booking, user);
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Booking Failed", exception.getMessage());
+        } finally {
+            pay.setDisable(false);
+        }
+    }
+
+    private void addBookingField(GridPane form, int row, String labelText, Node control) {
+        Label label = label(labelText, "puja-booking-field-label");
+        VBox cell = new VBox(6, label, control);
+        cell.getStyleClass().add("puja-booking-field");
+        form.add(cell, row % 2, row / 2);
+        GridPane.setHgrow(control, Priority.ALWAYS);
+    }
+
+    private java.util.List<String> slotOptions(PujaService service) {
+        String slots = service.duration();
+        java.util.List<String> defaults = java.util.List.of("Morning Slot", "Afternoon Slot", "Evening Slot");
+        return defaults;
+    }
+
+    private java.util.List<String> languageOptions(PujaService service) {
+        java.util.List<String> options = java.util.Arrays.stream(service.languages().split(",|/"))
+                .map(String::trim)
+                .filter(text -> !text.isBlank())
+                .distinct()
+                .toList();
+        return options.isEmpty() ? java.util.List.of("Marathi", "Hindi", "Sanskrit") : options;
+    }
+
+    private void startPujaRazorpayPayment(AppDataStore.PujaBookingRecord booking, AppSession.User user) {
+        if ("PAID".equalsIgnoreCase(booking.paymentStatus)) {
+            showInfo("Already Paid", "This Puja booking is already paid.");
+            return;
+        }
+        if (booking.totalAmount <= 0) {
+            showInfo("Payment Amount Required", "This Puja booking cannot be paid because the total amount is Rs. 0.");
+            return;
+        }
+        showPujaPaymentProcessingPage(booking, user);
+    }
+
+    private void showPujaPaymentProcessingPage(AppDataStore.PujaBookingRecord booking, AppSession.User user) {
+        setActiveModule("puja");
+        final boolean[] cancelled = { false };
+        final Timeline[] successRef = new Timeline[1];
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> {
+            cancelled[0] = true;
+            if (successRef[0] != null) {
+                successRef[0].stop();
+            }
+            openPujaBookingPage(booking.serviceId);
+        });
+
+        VBox summary = new VBox(9,
+                sectionTitle("Booking Summary"),
+                pujaSummaryRow("Puja", booking.serviceName),
+                pujaSummaryRow("Booking ID", booking.bookingId),
+                pujaSummaryRow("Date", booking.date),
+                pujaSummaryRow("Time", booking.time),
+                pujaSummaryRow("Location", valueOr(booking.location, booking.locationName)),
+                pujaSummaryRow("Provider", valueOr("Best available verified priest", booking.providerName)),
+                pujaSummaryDivider(),
+                pujaSummaryRow("Amount", "Rs. " + booking.totalAmount));
+        summary.getStyleClass().add("puja-booking-summary-card");
+
+        Label status = label("Preparing secure temporary payment confirmation...", "puja-success-title");
+        VBox process = new VBox(12,
+                AppUi.symbolIcon("\uE8C7", "puja-trust-icon"),
+                sectionTitle("Secure Payment Processing"),
+                paragraph("This is a temporary development/demo payment step. No card, CVV, UPI PIN or banking details are collected in Simhastha Connect."),
+                status,
+                muted("Integration point ready: real Razorpay can replace this processing step later without changing booking records."));
+        process.getStyleClass().add("puja-details-panel");
+
+        HBox layout = new HBox(16, process, summary);
+        HBox.setHgrow(process, Priority.ALWAYS);
+        summary.setPrefWidth(380);
+        root.setCenter(scroll(pageShell("Secure Payment Processing",
+                "Confirming your Puja booking payment safely inside the dashboard.",
+                back, layout)));
+
+        Timeline success = new Timeline(new KeyFrame(Duration.seconds(1.4), event -> {
+            if (!cancelled[0]) {
+                completeTemporaryPujaPayment(booking);
+            }
+        }));
+        successRef[0] = success;
+        success.setCycleCount(1);
+        success.play();
+    }
+
+    private void completeTemporaryPujaPayment(AppDataStore.PujaBookingRecord booking) {
+        String now = String.valueOf(System.currentTimeMillis());
+        String internalPaymentId = "TEMP-PUJA-" + java.util.UUID.randomUUID().toString()
+                .substring(0, 8).toUpperCase(java.util.Locale.ROOT);
+        String qrTicketId = "PUJA-TICKET-" + booking.bookingId;
+        String verificationToken = java.util.UUID.randomUUID().toString().replace("-", "")
+                .substring(0, 16).toUpperCase(java.util.Locale.ROOT);
+        try {
+            AppDataStore.updatePujaBookingPayment(booking.bookingId, "CONFIRMED", "PAID",
+                    internalPaymentId, "", "", "TEMPORARY_DEMO",
+                    booking.paymentCreatedAt.isBlank() ? now : booking.paymentCreatedAt,
+                    now, "");
+            AppDataStore.PujaBookingRecord ticketBooking =
+                    AppDataStore.updatePujaBookingQrTicket(booking.bookingId, qrTicketId, verificationToken);
+            showPujaPaymentSuccessPage(ticketBooking);
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Payment Update Failed", exception.getMessage());
+            showModulePage("bookings");
+        }
+    }
+
+    private void showPujaPaymentSuccessPage(AppDataStore.PujaBookingRecord booking) {
+        setActiveModule("bookings");
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("bookings"));
+
+        PujaService service = findPujaService(booking.serviceId);
+        ImageView image = createImage(service == null ? "/images/trimbakeshwar.jpg" : service.image(), 190, 112, 0.5, 0.5);
+        image.getStyleClass().add("puja-details-image");
+
+        GridPane details = compactPujaInfoGridColumns(3,
+                pujaDetailCard("Booking ID", booking.bookingId),
+                pujaDetailCard("Puja", booking.serviceName),
+                pujaDetailCard("Date", booking.date),
+                pujaDetailCard("Time", booking.time),
+                pujaDetailCard("Location", valueOr(booking.location, booking.locationName)),
+                pujaDetailCard("Devotees", String.valueOf(booking.devoteesCount)),
+                pujaDetailCard("Total Amount", "Rs. " + booking.totalAmount),
+                pujaDetailCard("Payment Status", "Payment Success"),
+                pujaDetailCard("Booking Status", "Booking Confirmed"));
+
+        VBox ticket = pujaTicketCard(booking, "SIMHASTHA-PUJA|" + booking.bookingId + "|" + booking.qrVerificationToken);
+        ticket.getStyleClass().add("puja-ticket-compact");
+        Button bookings = new Button("View My Bookings");
+        bookings.getStyleClass().add("puja-secondary-button");
+        bookings.setOnAction(event -> showModulePage("bookings"));
+        Button viewTicket = new Button("View Ticket");
+        viewTicket.getStyleClass().add("transport-primary-button");
+        viewTicket.setOnAction(event -> showPujaTicketVerificationPage(booking.bookingId, booking.qrVerificationToken));
+        HBox actions = new HBox(10, createSpacer(), bookings, viewTicket);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox headline = new VBox(6,
+                label("✓ Booking Confirmed", "puja-success-title"),
+                strong(booking.serviceName),
+                muted("Your Puja booking is confirmed. Keep the QR ticket ready at the service counter."),
+                new HBox(7, badge("Payment Success"), badge("QR Ready")));
+        headline.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(headline, Priority.ALWAYS);
+
+        HBox hero = new HBox(16, image, headline, ticket);
+        hero.setAlignment(Pos.CENTER_LEFT);
+        hero.getStyleClass().add("puja-success-hero");
+
+        VBox success = new VBox(10,
+                hero,
+                details,
+                actions);
+        success.getStyleClass().add("puja-success-card");
+
+        VBox shell = pageShell("Payment Success",
+                "Your Puja booking is confirmed and QR ticket is ready.",
+                back, success);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private int parseCapacity(String text) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d+)").matcher(text == null ? "" : text);
+        if (!matcher.find()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(matcher.group(1));
+        } catch (Exception exception) {
+            return 0;
+        }
+    }
+
+    private java.util.List<PujaService> visiblePujaServices() {
+        if (!AppDataStore.pujaServices().isEmpty()) {
+            return AppDataStore.publicPujaServices().stream()
+                    .map(this::pujaServiceFromRecord)
+                    .toList();
+        }
+        java.util.List<PujaService> services = new java.util.ArrayList<>();
+        for (AppDataStore.ServiceItem item : AppDataStore.items("puja")) {
+            boolean exists = services.stream().anyMatch(service -> service.name().equalsIgnoreCase(item.title));
+            if (!exists) {
+                services.add(pujaServiceFromAdminItem(item));
+            }
+        }
+        return services;
+    }
+
+    private PujaService pujaServiceFromRecord(AppDataStore.PujaServiceRecord service) {
+        return new PujaService(service.serviceId, service.name, service.pujaType,
+                valueOr("Admin-approved puja service.", service.description), service.duration,
+                service.availableSlots, parsePujaPrice(service.price), service.templeOrGhat, service.mode, service.languages,
+                true, service.imageUrl, service.providerId, service.providerName, service.bookingStatus);
+    }
+
+    private PujaService pujaServiceFromAdminItem(AppDataStore.ServiceItem item) {
+        String detail = item.detail == null ? "" : item.detail;
+        return new PujaService(item.id, item.title,
+                pujaDetailValue(detail, "Puja Type", "Darshan"),
+                valueOr("Admin-approved puja service published by Simhastha admin.", detail),
+                pujaDetailValue(detail, "Duration", "Varies"),
+                pujaDetailValue(detail, "Available Slots", "Varies"),
+                parsePujaPrice(pujaDetailValue(detail, "Price", "0")),
+                pujaDetailValue(detail, "Temple / Ghat", "Approved Location"),
+                pujaDetailValue(detail, "Mode", "Offline"),
+                pujaDetailValue(detail, "Languages", "Marathi, Hindi, Sanskrit"),
+                true,
+                "/images/trimbakeshwar.jpg", "", pujaDetailValue(detail, "Pandit / Provider", "Admin"),
+                pujaDetailValue(detail, "Booking Status", "OPEN"));
+    }
+
+    private String pujaDetailValue(String detail, String label, String fallback) {
+        String prefix = label + ":";
+        for (String part : (detail == null ? "" : detail).split("\\|")) {
+            String clean = part.trim();
+            if (clean.toLowerCase(java.util.Locale.ROOT).startsWith(prefix.toLowerCase(java.util.Locale.ROOT))) {
+                String value = clean.substring(prefix.length()).trim();
+                return value.isBlank() ? fallback : value;
+            }
+        }
+        return fallback;
+    }
+
+    private int parsePujaPrice(String priceText) {
+        try {
+            String digits = priceText == null ? "" : priceText.replaceAll("[^0-9]", "");
+            return digits.isBlank() ? 0 : Integer.parseInt(digits);
+        } catch (Exception exception) {
+            return 0;
+        }
+    }
+
+    private java.util.List<PujaService> pujaServices() {
+        return java.util.List.of(
+                new PujaService("Rudrabhishek", "Abhishek", "Traditional Shiva abhishek with verified priest support.", "45 min", 751, "Trimbakeshwar", "Offline", "Marathi, Hindi, Sanskrit", true, "/images/trimbakeshwar.jpg"),
+                new PujaService("Mahamrityunjaya Jaap", "Jaap", "Jaap sankalp for health, protection and family well-being.", "60 min", 1100, "Panchavati", "Both", "Marathi, Hindi, Sanskrit", true, "/images/ramkund_sunrise.jpg"),
+                new PujaService("Hawan", "Hawan", "Sacred fire ritual with guided samagri checklist.", "75 min", 1500, "Ramkund", "Offline", "Hindi, Sanskrit", false, "/images/godavari_kumbh.jpg"),
+                new PujaService("Sankalp Puja", "Abhishek", "Quick sankalp puja assistance for Simhastha pilgrims.", "30 min", 501, "Ramkund", "Offline", "Marathi, Hindi", true, "/images/ramkund_sunrise.jpg"),
+                new PujaService("Satyanarayan Puja", "Custom", "Family puja service with verified priest coordination.", "90 min", 2100, "Nashik City", "Offline", "Marathi, Hindi", false, "/images/godavari_kumbh.jpg"),
+                new PujaService("Graha Shanti", "Jaap", "Ritual guidance for graha shanti and family sankalp.", "80 min", 1800, "Panchavati", "Offline", "Marathi, Hindi, Sanskrit", true, "/images/trimbakeshwar.jpg"),
+                new PujaService("Abhishek", "Abhishek", "Temple abhishek guidance with verified counter information.", "40 min", 651, "Trimbakeshwar", "Offline", "Marathi, Hindi", true, "/images/trimbakeshwar.jpg"),
+                new PujaService("Aarti Participation", "Darshan", "Participate in scheduled aarti with official timing guidance.", "25 min", 301, "Ramkund", "Offline", "Marathi, Hindi", true, "/images/ramkund_sunrise.jpg"),
+                new PujaService("Pind Daan", "Custom", "Pind daan information and verified priest support.", "60 min", 1200, "Godavari Ghat", "Offline", "Hindi, Sanskrit", false, "/images/godavari_kumbh.jpg"),
+                new PujaService("Online / Remote Puja", "Remote", "Remote sankalp puja for pilgrims unable to attend physically.", "45 min", 901, "Online", "Online", "Marathi, Hindi, English", true, "/images/welcome-light.png"),
+                new PujaService("Prasad Service", "Prasad", "Prasad request and pickup guidance through approved counters.", "20 min", 251, "Panchavati", "Both", "Marathi, Hindi", true, "/images/ramkund_sunrise.jpg"),
+                new PujaService("Temple Darshan", "Darshan", "Temple darshan support with timing and queue guidance.", "30 min", 0, "Kalaram Mandir", "Offline", "Marathi, Hindi, English", true, "/images/trimbakeshwar.jpg"),
+                new PujaService("Custom Puja", "Custom", "Custom ritual request placeholder for later Firebase-backed booking.", "Varies", 0, "Multiple Locations", "Both", "Marathi, Hindi, English, Sanskrit", true, "/images/godavari_kumbh.jpg"));
     }
 
     private VBox ghatsPage() {
@@ -3552,22 +4749,855 @@ public class DashboardPage {
     private String coordinateText(Ghat ghat) { return ghat.latitude() == null || ghat.longitude() == null ? "Nashik Godavari zone coordinates will be updated by administration." : ghat.latitude() + ", " + ghat.longitude(); }
 
     private VBox emergencyPage() {
-        if (!AppDataStore.items("emergency").isEmpty()) {
-            return pageShell("Emergency & Medical", "Important emergency numbers and safety support.",
-                    infoPanel("Emergency Safety Tips", "Stay calm\nFollow police instructions\nUse official help booths\nKeep ID with you\nAvoid overcrowded routes"),
-                    adminControlledGrid("emergency", "Verified"));
+        VBox page = new VBox(12, emergencyTopControls(), emergencyHeader());
+        page.getStyleClass().addAll("pilgrim-dashboard-main", "emergency-page");
+        page.setPadding(new Insets(12, 22, 28, 22));
+        if (!emergencyFeedback.isBlank()) {
+            page.getChildren().add(emergencyFeedbackCard());
         }
-        return pageShell("Emergency & Medical", "Important emergency numbers and safety support.",
-                infoPanel("Emergency Safety Tips", "Stay calm\nFollow police instructions\nUse official help booths\nKeep ID with you\nAvoid overcrowded routes"),
-                twoColumnGrid(
-                        emergencyCard("Unified Emergency", "112", "Police, fire and medical help"),
-                        emergencyCard("Ambulance", "108", "Medical emergency support"),
-                        emergencyCard("Police", "100 / 112", "Nashik city emergency control"),
-                        emergencyCard("Fire", "101", "Fire and rescue support"),
-                        emergencyCard("Women Helpline", "1091", "Women safety support"),
-                        emergencyCard("Child Helpline", "1098", "Child safety support"),
-                        emergencyCard("Cyber Crime", "1930", "Cyber fraud helpline"),
-                        emergencyCard("District Disaster Management Nashik", "1077", "Disaster control support")));
+
+        VBox left = new VBox(12, immediateHelpSection(), emergencyStatusRow(), emergencyServicesSection(), nearbyServicesSection());
+        if (emergencyReportFormVisible) left.getChildren().add(emergencyReportForm());
+        if (currentEmergency != null) left.getChildren().add(emergencyStatusSection());
+        left.getStyleClass().add("emergency-left-column");
+        left.setMinWidth(0);
+        left.setMaxWidth(Double.MAX_VALUE);
+
+        VBox right = new VBox(12, emergencyMapSection(), selectedFacilitySection(), kumbhAlertSection());
+        right.getStyleClass().add("emergency-right-column");
+        right.setMinWidth(0);
+        right.setMaxWidth(Double.MAX_VALUE);
+
+        GridPane layout = new GridPane();
+        layout.getStyleClass().add("emergency-content-layout");
+        layout.setHgap(14);
+        layout.setVgap(14);
+        javafx.scene.layout.ColumnConstraints leftColumn = new javafx.scene.layout.ColumnConstraints();
+        leftColumn.setPercentWidth(35);
+        leftColumn.setHgrow(Priority.ALWAYS);
+        leftColumn.setFillWidth(true);
+        javafx.scene.layout.ColumnConstraints rightColumn = new javafx.scene.layout.ColumnConstraints();
+        rightColumn.setPercentWidth(65);
+        rightColumn.setHgrow(Priority.ALWAYS);
+        rightColumn.setFillWidth(true);
+        layout.getColumnConstraints().addAll(leftColumn, rightColumn);
+        layout.add(left, 0, 0);
+        layout.add(right, 1, 0);
+        GridPane.setHgrow(left, Priority.ALWAYS);
+        GridPane.setHgrow(right, Priority.ALWAYS);
+        GridPane.setFillWidth(left, true);
+        GridPane.setFillWidth(right, true);
+        layout.setMaxWidth(Double.MAX_VALUE);
+        page.getChildren().add(layout);
+        return page;
+    }
+
+    private HBox emergencyTopControls() {
+        Label location = label("Nashik, Maharashtra", "emergency-top-meta");
+        Label weather = label("Clear  •  29°C", "emergency-top-meta");
+        Label dateTime = label(java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("dd MMM uuuu  •  h:mm a")), "emergency-top-meta");
+        HBox actions = new HBox(10, location, weather, dateTime, createSpacer(), AppUi.createThemeToggle(),
+                roundButton("\uE7F4", "Notifications"), roundButton("\uE77B", "Profile"));
+        actions.getStyleClass().addAll("pilgrim-top-actions", "emergency-top-actions");
+        actions.setAlignment(Pos.CENTER_LEFT);
+        return actions;
+    }
+
+    private HBox emergencyHeader() {
+        Label icon = AppUi.symbolIcon("\uE95E", "emergency-header-icon");
+        Label title = label("Emergency & Safety", "emergency-header-title");
+        Label subtitle = label("Get immediate help or find nearest emergency services", "emergency-header-subtitle");
+        VBox copy = new VBox(3, title, subtitle);
+        HBox header = new HBox(13, icon, copy);
+        header.getStyleClass().add("emergency-header");
+        header.setAlignment(Pos.CENTER_LEFT);
+        return header;
+    }
+
+    private VBox immediateHelpSection() {
+        VBox sos = emergencyActionCard("\uE95E", "SOS EMERGENCY", "Tap for instant critical help", "SEND SOS", "emergency-sos-card");
+        VBox report = emergencyActionCard("\uE7BA", "REPORT EMERGENCY", "Provide details & get help", "REPORT NOW", "emergency-report-card");
+        HBox cards = new HBox(10, sos, report);
+        HBox.setHgrow(sos, Priority.ALWAYS);
+        HBox.setHgrow(report, Priority.ALWAYS);
+        cards.getStyleClass().add("emergency-action-row");
+        VBox section = new VBox(10, emergencySectionTitle("NEED IMMEDIATE HELP?"), cards);
+        if (sosConfirmationVisible) section.getChildren().add(sosConfirmationCard());
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private VBox emergencyActionCard(String iconText, String titleText, String detailText, String actionText, String style) {
+        Button action = new Button(actionText);
+        action.getStyleClass().add("emergency-action-button");
+        action.setMaxWidth(Double.MAX_VALUE);
+        action.setOnAction(event -> {
+            if ("SEND SOS".equals(actionText)) {
+                sosConfirmationVisible = true;
+            } else {
+                emergencyReportFormVisible = true;
+            }
+            emergencyFeedback = "";
+            refreshEmergencyPage();
+        });
+        VBox card = new VBox(8, AppUi.symbolIcon(iconText, "emergency-action-icon"),
+                label(titleText, "emergency-action-title"), label(detailText, "emergency-action-detail"), action);
+        card.getStyleClass().addAll("emergency-action-card", style);
+        card.setMaxWidth(Double.MAX_VALUE);
+        VBox.setVgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private HBox emergencyStatusRow() {
+        HBox row = new HBox(8,
+                emergencyStatusCard("\uE707", "Current Location", "Nashik Kumbh Zone", "location"),
+                emergencyStatusCard("\uE774", "GPS Accuracy", "High", "accuracy"),
+                emergencyStatusCard("\uE73E", "You Are Safe", "We are here to help", "safe"));
+        row.getStyleClass().add("emergency-status-row");
+        return row;
+    }
+
+    private VBox emergencyStatusCard(String iconText, String titleText, String detailText, String type) {
+        VBox card = new VBox(3, AppUi.symbolIcon(iconText, "emergency-status-icon"),
+                label(titleText, "emergency-status-title"), label(detailText, "emergency-status-detail"));
+        card.getStyleClass().addAll("emergency-status-card", "emergency-status-" + type);
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private VBox emergencyServicesSection() {
+        GridPane grid = new GridPane();
+        grid.setHgap(8);
+        grid.setVgap(8);
+        String[][] services = {
+                { "\uE91D", "Hospital", "hospital" }, { "\uE7B8", "Medical Camp", "camp" },
+                { "\uE95E", "First Aid Center", "aid" }, { "\uE7F2", "Ambulance", "ambulance" },
+                { "\uE7FC", "Police Help Center", "police" }, { "\uE894", "Fire / Safety Unit", "fire" },
+                { "\uE897", "Emergency Help Desk", "desk" }, { "\uE7E8", "Emergency Exit", "exit" } };
+        for (int index = 0; index < services.length; index++) {
+            VBox card = emergencyServiceCard(services[index][0], services[index][1], services[index][2]);
+            grid.add(card, index % 4, index / 4);
+            GridPane.setHgrow(card, Priority.ALWAYS);
+        }
+        Button nearestMedical = new Button("FIND NEAREST MEDICAL HELP");
+        nearestMedical.getStyleClass().add("emergency-nearest-medical-button");
+        nearestMedical.setMaxWidth(Double.MAX_VALUE);
+        nearestMedical.setOnAction(event -> selectNearestMedicalHelp());
+        VBox section = new VBox(10, emergencySectionTitle("FIND EMERGENCY SERVICES"), grid, nearestMedical);
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private VBox emergencyServiceCard(String iconText, String titleText, String category) {
+        VBox card = new VBox(5, AppUi.symbolIcon(iconText, "emergency-service-icon"), label(titleText, "emergency-service-title"));
+        card.getStyleClass().addAll("emergency-service-card", "emergency-service-" + category);
+        String filter = categoryForServiceCard(category);
+        if (filter.equals(selectedEmergencyCategory)) card.getStyleClass().add("emergency-service-card-selected");
+        card.setOnMouseClicked(event -> selectEmergencyCategory(filter));
+        return card;
+    }
+
+    private VBox nearbyServicesSection() {
+        VBox rows = new VBox(7);
+        List<EmergencyServiceDemo> services = filteredEmergencyServices();
+        if (emergencyServicesLoading) {
+            rows.getChildren().add(label("Loading emergency services...", "emergency-empty-state"));
+        } else if (!emergencyServicesError.isBlank() && !usingEmergencyDevelopmentFallback) {
+            Button retry = new Button("RETRY"); retry.getStyleClass().add("emergency-secondary-button"); retry.setOnAction(event -> loadEmergencyServicesAsync());
+            rows.getChildren().addAll(label("Emergency service data is currently unavailable.", "emergency-empty-state"), retry);
+        } else if (services.isEmpty()) {
+            rows.getChildren().add(label("No emergency service locations are currently available.", "emergency-empty-state"));
+        } else {
+            if (usingEmergencyDevelopmentFallback) {
+                rows.getChildren().add(label("Emergency Service Locations", "emergency-empty-state"));
+            }
+            services.forEach(service -> rows.getChildren().add(nearbyServiceRow(service)));
+        }
+        Button viewAll = new Button("VIEW ALL SERVICES");
+        viewAll.getStyleClass().add("emergency-text-button");
+        viewAll.setOnAction(event -> selectEmergencyFilter("All"));
+        VBox section = new VBox(10, emergencySectionTitle("NEARBY SERVICES"), rows, viewAll);
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private HBox nearbyServiceRow(EmergencyServiceDemo service) {
+        VBox copy = new VBox(2, label(service.name(), "emergency-nearby-name"), label(service.subType(), "emergency-nearby-type"));
+        Label open = label(displayEmergencyValue(service.status()), "emergency-open-status");
+        Label arrow = label(">", "emergency-nearby-arrow");
+        HBox row = new HBox(9, AppUi.symbolIcon(emergencyIcon(service.category()), "emergency-nearby-icon"), copy, createSpacer(),
+                label(formatEmergencyDistance(emergencyDistanceMeters(service)), "emergency-distance"), open, arrow);
+        row.getStyleClass().add("emergency-nearby-card");
+        if (selectedEmergencyFacility != null && service.id().equals(selectedEmergencyFacility.id())) row.getStyleClass().add("emergency-nearby-card-selected");
+        row.setOnMouseClicked(event -> selectEmergencyFacility(service));
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private VBox emergencyMapSection() {
+        FlowPane chips = new FlowPane(7, 7);
+        String[] filters = { "All", "Hospital", "Medical Camp", "Ambulance", "Police", "Fire / Safety",
+                "First Aid", "Emergency Help Desk", "Exit" };
+        for (String filter : filters) {
+            Button chip = new Button(filter);
+            chip.getStyleClass().add("emergency-filter-chip");
+            if (filter.equals(selectedEmergencyFilter)) chip.getStyleClass().add("emergency-filter-chip-selected");
+            chip.setOnAction(event -> selectEmergencyFilter(filter));
+            chips.getChildren().add(chip);
+        }
+        StackPane map = buildEmergencyMapShell();
+        VBox section = new VBox(11, chips, map);
+        section.getStyleClass().addAll("emergency-section", "emergency-map-container");
+        return section;
+    }
+
+    private StackPane buildEmergencyMapShell() {
+        try {
+            EmergencyMapView mapView = emergencyMapView();
+            if (mapView == null) return emergencyMapFallback();
+            mapView.detach();
+            List<EmergencyServiceDemo> filteredServices = filteredEmergencyServices();
+            mapView.updateMarkers(emergencyMarkersJson(filteredServices),
+                    selectedEmergencyFacility == null ? "" : selectedEmergencyFacility.id());
+            if (!emergencyMapFocusId.isBlank()) mapView.focusFacility(emergencyMapFocusId);
+            if (emergencyRouteActive && selectedEmergencyFacility != null) mapView.drawApproximateRoute(selectedEmergencyFacility.latitude(), selectedEmergencyFacility.longitude());
+            else mapView.clearRoute();
+            if (activeEmergencyAlert != null && activeEmergencyAlert.hasLocation()) {
+                mapView.showEmergencyAlert(activeEmergencyAlert);
+            } else {
+                mapView.clearEmergencyAlert();
+            }
+
+            Button centerOnMe = new Button("CENTER ON ME");
+            centerOnMe.getStyleClass().add("emergency-map-control");
+            centerOnMe.setOnAction(event -> mapView.centerOnDemoLocation());
+            StackPane map = new StackPane(mapView.node(), centerOnMe);
+            map.getStyleClass().add("emergency-map-shell");
+            map.setMinHeight(360);
+            StackPane.setAlignment(centerOnMe, Pos.TOP_RIGHT);
+            StackPane.setMargin(centerOnMe, new Insets(10));
+            return map;
+        } catch (RuntimeException | LinkageError error) {
+            System.err.println("EMERGENCY_MAP_DIAGNOSTIC stage=PAGE_BUILD error=" + error);
+            return emergencyMapFallback();
+        }
+    }
+
+    private StackPane emergencyMapFallback() {
+        Label title = label("Nashik Emergency Map unavailable", "emergency-map-failure-title");
+        Label detail = label("Check internet connection or retry.", "emergency-map-failure-detail");
+        Button retry = new Button("RETRY MAP");
+        retry.getStyleClass().add("emergency-secondary-button");
+        retry.setOnAction(event -> { emergencyMapView = null; refreshEmergencyPage(); });
+        VBox fallback = new VBox(7, title, detail, retry);
+        fallback.setAlignment(Pos.CENTER);
+        StackPane map = new StackPane(fallback);
+        map.getStyleClass().addAll("emergency-map-shell", "emergency-map-failure");
+        map.setMinHeight(360);
+        return map;
+    }
+
+    private VBox selectedFacilitySection() {
+        EmergencyServiceDemo facility = selectedEmergencyFacility;
+        if (facility == null) {
+            VBox empty = new VBox(8, emergencySectionTitle("SELECTED FACILITY"), label("Select a nearby service to view facility details.", "emergency-empty-state"));
+            empty.getStyleClass().add("emergency-facility-details");
+            return empty;
+        }
+        HBox heading = new HBox(10, AppUi.symbolIcon(emergencyIcon(facility.category()), "emergency-facility-icon"),
+                new VBox(2, label(facility.name(), "emergency-facility-name"), label(facility.subType(), "emergency-facility-type")),
+                createSpacer(), label(displayEmergencyValue(facility.status()), "emergency-open-status"));
+        HBox details = new HBox(13, label("Distance: " + formatEmergencyDistance(emergencyDistanceMeters(facility)), "emergency-facility-detail"), label("Contact: " + displayEmergencyValue(facility.contact()), "emergency-facility-detail"),
+                label("Sector: " + displayEmergencyValue(facility.sector()), "emergency-facility-detail"));
+        FlowPane facilities = new FlowPane(6, 6);
+        for (String item : facility.facilities()) facilities.getChildren().add(label(item, "emergency-facility-tag"));
+        Button directions = emergencyPlaceholderButton("GET DIRECTIONS", "emergency-secondary-button");
+        directions.setOnAction(event -> {
+            emergencyRouteActive = true;
+            emergencyMapFocusId = facility.id();
+            emergencyFeedback = "Approximate route preview shown for " + facility.name() + ".";
+            refreshEmergencyPage();
+        });
+        Button call = emergencyPlaceholderButton("CALL", "emergency-primary-button");
+        call.setOnAction(event -> showEmergencyFeedback(facility.contact() == null || facility.contact().isBlank() ? "Contact information is not available." : "Emergency Contact: " + facility.contact()));
+        Button detailsButton = emergencyPlaceholderButton(emergencyDetailsExpanded ? "HIDE DETAILS" : "VIEW DETAILS", "emergency-secondary-button");
+        detailsButton.setOnAction(event -> { emergencyDetailsExpanded = !emergencyDetailsExpanded; refreshEmergencyPage(); });
+        HBox actions = new HBox(8, directions, call, detailsButton);
+        VBox panel = new VBox(10, heading, details, facilities, actions);
+        if (emergencyRouteActive) panel.getChildren().add(emergencyRouteSummary(facility));
+        if (emergencyDetailsExpanded) panel.getChildren().add(expandedFacilityDetails(facility));
+        panel.getStyleClass().add("emergency-facility-details");
+        return panel;
+    }
+
+    private Button emergencyPlaceholderButton(String text, String style) {
+        Button button = new Button(text);
+        button.getStyleClass().add(style);
+        return button;
+    }
+
+    private VBox kumbhAlertSection() {
+        if (emergencyAlertsLoading) return alertCard("KUMBH ALERT", "Loading emergency alerts...");
+        if (activeEmergencyAlert == null) return alertCard("KUMBH ALERT", "No active emergency alerts.");
+        Button view = new Button("VIEW ON MAP");
+        view.getStyleClass().add("emergency-alert-action");
+        boolean hasMapLocation = activeEmergencyAlert.hasLocation();
+        view.setDisable(!hasMapLocation);
+        view.setOnAction(event -> {
+            if (!activeEmergencyAlert.hasLocation()) return;
+            EmergencyMapView mapView = emergencyMapView();
+            if (mapView != null) {
+                mapView.focusEmergencyAlert(activeEmergencyAlert);
+                emergencyMapMessage = activeEmergencyAlert.title() + " emergency alert selected.";
+                emergencyFeedback = "Emergency alert location selected on the Nashik map.";
+            }
+            refreshEmergencyPage();
+        });
+        if (!hasMapLocation) view.setText("MAP LOCATION UNAVAILABLE");
+        HBox heading = new HBox(8, label("KUMBH ALERT", "emergency-alert-title"), createSpacer(),
+                label(activeEmergencyAlert.severity().name(), "emergency-alert-title"));
+        heading.setAlignment(Pos.CENTER_LEFT);
+        VBox content = new VBox(3,
+                label(displayEmergencyValue(activeEmergencyAlert.title()), "emergency-alert-text"),
+                label(displayEmergencyValue(activeEmergencyAlert.message()), "emergency-alert-text"));
+        if (!activeEmergencyAlert.locationLabel().isBlank()) {
+            content.getChildren().add(label("Location: " + activeEmergencyAlert.locationLabel(), "emergency-alert-text"));
+        }
+        if (!activeEmergencyAlert.affectedArea().isBlank()) {
+            content.getChildren().add(label("Affected area: " + activeEmergencyAlert.affectedArea(), "emergency-alert-text"));
+        }
+        VBox alert = new VBox(5, heading, content, view);
+        alert.getStyleClass().add("emergency-alert-card");
+        return alert;
+    }
+    private VBox alertCard(String title,String text){ VBox alert=new VBox(5,label(title,"emergency-alert-title"),label(text,"emergency-alert-text")); alert.getStyleClass().add("emergency-alert-card"); return alert; }
+
+    private void selectEmergencyCategory(String category) {
+        applyEmergencyFilter(category);
+    }
+
+    private void selectEmergencyFilter(String filter) {
+        applyEmergencyFilter(filter);
+    }
+
+    /** Shared by sidebar category cards and map chips to keep list and marker state identical. */
+    private void applyEmergencyFilter(String filter) {
+        selectedEmergencyFilter = filter == null ? "All" : filter;
+        selectedEmergencyCategory = selectedEmergencyFilter;
+        emergencyMapMessage = "";
+        // A category change should display the complete result set, not retain a prior row's map focus.
+        emergencyMapFocusId = "";
+        reconcileEmergencySelectionForFilter();
+        refreshEmergencyPage();
+    }
+
+    private void reconcileEmergencySelectionForFilter() {
+        if (selectedEmergencyFacility == null) return;
+
+        EmergencyServiceDemo previous = selectedEmergencyFacility;
+        EmergencyServiceDemo latest = filteredEmergencyServices().stream()
+                .filter(service -> service.id().equals(previous.id()))
+                .findFirst()
+                .orElse(null);
+        if (latest == null) {
+            // The document was deleted, deactivated, or filtered out: never leave a stale
+            // details card or route on the page.
+            selectedEmergencyFacility = null;
+            emergencyDetailsExpanded = false;
+            emergencyMapFocusId = "";
+            clearEmergencyRouteForUnavailableFacility();
+            return;
+        }
+
+        // A reload may contain an Admin edit for the same service id. Keep the selection
+        // attached to that document, not to the old immutable display snapshot.
+        selectedEmergencyFacility = latest;
+        boolean locationChanged = Double.compare(previous.latitude(), latest.latitude()) != 0
+                || Double.compare(previous.longitude(), latest.longitude()) != 0;
+        if (locationChanged) clearEmergencyRouteForUnavailableFacility();
+    }
+
+    private void clearEmergencyRouteForUnavailableFacility() {
+        if (!emergencyRouteActive) return;
+        emergencyRouteActive = false;
+        if (emergencyMapView != null) emergencyMapView.clearRoute();
+    }
+
+    private void selectEmergencyFacility(EmergencyServiceDemo facility) {
+        selectedEmergencyFacility = facility;
+        emergencyDetailsExpanded = false;
+        emergencyMapFocusId = facility.id();
+        emergencyFeedback = "Selected facility: " + facility.name() + " — " + formatEmergencyDistance(emergencyDistanceMeters(facility));
+        refreshEmergencyPage();
+    }
+
+    private void selectNearestMedicalHelp() {
+        selectedEmergencyFacility = emergencyServices.stream()
+                .filter(service -> List.of("Hospital", "Medical Camp", "First Aid", "Ambulance").contains(service.category()))
+                .min(java.util.Comparator.comparingInt(this::emergencyDistanceMeters))
+                .orElse(null);
+        selectedEmergencyFilter = "All";
+        selectedEmergencyCategory = "All";
+        emergencyDetailsExpanded = false;
+        emergencyMapMessage = "";
+        emergencyMapFocusId = selectedEmergencyFacility == null ? "" : selectedEmergencyFacility.id();
+        if (selectedEmergencyFacility != null) {
+            emergencyFeedback = "Nearest medical help: " + selectedEmergencyFacility.name() + " — " + formatEmergencyDistance(emergencyDistanceMeters(selectedEmergencyFacility));
+        }
+        refreshEmergencyPage();
+    }
+
+    private List<EmergencyServiceDemo> filteredEmergencyServices() {
+        return emergencyServices.stream().filter(service -> matchesEmergencyFilter(service, selectedEmergencyFilter)).toList();
+    }
+
+    private boolean matchesEmergencyFilter(EmergencyServiceDemo service, String filter) {
+        return "All".equals(filter) || service.category().equals(filter);
+    }
+
+    private void loadEmergencyServicesAsync() {
+        AppSession.User user = AppSession.currentUser();
+        if (emergencyServicesLoading || user == null || user.idToken() == null || user.idToken().isBlank() || !emergencyFirestore.isEnabled()) return;
+        emergencyServicesLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return emergencyFirestore.loadEmergencyServices(user.idToken()); }
+            catch (Exception exception) {
+                System.err.println("EMERGENCY_SERVICE_READ_DIAGNOSTIC action=LOAD tokenPresent=true sessionRole=" + user.role() + " result=failed error=" + exception.getMessage());
+                return null;
+            }
+        }).thenAccept(records -> Platform.runLater(() -> {
+            emergencyServicesLoading = false;
+            if (records == null) {
+                emergencyServicesError = "permission_or_network";
+                usingEmergencyDevelopmentFallback = true;
+                emergencyServices = EmergencyDevelopmentServices.create().stream()
+                        .map(this::toEmergencyServiceDemo).toList();
+            }
+            else {
+                emergencyServicesError = "";
+                // A successful but empty collection gets a local visual dataset; any real
+                // document immediately replaces it rather than being mixed with it.
+                usingEmergencyDevelopmentFallback = records.isEmpty();
+                emergencyServices = (records.isEmpty() ? EmergencyDevelopmentServices.create() : records).stream()
+                        .filter(EmergencyService::visibleToUsers)
+                        .map(this::toEmergencyServiceDemo)
+                        .toList();
+                reconcileEmergencySelectionForFilter();
+            }
+            reconcileEmergencySelectionForFilter();
+            if (emergencyPageActive) refreshEmergencyPage();
+        }));
+    }
+    private void loadEmergencyAlertsAsync() {
+        AppSession.User user = AppSession.currentUser();
+        if (emergencyAlertsLoading || user == null || !emergencyFirestore.isEnabled()) return;
+        emergencyAlertsLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return emergencyFirestore.loadEmergencyAlerts(user.idToken());
+            } catch (Exception exception) {
+                System.err.println("EMERGENCY_ALERT_READ_DIAGNOSTIC action=LOAD result=failed error=" + exception.getMessage());
+                return null;
+            }
+        }).thenAccept(alerts -> Platform.runLater(() -> {
+            emergencyAlertsLoading = false;
+            if (alerts == null) {
+                emergencyAlertsError = "permission_or_network";
+                usingEmergencyAlertPreview = true;
+                activeEmergencyAlert = emergencyAlertPreview();
+            } else {
+                emergencyAlertsError = "";
+                usingEmergencyAlertPreview = false;
+                activeEmergencyAlert = alerts.stream()
+                        .sorted(java.util.Comparator
+                                .comparingInt((EmergencyAlert alert) -> alertSeverityPriority(alert.severity()))
+                                .reversed()
+                                .thenComparing(EmergencyAlert::createdAt,
+                                        java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+                        .findFirst()
+                        .orElse(null);
+            }
+            if (emergencyPageActive) refreshEmergencyPage();
+        }));
+    }
+
+    private int alertSeverityPriority(EmergencyAlert.Severity severity) {
+        return switch (severity == null ? EmergencyAlert.Severity.INFO : severity) {
+            case CRITICAL -> 3;
+            case HIGH -> 2;
+            case INFO -> 1;
+        };
+    }
+
+    private EmergencyAlert emergencyAlertPreview() {
+        return new EmergencyAlert("local-preview-ramkund-advisory", "Crowd Advisory - Ramkund Area",
+                "Heavy pilgrim movement reported near Ramkund. Use alternate access routes and follow on-ground instructions.",
+                EmergencyAlert.Severity.HIGH, "Ramkund, Nashik", "Ramkund Area", 20.0056, 73.7939, "", "");
+    }
+
+    private EmergencyServiceDemo toEmergencyServiceDemo(EmergencyService service) {
+        String category = switch (service.category()) {
+            case HOSPITAL -> "Hospital"; case MEDICAL_CAMP -> "Medical Camp"; case FIRST_AID -> "First Aid";
+            case AMBULANCE -> "Ambulance"; case POLICE -> "Police"; case FIRE_SAFETY -> "Fire / Safety";
+            case HELP_DESK -> "Emergency Help Desk"; case EMERGENCY_EXIT -> "Exit";
+        };
+        return new EmergencyServiceDemo(service.serviceId(), service.name(), category, service.subType(), 0,
+                EmergencyService.displayStatus(service.operationalStatus()), service.contactNumber(), service.sector(), service.area(),
+                service.facilities(), service.description(), service.latitude(), service.longitude());
+    }
+
+    private String categoryForServiceCard(String category) {
+        return switch (category) {
+            case "camp" -> "Medical Camp";
+            case "aid" -> "First Aid";
+            case "police" -> "Police";
+            case "fire" -> "Fire / Safety";
+            case "desk" -> "Emergency Help Desk";
+            case "exit" -> "Exit";
+            default -> category.substring(0, 1).toUpperCase() + category.substring(1);
+        };
+    }
+
+    private String emergencyIcon(String category) {
+        return switch (category) {
+            case "Hospital" -> "\uE91D";
+            case "Medical Camp" -> "\uE7B8";
+            case "First Aid" -> "\uE95E";
+            case "Ambulance" -> "\uE7F2";
+            case "Police" -> "\uE7FC";
+            case "Fire / Safety" -> "\uE894";
+            case "Emergency Help Desk" -> "\uE897";
+            default -> "\uE7E8";
+        };
+    }
+
+    private String formatEmergencyDistance(int meters) {
+        return meters >= 1000 ? String.format(java.util.Locale.ROOT, "%.1f km", meters / 1000.0) : meters + " m";
+    }
+
+    private int emergencyDistanceMeters(EmergencyServiceDemo service) {
+        double latitudeDelta = Math.toRadians(service.latitude() - EMERGENCY_DEMO_USER_LATITUDE);
+        double longitudeDelta = Math.toRadians(service.longitude() - EMERGENCY_DEMO_USER_LONGITUDE);
+        double originLatitude = Math.toRadians(EMERGENCY_DEMO_USER_LATITUDE);
+        double destinationLatitude = Math.toRadians(service.latitude());
+        double a = Math.sin(latitudeDelta / 2) * Math.sin(latitudeDelta / 2)
+                + Math.cos(originLatitude) * Math.cos(destinationLatitude)
+                * Math.sin(longitudeDelta / 2) * Math.sin(longitudeDelta / 2);
+        return (int) Math.round(6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+    }
+
+    private String displayEmergencyValue(String value) {
+        return value == null || value.isBlank() ? "Not available" : value;
+    }
+
+    private void refreshEmergencyPage() {
+        root.setCenter(scroll(emergencyPage()));
+        if (emergencyMapView != null) {
+            Platform.runLater(emergencyMapView::requestSizeInvalidationAfterLayout);
+        }
+    }
+
+    private void showEmergencyFeedback(String message) {
+        emergencyFeedback = message;
+        refreshEmergencyPage();
+    }
+
+    private EmergencyMapView emergencyMapView() {
+        try {
+            if (emergencyMapView == null) {
+                emergencyMapView = new EmergencyMapView(this::selectEmergencyFacilityById);
+            }
+            return emergencyMapView;
+        } catch (RuntimeException | LinkageError error) {
+            System.err.println("EMERGENCY_MAP_DIAGNOSTIC stage=CONSTRUCT error=" + error);
+            emergencyMapView = null;
+            return null;
+        }
+    }
+
+    private void selectEmergencyFacilityById(String id) {
+        emergencyServices.stream().filter(service -> service.id().equals(id)).findFirst()
+                .ifPresent(this::selectEmergencyFacility);
+    }
+
+    private String emergencyMarkersJson(List<EmergencyServiceDemo> services) {
+        return services.stream().map(service -> "{"
+                + "\"id\":\"" + json(service.id()) + "\","
+                + "\"name\":\"" + json(service.name()) + "\","
+                + "\"category\":\"" + json(service.category()) + "\","
+                + "\"subType\":\"" + json(service.subType()) + "\","
+                + "\"distance\":\"" + json(formatEmergencyDistance(emergencyDistanceMeters(service))) + "\","
+                + "\"status\":\"" + json(service.status()) + "\","
+                + "\"contact\":\"" + json(service.contact()) + "\","
+                + "\"sector\":\"" + json(service.sector()) + "\","
+                + "\"area\":\"" + json(service.area()) + "\","
+                + "\"latitude\":" + service.latitude() + ","
+                + "\"longitude\":" + service.longitude() + "}").collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    private String json(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+    }
+
+    private VBox emergencyFeedbackCard() {
+        VBox feedback = new VBox(3, label("EMERGENCY UPDATE", "emergency-feedback-title"), label(emergencyFeedback, "emergency-feedback-text"));
+        feedback.getStyleClass().add("emergency-feedback-card");
+        return feedback;
+    }
+
+    private VBox sosConfirmationCard() {
+        Button confirm = new Button(emergencySubmissionInProgress ? "SUBMITTING..." : "CONFIRM SOS");
+        confirm.getStyleClass().add("emergency-danger-button");
+        confirm.setDisable(emergencySubmissionInProgress);
+        confirm.setOnAction(event -> submitEmergency(createEmergencyReport(EmergencyReport.Source.SOS,
+                EmergencyReport.EmergencyType.OTHER, "Emergency SOS request", 1, "", EmergencyReport.Priority.CRITICAL), true));
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("emergency-secondary-button");
+        cancel.setDisable(emergencySubmissionInProgress);
+        cancel.setOnAction(event -> { sosConfirmationVisible = false; refreshEmergencyPage(); });
+        VBox card = new VBox(7, label("Send Emergency SOS?", "emergency-confirm-title"),
+                label("This is a real emergency request to Simhastha Emergency Management. The stored location is Demo Nashik Location until GPS is enabled.", "emergency-confirm-text"),
+                new HBox(8, confirm, cancel));
+        card.getStyleClass().add("emergency-confirm-card");
+        return card;
+    }
+
+    private VBox emergencyReportForm() {
+        ComboBox<String> category = new ComboBox<>();
+        category.getItems().addAll("Medical Emergency", "Police / Security", "Fire Emergency", "Crowd / Stampede Risk", "Accident", "Child / Elderly Assistance", "River / Ghat Emergency", "Other");
+        category.setPromptText("Emergency Type *");
+        category.getStyleClass().add("input-combo");
+        TextField description = AppUi.textField("Short Description *");
+        TextField peopleAffected = AppUi.textField("People Affected *");
+        TextField landmark = AppUi.textField("Optional Landmark");
+        Label error = label("", "emergency-validation-error");
+        Label location = label("Location: Demo Nashik Location (GPS integration is not enabled).", "emergency-form-note");
+        Button submit = new Button(emergencySubmissionInProgress ? "SUBMITTING..." : "SUBMIT REPORT");
+        submit.getStyleClass().add("emergency-primary-button");
+        submit.setDisable(emergencySubmissionInProgress);
+        submit.setOnAction(event -> {
+            int people;
+            try { people = Integer.parseInt(peopleAffected.getText().trim()); } catch (Exception ignored) { people = 0; }
+            if (category.getValue() == null || category.getValue().isBlank()) { error.setText("Select an emergency type."); return; }
+            if (description.getText().trim().isBlank()) { error.setText("Enter a short description."); return; }
+            if (people < 1) { error.setText("People affected must be at least 1."); return; }
+            EmergencyReport.EmergencyType type = EmergencyReport.typeForLabel(category.getValue());
+            submitEmergency(createEmergencyReport(EmergencyReport.Source.REPORT, type, description.getText().trim(), people,
+                    landmark.getText().trim(), EmergencyReport.defaultPriority(type)), false);
+        });
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("emergency-secondary-button");
+        cancel.setDisable(emergencySubmissionInProgress);
+        cancel.setOnAction(event -> { emergencyReportFormVisible = false; refreshEmergencyPage(); });
+        VBox form = new VBox(8, emergencySectionTitle("REPORT EMERGENCY"), category, description, peopleAffected, location, landmark, error, new HBox(8, submit, cancel));
+        form.getStyleClass().add("emergency-report-form");
+        return form;
+    }
+
+    private EmergencyReport createEmergencyReport(EmergencyReport.Source source, EmergencyReport.EmergencyType type,
+            String description, int peopleAffected, String landmark, EmergencyReport.Priority priority) {
+        AppSession.User user = AppSession.currentUser();
+        String now = String.valueOf(System.currentTimeMillis());
+        String id = "emg-" + now + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        String tracking = "EMG-" + now.substring(Math.max(0, now.length() - 8));
+        return new EmergencyReport(id, tracking, user == null ? "" : user.uid(), user == null ? "" : user.displayName(),
+                "Not available", type, description, peopleAffected, landmark, EMERGENCY_DEMO_USER_LATITUDE,
+                EMERGENCY_DEMO_USER_LONGITUDE, "Demo Nashik Location", priority, EmergencyReport.Status.REPORTED,
+                "", "", "", "", EmergencyReport.userStatusText(EmergencyReport.Status.REPORTED), now, now, "", "", "", "", source);
+    }
+
+    private void submitEmergency(EmergencyReport report, boolean sos) {
+        if (emergencySubmissionInProgress) return;
+        AppSession.User user = AppSession.currentUser();
+        if (user == null || user.idToken() == null || user.idToken().isBlank() || !emergencyFirestore.isEnabled()) {
+            emergencyFeedback = "Emergency request could not be submitted. Sign in with Firebase and check the connection, then retry.";
+            refreshEmergencyPage();
+            return;
+        }
+        emergencySubmissionInProgress = true;
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                emergencyFirestore.createEmergencyReport(report, user.idToken());
+                Platform.runLater(() -> {
+                    currentEmergency = report;
+                    sosConfirmationVisible = false;
+                    emergencyReportFormVisible = false;
+                    emergencySubmissionInProgress = false;
+                    emergencyFeedback = (sos ? "Emergency SOS submitted successfully. " : "Emergency report submitted successfully. ")
+                            + "Tracking ID: " + report.trackingId() + ". Your emergency request has been submitted to Simhastha Emergency Management.";
+                    if (emergencyPageActive) refreshEmergencyPage();
+                });
+            } catch (Exception exception) {
+                System.err.println("EMERGENCY_CREATE_DIAGNOSTIC action=CREATE emergencyId=" + report.emergencyId() + " result=failed error=" + exception.getMessage());
+                Platform.runLater(() -> {
+                    emergencySubmissionInProgress = false;
+                    emergencyFeedback = "Emergency request could not be submitted. Please use RETRY after checking your connection.";
+                    if (emergencyPageActive) refreshEmergencyPage();
+                });
+            }
+        });
+    }
+
+    private void loadCurrentEmergencyAsync() {
+        AppSession.User user = AppSession.currentUser();
+        if (emergencyStateLoading || user == null || user.idToken() == null || user.idToken().isBlank() || !emergencyFirestore.isEnabled()) return;
+        emergencyStateLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return emergencyFirestore.loadEmergencyReportsForUser(user.uid(), user.idToken()); }
+            catch (Exception exception) {
+                System.err.println("EMERGENCY_READ_DIAGNOSTIC action=USER_LOAD sessionUid=" + user.uid() + " result=failed error=" + exception.getMessage());
+                return null;
+            }
+        }).thenAccept(records -> Platform.runLater(() -> {
+            emergencyStateLoading = false;
+            if (records == null) {
+                emergencyFeedback = "Emergency status cannot be loaded because Firestore access was denied. Please contact the administrator.";
+                stopEmergencyRefresh();
+                if (emergencyPageActive) refreshEmergencyPage();
+                return;
+            }
+            currentEmergency = records.stream().filter(EmergencyReport::unresolved)
+                    .max(java.util.Comparator.comparing(EmergencyReport::createdAt)).orElseGet(() -> records.stream()
+                            .max(java.util.Comparator.comparing(EmergencyReport::createdAt)).orElse(null));
+            if (emergencyPageActive) refreshEmergencyPage();
+        }));
+    }
+
+    private void startEmergencyRefresh() {
+        if (emergencyStatusRefresh == null) {
+            emergencyStatusRefresh = new Timeline(new KeyFrame(Duration.seconds(15), event -> loadCurrentEmergencyAsync()));
+            emergencyStatusRefresh.setCycleCount(Animation.INDEFINITE);
+        }
+        emergencyStatusRefresh.play();
+    }
+
+    private void stopEmergencyRefresh() {
+        if (emergencyStatusRefresh != null) emergencyStatusRefresh.stop();
+    }
+
+    private VBox emergencyStatusSection() {
+        FlowPane steps = new FlowPane(6, 6);
+        for (EmergencyReport.Status status : EmergencyReport.Status.values()) {
+            Label item = label(status.name().replace('_', ' '), "emergency-status-step");
+            item.getStyleClass().add(status.ordinal() <= currentEmergency.status().ordinal()
+                    ? "emergency-status-step-active" : "emergency-status-step-inactive");
+            steps.getChildren().add(item);
+        }
+        VBox section = new VBox(8, emergencySectionTitle("YOUR EMERGENCY STATUS"),
+                label("Tracking ID: " + currentEmergency.trackingId() + " | " + currentEmergency.emergencyType().name().replace('_', ' '), "emergency-status-request"),
+                label("Priority: " + currentEmergency.priority() + " | Status: " + currentEmergency.status().name().replace('_', ' '), "emergency-status-request"),
+                label(currentEmergency.userStatusMessage().isBlank() ? EmergencyReport.userStatusText(currentEmergency.status()) : currentEmergency.userStatusMessage(), "emergency-form-note"),
+                currentEmergency.assignedTeamName().isBlank() ? new Label() : label("Assigned team: " + currentEmergency.assignedTeamName(), "emergency-form-note"), steps);
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private VBox demoSosConfirmationCard() {
+        Button confirm = new Button("CONFIRM SOS");
+        confirm.getStyleClass().add("emergency-danger-button");
+        confirm.setOnAction(event -> {
+            currentDemoEmergency = new EmergencyDemoRequest("DEMO-EMG-" + System.currentTimeMillis(), "SOS Emergency", "Emergency SOS created locally", 0, "", "CRITICAL", "REPORTED", java.time.LocalDateTime.now());
+            sosConfirmationVisible = false;
+            emergencyFeedback = "SOS REQUEST CREATED — DEMO MODE. Not sent to emergency services.";
+            refreshEmergencyPage();
+        });
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("emergency-secondary-button");
+        cancel.setOnAction(event -> { sosConfirmationVisible = false; refreshEmergencyPage(); });
+        VBox card = new VBox(7, label("Send Emergency SOS?", "emergency-confirm-title"),
+                label("This will send your current location and emergency request when backend integration is enabled.", "emergency-confirm-text"),
+                new HBox(8, confirm, cancel));
+        card.getStyleClass().add("emergency-confirm-card");
+        return card;
+    }
+
+    private VBox demoEmergencyReportForm() {
+        ComboBox<String> category = new ComboBox<>();
+        category.getItems().addAll("Medical Emergency", "Police / Security", "Fire Emergency", "Crowd / Stampede Risk", "Accident", "Child / Elderly Assistance", "River / Ghat Emergency", "Other");
+        category.setPromptText("Emergency Type *");
+        category.getStyleClass().add("input-combo");
+        TextField description = AppUi.textField("Short Description *");
+        TextField peopleAffected = AppUi.textField("People Affected *");
+        TextField landmark = AppUi.textField("Optional Landmark");
+        Label error = label("", "emergency-validation-error");
+        Label location = label("Location: Demo Nashik Location (GPS integration is not enabled).", "emergency-form-note");
+        Button submit = new Button("SUBMIT REPORT");
+        submit.getStyleClass().add("emergency-primary-button");
+        submit.setOnAction(event -> {
+            int people;
+            try { people = Integer.parseInt(peopleAffected.getText().trim()); } catch (Exception exception) { people = 0; }
+            if (category.getValue() == null || category.getValue().isBlank()) { error.setText("Select an emergency type."); return; }
+            if (description.getText().trim().isBlank()) { error.setText("Enter a short description."); return; }
+            if (people < 1) { error.setText("People affected must be at least 1."); return; }
+            String priority = (category.getValue().contains("Fire") || category.getValue().contains("Crowd")) ? "CRITICAL" : "HIGH";
+            currentDemoEmergency = new EmergencyDemoRequest("DEMO-RPT-" + System.currentTimeMillis(), category.getValue(), description.getText().trim(), people, landmark.getText().trim(), priority, "REPORTED", java.time.LocalDateTime.now());
+            emergencyReportFormVisible = false;
+            emergencyFeedback = "Emergency report created in demo mode. Not sent to emergency services.";
+            refreshEmergencyPage();
+        });
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("emergency-secondary-button");
+        cancel.setOnAction(event -> { emergencyReportFormVisible = false; refreshEmergencyPage(); });
+        VBox form = new VBox(8, emergencySectionTitle("REPORT EMERGENCY — DEMO MODE"), category, description, peopleAffected, location, landmark, error, new HBox(8, submit, cancel));
+        form.getStyleClass().add("emergency-report-form");
+        return form;
+    }
+
+    private VBox demoEmergencyStatusSection() {
+        FlowPane steps = new FlowPane(6, 6);
+        for (String step : new String[] { "Reported", "Acknowledged", "Team Dispatched", "Help Arriving", "Resolved" }) {
+            Label item = label(step, "emergency-status-step");
+            if ("Reported".equals(step)) item.getStyleClass().add("emergency-status-step-active");
+            else item.getStyleClass().add("emergency-status-step-inactive");
+            steps.getChildren().add(item);
+        }
+        VBox section = new VBox(8, emergencySectionTitle("YOUR EMERGENCY STATUS"),
+                label("Demo mode — not sent to emergency services.", "emergency-form-note"),
+                label("Request ID: " + currentDemoEmergency.requestId() + "  •  Priority: " + currentDemoEmergency.priority(), "emergency-status-request"), steps);
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private VBox expandedFacilityDetails(EmergencyServiceDemo facility) {
+        VBox details = new VBox(4,
+                label("Facility: " + facility.name(), "emergency-expanded-detail"),
+                label("Category: " + facility.category(), "emergency-expanded-detail"),
+                label("Description: " + displayEmergencyValue(facility.description()), "emergency-expanded-detail"),
+                label("Sector: " + displayEmergencyValue(facility.sector()), "emergency-expanded-detail"),
+                label("Location: " + displayEmergencyValue(facility.area()), "emergency-expanded-detail"),
+                label("Contact: " + displayEmergencyValue(facility.contact()), "emergency-expanded-detail"),
+                label("Distance: " + formatEmergencyDistance(emergencyDistanceMeters(facility)), "emergency-expanded-detail"),
+                label("Status: " + displayEmergencyValue(facility.status()), "emergency-expanded-detail"));
+        details.getStyleClass().add("emergency-expanded-details");
+        return details;
+    }
+
+    private VBox emergencyRouteSummary(EmergencyServiceDemo facility) {
+        Button clear = new Button("CLEAR ROUTE");
+        clear.getStyleClass().add("emergency-secondary-button");
+        clear.setOnAction(event -> {
+            emergencyRouteActive = false;
+            if (emergencyMapView != null) emergencyMapView.clearRoute();
+            emergencyFeedback = "Route preview cleared.";
+            refreshEmergencyPage();
+        });
+        VBox summary = new VBox(4, label("APPROXIMATE ROUTE PREVIEW", "emergency-route-title"),
+                label("To: " + facility.name(), "emergency-expanded-detail"),
+                label("Distance: " + formatEmergencyDistance(emergencyDistanceMeters(facility)), "emergency-expanded-detail"),
+                label("Route: Straight-line map route (not road navigation)", "emergency-expanded-detail"), clear);
+        summary.getStyleClass().add("emergency-route-summary");
+        return summary;
+    }
+
+    private record EmergencyServiceDemo(String id, String name, String category, String subType, int distanceMeters,
+            String status, String contact, String sector, String area, List<String> facilities, String description,
+            double latitude, double longitude) { }
+
+    private record EmergencyDemoRequest(String requestId, String category, String description, int peopleAffected,
+            String landmark, String priority, String status, java.time.LocalDateTime createdAt) { }
+
+    private Label emergencySectionTitle(String text) {
+        return label(text, "emergency-section-title");
     }
 
     private VBox stayPage() {
@@ -4826,68 +6856,592 @@ public class DashboardPage {
     }
 
     private VBox businessPage() {
-        HBox categories = new HBox(8,
-                badge("Food & Prasadam"), badge("Accommodation"), badge("Puja Items"), badge("Medical Stores"),
-                badge("Local Guides"), badge("Lockers"), badge("Charging Points"));
-        if (!AppDataStore.items("business").isEmpty()) {
-            return pageShell("Approved Businesses & Local Services", "Verified local services for pilgrims.",
-                    categories, adminControlledGrid("business", "View Details"));
+        selectedMarketplaceCategory = "All";
+        marketplaceBusinesses = List.of();
+
+        marketplaceSearch = AppUi.textField("Search hotels, tents, parking, food, puja services...");
+        marketplaceSearch.getStyleClass().add("marketplace-search-field");
+        marketplaceSearch.textProperty().addListener((observable, oldValue, newValue) -> renderMarketplaceResults());
+        marketplaceSearch.setOnAction(event -> renderMarketplaceResults());
+
+        Label searchIcon = AppUi.symbolIcon("\uE721", "marketplace-hero-search-icon");
+        HBox searchBox = new HBox(10, marketplaceSearch, searchIcon);
+        searchBox.getStyleClass().add("marketplace-hero-search-box");
+        searchBox.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(marketplaceSearch, Priority.ALWAYS);
+
+        Button nearMe = new Button("Near Me", AppUi.symbolIcon("\uE707", "marketplace-button-icon"));
+        nearMe.getStyleClass().add("marketplace-secondary-button");
+        nearMe.setOnAction(event -> openNearbyBusinessMap());
+
+        Button searchButton = new Button("Search");
+        searchButton.getStyleClass().add("marketplace-search-button");
+        searchButton.setOnAction(event -> renderMarketplaceResults());
+
+        HBox search = new HBox(14, searchBox, nearMe, searchButton);
+        search.getStyleClass().add("marketplace-search-row");
+        search.setAlignment(Pos.CENTER_LEFT);
+        search.setMaxWidth(960);
+        HBox.setHgrow(searchBox, Priority.ALWAYS);
+
+        FlowPane categories = marketplaceCategories();
+        marketplaceStatus = label("Loading approved businesses...", "marketplace-state-title");
+        marketplaceGrid = new FlowPane(16, 14);
+        marketplaceGrid.getStyleClass().add("marketplace-grid");
+        marketplaceStatsStrip = marketplaceStatsStrip();
+
+        HBox sectionHeader = new HBox(18, sectionTitle("Popular & Nearby Businesses"), createSpacer(),
+                marketplaceTabs(), marketplaceArrows());
+        sectionHeader.setAlignment(Pos.CENTER_LEFT);
+        sectionHeader.getStyleClass().add("marketplace-section-header");
+
+        VBox body = new VBox(14, marketplaceTopBar(), marketplaceHero(search), trustStrip(), categories,
+                sectionHeader, marketplaceStatus, marketplaceGrid, marketplaceStatsStrip);
+        body.getStyleClass().addAll("pilgrim-dashboard-main", "marketplace-page");
+        body.setPadding(new Insets(0, 20, 24, 20));
+        loadMarketplaceBusinesses();
+        return body;
+    }
+
+    private HBox marketplaceTopBar() {
+        Button location = new Button("Nashik", AppUi.symbolIcon("\uE707", "marketplace-button-icon"));
+        location.getStyleClass().add("marketplace-location-chip");
+        location.setOnAction(event -> showInfo("Location", "Nashik is selected for marketplace browsing."));
+
+        Button notifications = marketplaceIconButton("\uE7F4", "Notifications", this::showUserNotificationsPage);
+        Button profile = marketplaceIconButton("\uE77B", "Profile", this::showUserProfilePage);
+
+        HBox row = new HBox(14, location, createSpacer(), AppUi.createThemeToggle(), notifications, profile);
+        row.getStyleClass().add("marketplace-top-bar");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private Button marketplaceIconButton(String icon, String tooltip, Runnable action) {
+        Button button = new Button();
+        button.setGraphic(AppUi.symbolIcon(icon, "marketplace-top-icon"));
+        button.getStyleClass().add("marketplace-top-icon-button");
+        button.setTooltip(new Tooltip(tooltip));
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private void showUserNotificationsPage() {
+        VBox notices = new VBox(10,
+                dataRow("announcement", "Business marketplace", "Approved business updates and booking alerts will appear here."),
+                dataRow("announcement", "Saved searches", "Search and service alerts are ready for your pilgrim account."));
+        root.setCenter(scroll(pageShell("Notifications", "Your Simhastha Connect alerts.", notices)));
+    }
+
+    private void openNearbyBusinessMap() {
+        SimhasthaMapPage mapPage = new SimhasthaMapPage("", false,
+                () -> showModulePage("business"), this::openBusinessFromMap);
+        root.setCenter(scroll(mapPage.createContent()));
+    }
+
+    private void showUserProfilePage() {
+        AppSession.User user = AppSession.currentUser();
+        String name = user == null ? "Simhastha Pilgrim" : displayName(user);
+        String email = user == null ? "Not signed in" : valueOr("Not available", user.email());
+        String status = user == null ? "Guest" : valueOr("active", user.status());
+        VBox card = new VBox(14,
+                new HBox(14, AppUi.symbolIcon("\uE77B", "profile-avatar-icon"),
+                        new VBox(4, label(name, "business-detail-title"),
+                                label("Pilgrim Account", "business-detail-category"))),
+                new ImagePickerPane("Profile Photo (optional)", 1, null),
+                profileRow("Email", email),
+                profileRow("Role", "User"),
+                profileRow("Account Status", status),
+                profileRow("Selected City", "Nashik"));
+        card.getStyleClass().addAll("pilgrim-panel", "user-profile-card");
+
+        VBox quick = new VBox(10,
+                sectionTitle("Quick Access"),
+                dataRow("business", "Business Marketplace", "Browse approved local services."),
+                dataRow("bookings", "My Bookings", "Paid bookings and tickets stay linked to this account."),
+                dataRow("announcement", "Notifications", "Important updates appear from official modules."));
+        quick.getStyleClass().add("pilgrim-panel");
+
+        root.setCenter(scroll(pageShell("Profile", "Your pilgrim account overview.", card, quick)));
+    }
+
+    private HBox profileRow(String key, String value) {
+        HBox row = new HBox(12, label(key, "business-overview-key"), createSpacer(),
+                label(value, "business-overview-value"));
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private StackPane marketplaceHero(HBox search) {
+        ImageView image = createImage(ThemeManager.isDark() ? "/images/welcome-dark.png" : "/images/welcome-light.png",
+                1080, 300, 0.64, 0.50);
+        image.getStyleClass().add("marketplace-hero-image");
+
+        VBox copy = new VBox(8,
+                label("Trusted Services for\nYour Simhastha Journey", "marketplace-hero-title"),
+                label("Discover approved stays, food, puja services, parking,\nessentials and more - all in one place.",
+                        "marketplace-hero-subtitle"));
+        copy.setPrefWidth(760);
+        copy.setMaxWidth(760);
+        copy.setPadding(new Insets(18, 34, 0, 34));
+
+        VBox overlay = new VBox(22, copy, createSpacer(), search);
+        overlay.setPadding(new Insets(0, 34, 26, 34));
+        overlay.setAlignment(Pos.TOP_LEFT);
+
+        StackPane hero = new StackPane(image, overlay);
+        hero.getStyleClass().add("marketplace-hero");
+        hero.setMinHeight(300);
+        hero.setPrefHeight(300);
+        hero.setMaxWidth(Double.MAX_VALUE);
+        return hero;
+    }
+
+    private HBox trustStrip() {
+        HBox row = new HBox(0,
+                trustBadge("Administration Approved", "\uE73E"),
+                trustBadge("Secure Payments", "\uE72E"),
+                trustBadge("Verified Businesses", "\uE8FB"),
+                trustBadge("24/7 Support", "\uE95E"));
+        row.getStyleClass().add("marketplace-trust-strip");
+        row.setMaxWidth(960);
+        return row;
+    }
+
+    private HBox trustBadge(String text, String icon) {
+        HBox badge = new HBox(8, AppUi.symbolIcon(icon, "marketplace-trust-icon"), label(text, "marketplace-trust-text"));
+        badge.setAlignment(Pos.CENTER);
+        HBox.setHgrow(badge, Priority.ALWAYS);
+        return badge;
+    }
+
+    private FlowPane marketplaceCategories() {
+        FlowPane pane = new FlowPane(10, 10);
+        pane.getStyleClass().add("marketplace-category-row");
+        for (String category : List.of("All", "Stay", "Tents", "Hotels", "Parking", "Food & Prasadam",
+                "Restaurants", "Puja Services", "Puja Items", "Clothes", "Medical Stores", "Toilets",
+                "Lockers", "Charging Points", "Local Guides", "Shops", "Essentials", "More")) {
+            Button chip = new Button(category, AppUi.symbolIcon(categoryGlyph(category), "marketplace-chip-icon"));
+            chip.getStyleClass().add(category.equals(selectedMarketplaceCategory)
+                    ? "marketplace-chip-active"
+                    : "marketplace-chip");
+            chip.setOnAction(event -> {
+                selectedMarketplaceCategory = category;
+                pane.getChildren().forEach(node -> node.getStyleClass().setAll("marketplace-chip"));
+                chip.getStyleClass().setAll("marketplace-chip-active");
+                renderMarketplaceResults();
+            });
+            pane.getChildren().add(chip);
         }
-        return pageShell("Approved Businesses & Local Services", "Verified local services for pilgrims.",
-                categories,
-                twoColumnGrid(
-                        richCard("business", "Verified Food & Prasadam Zone", "Food & Prasadam\nInformation-only listing\nNo forced online payment", "Contact"),
-                        paidCard("business", "Paid Parking Reservation", "Approved private parking near Ramkund approach road", "Pay Securely", "business-paid-parking", 1, 1),
-                        paidCard("business", "Tent Booking Advance", "Approved paid tent booking advance for festival camp stay", "Pay Advance", "business-tent-advance", 1, 1),
-                        paidCard("business", "Local Guide Inquiry", "Pay at location after service confirmation", "Request", "business-guide-pay-location", 1, 1),
-                        businessCard("Medical Store Cluster", "Medical Stores", "CBS and Ramkund route"),
-                        businessCard("Puja Items Market", "Puja Items", "Temple approach zone")));
+        return pane;
+    }
+
+    private void loadMarketplaceBusinesses() {
+        if (marketplaceStatus != null) {
+            marketplaceStatus.setText("Loading approved businesses...");
+        }
+        if (marketplaceGrid != null) {
+            marketplaceGrid.getChildren().clear();
+        }
+        AppSession.User user = AppSession.currentUser();
+        String token = user == null ? "" : user.idToken();
+        businessMarketplaceController.loadApprovedBusinesses(token).whenComplete((businesses, throwable) ->
+                Platform.runLater(() -> {
+                    if (throwable != null) {
+                        marketplaceBusinesses = List.of();
+                        updateMarketplaceStats();
+                        marketplaceStatus.setText("Businesses could not be loaded. Please try again.");
+                        Button retry = new Button("Retry");
+                        retry.getStyleClass().add("marketplace-secondary-button");
+                        retry.setOnAction(event -> loadMarketplaceBusinesses());
+                        marketplaceGrid.getChildren().setAll(retry);
+                        return;
+                    }
+                    marketplaceBusinesses = businesses == null ? List.of() : businesses;
+                    marketplaceBusinesses.forEach(AppDataStore::rememberPublicBusiness);
+                    updateMarketplaceStats();
+                    renderMarketplaceResults();
+                }));
+    }
+
+    private void renderMarketplaceResults() {
+        if (marketplaceGrid == null || marketplaceStatus == null || marketplaceSearch == null) {
+            return;
+        }
+        String query = marketplaceSearch.getText();
+        List<PublicBusinessListing> filtered = businessMarketplaceController.filter(
+                marketplaceBusinesses, query, selectedMarketplaceCategory);
+        marketplaceGrid.getChildren().clear();
+        if (filtered.isEmpty()) {
+            String activeQuery = query == null ? "" : query.trim();
+            String message = marketplaceBusinesses.isEmpty()
+                    ? "No verified businesses available yet."
+                    : !activeQuery.isBlank()
+                            ? "No businesses match your search."
+                            : "No verified businesses found in this category.";
+            marketplaceStatus.setText(message);
+            Button clear = new Button("Clear Filters");
+            clear.getStyleClass().add("marketplace-secondary-button");
+            clear.setOnAction(event -> {
+                marketplaceSearch.clear();
+                selectedMarketplaceCategory = "All";
+                showModulePage("business");
+            });
+            marketplaceGrid.getChildren().add(clear);
+            return;
+        }
+        marketplaceStatus.setText(filtered.size() + " approved business" + (filtered.size() == 1 ? "" : "es") + " found.");
+        filtered.forEach(business -> marketplaceGrid.getChildren().add(marketplaceCard(business)));
+    }
+
+    private VBox marketplaceCard(PublicBusinessListing business) {
+        StackPane image = remoteBusinessImage(business);
+        Label verified = label("Verified", "marketplace-verified-badge");
+        StackPane.setAlignment(verified, Pos.BOTTOM_LEFT);
+        StackPane.setMargin(verified, new Insets(0, 0, 12, 12));
+        image.getChildren().add(verified);
+
+        VBox text = new VBox(7, label(business.name(), "marketplace-card-title"));
+        addIfPresent(text, business.displayCategory(), "marketplace-card-detail", "");
+        addIfPresent(text, business.displayLocation(), "marketplace-card-detail", "\uE707 ");
+        addIfPresent(text, availabilityText(business), "marketplace-card-detail", "");
+        addIfPresent(text, priceText(business), "marketplace-price", "");
+
+        Button details = new Button("View Details");
+        details.getStyleClass().add("marketplace-primary-action");
+        details.setOnAction(event -> openBusinessDetails(business));
+
+        Button directions = new Button("Directions", AppUi.symbolIcon("\uE707", "marketplace-action-icon"));
+        directions.getStyleClass().add("marketplace-secondary-action");
+        directions.setDisable(!business.hasCoordinates());
+        directions.setTooltip(new Tooltip(business.hasCoordinates()
+                ? "Open exact business location"
+                : "Location not available yet"));
+        directions.setOnAction(event -> openBusinessLocate(business, true));
+
+        HBox actions = new HBox(12, details, directions);
+        actions.setAlignment(Pos.CENTER_LEFT);
+        VBox card = new VBox(10, image, text, createSpacer(), actions);
+        card.getStyleClass().add("marketplace-card");
+        card.setPrefWidth(232);
+        card.setMinHeight(300);
+        return card;
+    }
+
+    private StackPane remoteBusinessImage(PublicBusinessListing business) {
+        String cover = business.coverPhotoUrl();
+        if (cover != null && !cover.isBlank()) {
+            ImageView image = new ImageView(new Image(cover, true));
+            image.setFitWidth(232);
+            image.setFitHeight(122);
+            image.setPreserveRatio(false);
+            StackPane pane = new StackPane(image);
+            pane.getStyleClass().add("marketplace-card-photo");
+            return pane;
+        }
+        StackPane placeholder = new StackPane(AppUi.symbolIcon(categoryGlyph(business.displayCategory()), "marketplace-image-icon"));
+        placeholder.getStyleClass().addAll("marketplace-image-placeholder", "marketplace-card-photo");
+        return placeholder;
+    }
+
+    private void addIfPresent(VBox box, String value, String styleClass, String prefix) {
+        if (value != null && !value.isBlank()) {
+            box.getChildren().add(label(prefix + value, styleClass));
+        }
+    }
+
+    private String priceText(PublicBusinessListing business) {
+        if (business.priceRange() != null && !business.priceRange().isBlank()) {
+            return business.priceRange();
+        }
+        return business.items().stream()
+                .map(PublicBusinessItem::price)
+                .filter(price -> price != null && !price.isBlank() && !"0".equals(price.trim()))
+                .findFirst()
+                .map(price -> "Starts at \u20B9" + price.trim())
+                .orElse("");
+    }
+
+    private String availabilityText(PublicBusinessListing business) {
+        return business.items().stream()
+                .filter(item -> item.availability() != null && !item.availability().isBlank())
+                .findFirst()
+                .map(item -> {
+                    String units = availabilityUnits(item);
+                    return units.isBlank() ? item.availability() : units + " available";
+                })
+                .orElse("");
+    }
+
+    private String availabilityUnits(PublicBusinessItem item) {
+        if (item.availableUnits() != null && !item.availableUnits().isBlank()
+                && item.totalUnits() != null && !item.totalUnits().isBlank()
+                && !"0".equals(item.totalUnits().trim())) {
+            return item.availableUnits().trim() + " of " + item.totalUnits().trim();
+        }
+        if (item.stock() != null && !item.stock().isBlank() && !"0".equals(item.stock().trim())) {
+            return item.stock().trim();
+        }
+        return "";
+    }
+
+    private void openBusinessDetails(PublicBusinessListing business) {
+        PublicBusinessListing selected = latestBusiness(business);
+        BusinessDetailsPage detailsPage = new BusinessDetailsPage(selected.businessId(), selected,
+                () -> showModulePage("business"),
+                () -> openBusinessLocate(selected, false),
+                () -> openBusinessLocate(selected, true),
+                item -> openBusinessBooking(selected, item));
+        root.setCenter(scroll(detailsPage.createContent()));
+    }
+
+    private void openBusinessBooking(PublicBusinessListing business, PublicBusinessItem item) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            showInfo("Login required", "Please login before creating a booking.");
+            return;
+        }
+        BusinessBookingFlowPage flow = new BusinessBookingFlowPage(business, item,
+                () -> openBusinessDetails(business), selection -> paymentCoordinator.startPaidBooking(
+                        root.getScene() == null ? null : root.getScene().getWindow(), item.itemId(),
+                        selection.quantity(), selection.nights()));
+        root.setCenter(scroll(flow.createContent()));
+    }
+
+    private void saveBusinessBooking(PublicBusinessListing business, PublicBusinessItem item, AppSession.User user,
+            String quantityText, LocalDate date) {
+        int quantity;
+        try {
+            quantity = Integer.parseInt(quantityText == null ? "" : quantityText.trim());
+        } catch (NumberFormatException exception) {
+            showInfo("Invalid quantity", "Enter a valid booking quantity.");
+            return;
+        }
+        if (quantity <= 0 || date == null || date.isBefore(LocalDate.now())) {
+            showInfo("Invalid booking", "Choose a valid quantity and booking date.");
+            return;
+        }
+        int available = positiveInt(item.availableUnits());
+        if (available > 0 && quantity > available) {
+            showInfo("Not available", "Only " + available + " unit(s) are currently available.");
+            return;
+        }
+        long amountPaise = pricePaise(item.price()) * quantity;
+        String bookingId = "BKG-BUSINESS-" + UUID.randomUUID().toString().substring(0, 8);
+        AppDataStore.addBooking(new AppDataStore.BookingRecord(bookingId, user.uid(), "BUSINESS", item.itemId(),
+                business.businessId(), item.name(), displayName(user), date.toString(), business.displayLocation(),
+                quantity, 1, amountPaise, "INR", "PENDING", "NOT_REQUIRED", "", ""));
+        showInfo("Booking request saved", "Your request was sent to the business owner. Payment is at location.");
+    }
+
+    private int positiveInt(String value) {
+        try { return value == null ? 0 : Math.max(0, Integer.parseInt(value.trim())); }
+        catch (NumberFormatException exception) { return 0; }
+    }
+
+    private long pricePaise(String value) {
+        try { return value == null || value.isBlank() ? 0 : valueAsPaise(new BigDecimal(value.trim())); }
+        catch (NumberFormatException exception) { return 0; }
+    }
+
+    private long valueAsPaise(BigDecimal amount) { return amount.max(BigDecimal.ZERO).movePointRight(2).longValue(); }
+
+    private String amountText(PublicBusinessItem item, String quantity) {
+        long total = pricePaise(item.price()) * Math.max(1, positiveInt(quantity));
+        return "₹" + (total / 100);
+    }
+
+    private PublicBusinessListing latestBusiness(PublicBusinessListing business) {
+        AppSession.User user = AppSession.currentUser();
+        String token = user == null ? "" : user.idToken();
+        try {
+            return businessMarketplaceController.loadApprovedBusiness(business.businessId(), token)
+                    .join()
+                    .orElse(business);
+        } catch (RuntimeException exception) {
+            return business;
+        }
+    }
+
+    private void openBusinessLocate(PublicBusinessListing business, boolean routeMode) {
+        PublicBusinessListing selected = latestBusiness(business);
+        if (!selected.hasCoordinates()) {
+            showInfo("Directions", "Location details are not available for this business yet.");
+            return;
+        }
+        SimhasthaMapPage mapPage = new SimhasthaMapPage(selected.businessId(), routeMode,
+                () -> showModulePage("business"), this::openBusinessFromMap);
+        root.setCenter(scroll(mapPage.createContent()));
+    }
+
+    private void openBusinessFromMap(String businessId) {
+        marketplaceBusinesses.stream()
+                .filter(business -> business.businessId().equals(businessId))
+                .findFirst()
+                .ifPresentOrElse(this::openBusinessDetails,
+                        () -> {
+                            AppSession.User user = AppSession.currentUser();
+                            String token = user == null ? "" : user.idToken();
+                            businessMarketplaceController.loadApprovedBusiness(businessId, token)
+                                    .thenAccept(result -> Platform.runLater(() ->
+                                            result.ifPresent(this::openBusinessDetails)));
+                        });
+    }
+
+    private String categoryGlyph(String category) {
+        String value = category == null ? "" : category.toLowerCase(Locale.ROOT);
+        if (value.contains("hotel") || value.contains("stay")) return "\uE809";
+        if (value.contains("tent")) return "\uEA41";
+        if (value.contains("food") || value.contains("restaurant") || value.contains("prasadam")) return "\uEC27";
+        if (value.contains("parking")) return "\uE804";
+        if (value.contains("puja")) return "\uEC29";
+        if (value.contains("cloth")) return "\uE8BB";
+        if (value.contains("toilet")) return "\uE80F";
+        if (value.contains("shop") || value.contains("essential")) return "\uE719";
+        return "\uE8A9";
+    }
+
+    private HBox marketplaceTabs() {
+        HBox tabs = new HBox(20);
+        tabs.getStyleClass().add("marketplace-tabs");
+        for (String tab : List.of("Near You", "Popular", "Available Now", "Top Rated")) {
+            tabs.getChildren().add(label(tab, tab.equals("Near You") ? "marketplace-tab-active" : "marketplace-tab"));
+        }
+        return tabs;
+    }
+
+    private HBox marketplaceArrows() {
+        Button previous = new Button("\uE76B");
+        Button next = new Button("\uE76C");
+        previous.getStyleClass().add("marketplace-arrow-button");
+        next.getStyleClass().add("marketplace-arrow-button");
+        previous.setOnAction(event -> showInfo("Businesses", "Scroll the business list to view more."));
+        next.setOnAction(event -> showInfo("Businesses", "Scroll the business list to view more."));
+        HBox arrows = new HBox(8, previous, next);
+        arrows.setAlignment(Pos.CENTER);
+        return arrows;
+    }
+
+    private HBox marketplaceStatsStrip() {
+        HBox stats = new HBox(0,
+                marketplaceStat("0", "Verified Businesses", "\uE8FB"),
+                marketplaceStat("0", "Happy Pilgrims", "\uE716"),
+                marketplaceStat("0", "Service Categories", "\uE8A9"),
+                marketplaceStat("24/7", "Support Available", "\uE95E"),
+                marketplaceStat("100%", "Secure Booking", "\uE72E"));
+        stats.getStyleClass().add("marketplace-stats-strip");
+        return stats;
+    }
+
+    private VBox marketplaceStat(String value, String label, String icon) {
+        VBox text = new VBox(2, label(value, "marketplace-stat-value"), label(label, "marketplace-stat-label"));
+        HBox row = new HBox(10, AppUi.symbolIcon(icon, "marketplace-stat-icon"), text);
+        row.setAlignment(Pos.CENTER);
+        VBox wrapper = new VBox(row);
+        wrapper.getStyleClass().add("marketplace-stat");
+        HBox.setHgrow(wrapper, Priority.ALWAYS);
+        return wrapper;
+    }
+
+    private void updateMarketplaceStats() {
+        if (marketplaceStatsStrip == null) return;
+        int verified = marketplaceBusinesses == null ? 0 : marketplaceBusinesses.size();
+        int categories = marketplaceBusinesses == null ? 0 : (int) marketplaceBusinesses.stream()
+                .map(PublicBusinessListing::displayCategory)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .count();
+        marketplaceStatsStrip.getChildren().setAll(
+                marketplaceStat(verified + "+", "Verified Businesses", "\uE8FB"),
+                marketplaceStat("15,000+", "Happy Pilgrims", "\uE716"),
+                marketplaceStat(Math.max(categories, 1) + "+", "Service Categories", "\uE8A9"),
+                marketplaceStat("24/7", "Support Available", "\uE95E"),
+                marketplaceStat("100%", "Secure Booking", "\uE72E"));
     }
 
     private VBox myBookingsPage() {
         AppSession.User user = AppSession.currentUser();
-        java.util.List<AppDataStore.BookingRecord> bookings = user == null ? java.util.List.of()
-                : AppDataStore.bookingsForUser(user.uid()).stream()
-                        .sorted(java.util.Comparator.comparing((AppDataStore.BookingRecord booking) -> booking.createdAt).reversed())
-                        .toList();
-        long upcoming = bookings.stream().filter(booking -> bookingBucket(booking).equals("Upcoming")).count();
-        long completed = bookings.stream().filter(booking -> bookingBucket(booking).equals("Completed")).count();
-        long cancelled = bookings.stream().filter(booking -> bookingBucket(booking).equals("Cancelled")).count();
-
-        HBox summary = new HBox(12,
-                bookingMetric("All Bookings", bookings.size(), "All recorded services"),
-                bookingMetric("Upcoming", upcoming, "Confirmed or in progress"),
-                bookingMetric("Completed", completed, "Completed services"),
-                bookingMetric("Cancelled", cancelled, "Cancelled bookings"));
-        summary.getStyleClass().add("booking-summary-grid");
-        summary.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
-
-        TextField search = AppUi.textField("Search booking ID or service");
-        String[] categories = {"All", "Kumbh Packages", "Stay", "Puja Services", "Business Services"};
-        VBox results = new VBox(10);
-        java.util.Map<String, Button> filters = new java.util.LinkedHashMap<>();
-        final String[] selectedCategory = {"All"};
-        Runnable refresh = () -> renderBookingResults(results, bookings, selectedCategory[0], search.getText());
-        HBox filterBar = new HBox(8);
-        for (String category : categories) {
-            Button filter = new Button(category);
-            filter.getStyleClass().add("booking-filter-button");
-            filter.setOnAction(event -> {
-                selectedCategory[0] = category;
-                filters.values().forEach(button -> button.getStyleClass().remove("booking-filter-active"));
-                filter.getStyleClass().add("booking-filter-active");
-                refresh.run();
-            });
-            filters.put(category, filter);
-            filterBar.getChildren().add(filter);
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("puja"));
+        VBox rows = new VBox(12);
+        if (user == null) {
+            rows.getChildren().add(pujaBookingsEmptyState("Login Required",
+                    "Login to view your Puja bookings and QR tickets."));
+        } else {
+            java.util.List<AppDataStore.PujaBookingRecord> pujaBookings = AppDataStore.pujaBookingsForUser(user.uid());
+            if (pujaBookings.isEmpty()) {
+                rows.getChildren().add(pujaBookingsEmptyState("No Puja Bookings Yet",
+                        "Browse Puja Services and book a verified spiritual service."));
+            } else {
+                rows.getChildren().add(pujaBookingSummaryCards(pujaBookings));
+                pujaBookings.forEach(booking -> rows.getChildren().add(pujaBookingRow(booking)));
+            }
+            java.util.List<AppDataStore.BookingRecord> otherBookings = AppDataStore.bookingsForUser(user.uid());
+            if (!otherBookings.isEmpty()) {
+                VBox otherRows = new VBox(10);
+                otherBookings.forEach(booking -> otherRows.getChildren().add(bookingRow(booking)));
+                rows.getChildren().add(infoPanel("Other Bookings", otherRows));
+            }
         }
-        filters.get("All").getStyleClass().add("booking-filter-active");
-        search.textProperty().addListener((observable, oldValue, newValue) -> refresh.run());
-        HBox controls = new HBox(12, filterBar, createSpacer(), search);
-        controls.setAlignment(Pos.CENTER_LEFT); controls.getStyleClass().add("booking-filter-bar");
-        HBox.setHgrow(search, Priority.ALWAYS); search.setMaxWidth(300);
-        refresh.run();
-        return pageShell("My Bookings", "View and manage all your Simhastha bookings in one place.", summary, controls, results);
+        return pageShell("My Bookings", "View and manage your Puja bookings.", back, rows);
+    }
+
+    private VBox pujaBookingsEmptyState(String title, String detail) {
+        Button browse = new Button("Browse Puja Services");
+        browse.getStyleClass().add("transport-primary-button");
+        browse.setOnAction(event -> showModulePage("puja"));
+        VBox empty = new VBox(12,
+                AppUi.symbolIcon("\uE8F9", "puja-trust-icon"),
+                sectionTitle(title),
+                muted(detail),
+                browse);
+        empty.getStyleClass().add("puja-empty-state");
+        empty.setAlignment(Pos.CENTER_LEFT);
+        return empty;
+    }
+
+    private HBox pujaBookingSummaryCards(java.util.List<AppDataStore.PujaBookingRecord> bookings) {
+        long confirmed = bookings.stream().filter(item -> "CONFIRMED".equalsIgnoreCase(item.bookingStatus)
+                || "PRIEST_ASSIGNED".equalsIgnoreCase(item.bookingStatus)
+                || "READY".equalsIgnoreCase(item.bookingStatus)).count();
+        long pending = bookings.stream().filter(item -> "PENDING".equalsIgnoreCase(item.bookingStatus)
+                || "PAYMENT_PENDING".equalsIgnoreCase(item.bookingStatus)).count();
+        long completed = bookings.stream().filter(item -> "COMPLETED".equalsIgnoreCase(item.bookingStatus)).count();
+        HBox row = new HBox(12,
+                pujaBookingMetric("Total Bookings", String.valueOf(bookings.size())),
+                pujaBookingMetric("Confirmed", String.valueOf(confirmed)),
+                pujaBookingMetric("Pending", String.valueOf(pending)),
+                pujaBookingMetric("Completed", String.valueOf(completed)));
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private VBox pujaBookingMetric(String title, String value) {
+        VBox card = new VBox(4, label(value, "puja-total-amount"), muted(title));
+        card.getStyleClass().add("puja-booking-summary-metric");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private String pujaBookingImage(String serviceId) {
+        return AppDataStore.pujaServices().stream()
+                .filter(service -> service.serviceId.equals(serviceId))
+                .map(service -> service.imageUrl)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElseGet(() -> visiblePujaServices().stream()
+                        .filter(service -> service.serviceId().equals(serviceId))
+                        .map(PujaService::image)
+                        .findFirst()
+                        .orElse("/images/trimbakeshwar.jpg"));
+    }
+
+    private String pujaBookingTemple(String serviceId, String fallback) {
+        return AppDataStore.pujaServices().stream()
+                .filter(service -> service.serviceId.equals(serviceId))
+                .map(service -> valueOr(fallback, service.templeOrGhat))
+                .findFirst()
+                .orElse(fallback);
     }
 
     private VBox bookingMetric(String title, long count, String detail) {
@@ -5262,14 +7816,224 @@ public class DashboardPage {
     }
 
     private VBox aboutPage() {
-        return pageShell("About Us", "Simhastha Connect platform vision and service purpose.",
-                new VBox(12,
-                        infoPanel("About Simhastha Connect",
-                                "Simhastha Connect is a unified digital platform designed to help pilgrims access transport, ghats, puja services, accommodation, emergency support and official information during Nashik Simhastha."),
-                        infoPanel("Our Mission", "Safe pilgrimage. Reliable information. Better coordination."),
-                        infoPanel("Platform Features", "Pilgrim Services\nTransport Integration\nEmergency Assistance\nBusiness Services\nOfficial Announcements\nAdmin-controlled Information"),
-                        infoPanel("Nashik Simhastha 2027", "A traditional and technology-ready information layer for Nashik, Ramkund, Godavari and Trimbakeshwar pilgrimage movement."),
-                        label("सेवा • सुरक्षा • श्रद्धा • समन्वय", "pilgrim-about-slogan")));
+        VBox content = new VBox(8,
+                topControls(),
+                label("About Us", "pilgrim-page-title"),
+                aboutHeroSection(),
+                aboutMissionVisionSection(),
+                aboutPlatformFeaturesSection(),
+                aboutSafetyAndFlowSection(),
+                aboutSimhasthaAndHelpSection(),
+                aboutFooter());
+        content.getStyleClass().addAll("pilgrim-dashboard-main", "about-dashboard-main");
+        content.setPadding(new Insets(10, 18, 10, 18));
+        return content;
+    }
+
+    private StackPane aboutHeroSection() {
+        ImageView image = createImage("/images/welcome-light.png", 620, 150, 0.54, 0.48);
+        image.getStyleClass().add("about-hero-image");
+        StackPane imagePane = new StackPane(image);
+        imagePane.getStyleClass().add("about-hero-image-pane");
+
+        HBox highlights = new HBox(8,
+                aboutHighlight("\uE716", "Millions of", "Pilgrims"),
+                aboutHighlight("\uE73E", "Trusted &", "Verified"),
+                aboutHighlight("\uE717", "24/7", "Support"),
+                aboutHighlight("\uE946", "Official", "Information"));
+        highlights.getStyleClass().add("about-highlight-row");
+
+        VBox text = new VBox(8,
+                label("About Simhastha Connect", "about-hero-title"),
+                paragraph("Simhastha Connect is a unified digital platform designed to help pilgrims access transport, accommodation, puja services, emergency support and official information during Nashik Simhastha 2027."),
+                highlights);
+        text.getStyleClass().add("about-hero-copy");
+        text.setMaxWidth(520);
+
+        HBox content = new HBox(14, text, createSpacer(), imagePane);
+        content.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(imagePane, Priority.ALWAYS);
+
+        StackPane hero = new StackPane(content);
+        hero.getStyleClass().add("about-hero-card");
+        return hero;
+    }
+
+    private HBox aboutHighlight(String iconCode, String lineOne, String lineTwo) {
+        Label icon = AppUi.symbolIcon(iconCode, "about-highlight-icon");
+        VBox copy = new VBox(0,
+                label(lineOne, "about-highlight-text"),
+                label(lineTwo, "about-highlight-text"));
+        HBox item = new HBox(9, icon, copy);
+        item.getStyleClass().add("about-highlight-item");
+        item.setAlignment(Pos.CENTER_LEFT);
+        return item;
+    }
+
+    private HBox aboutMissionVisionSection() {
+        HBox row = new HBox(10,
+                aboutInfoCard("\uF1D8", "Our Mission",
+                        "Our mission is to make the Simhastha pilgrimage safer, easier and better organized by connecting pilgrims with verified services and official information."),
+                aboutInfoCard("\uE890", "Our Vision",
+                        "To build a reliable digital platform that improves accessibility, coordination, safety and convenience for every pilgrim."));
+        row.getStyleClass().add("about-two-card-row");
+        HBox.setHgrow(row.getChildren().get(0), Priority.ALWAYS);
+        HBox.setHgrow(row.getChildren().get(1), Priority.ALWAYS);
+        return row;
+    }
+
+    private HBox aboutInfoCard(String iconCode, String title, String text) {
+        Label icon = AppUi.symbolIcon(iconCode, "about-info-icon");
+        VBox copy = new VBox(4, sectionTitle(title), paragraph(text));
+        HBox card = new HBox(12, icon, copy);
+        card.getStyleClass().add("about-info-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return card;
+    }
+
+    private VBox aboutPlatformFeaturesSection() {
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        Node[] cards = {
+                aboutFeatureCard("\uE806", "Transport Services", "Find travel options, routes and transport guidance.", "blue"),
+                aboutFeatureCard("\uE774", "Puja Services", "Browse verified puja and spiritual services.", "orange"),
+                aboutFeatureCard("\uE80F", "Ghats & Snan", "Get information about ghats, snan dates and important locations.", "green"),
+                aboutFeatureCard("\uE783", "Emergency Support", "Quick access to emergency assistance and helpline services.", "red"),
+                aboutFeatureCard("\uE809", "Stay & Accommodation", "Find suitable accommodation and stay options.", "purple"),
+                aboutFeatureCard("\uE721", "Lost & Found", "Report or search for lost items and persons.", "green"),
+                aboutFeatureCard("\uE787", "All Day Schedule", "View daily schedules and important Simhastha events.", "orange"),
+                aboutFeatureCard("\uE789", "Official Announcements", "Receive important official updates and notices.", "purple")
+        };
+        for (int i = 0; i < cards.length; i++) {
+            grid.add(cards[i], i, 0);
+            GridPane.setHgrow(cards[i], Priority.ALWAYS);
+        }
+        VBox section = new VBox(8, sectionTitle("Platform Features"), grid);
+        section.getStyleClass().add("about-section-card");
+        return section;
+    }
+
+    private VBox aboutFeatureCard(String iconCode, String title, String detail, String accent) {
+        Label icon = AppUi.symbolIcon(iconCode, "about-feature-icon");
+        StackPane iconBubble = new StackPane(icon);
+        iconBubble.getStyleClass().addAll("about-feature-icon-bubble", "about-accent-" + accent);
+        VBox card = new VBox(5, iconBubble, strong(title), muted(detail));
+        card.getStyleClass().addAll("about-feature-card", "about-feature-" + accent);
+        card.setAlignment(Pos.TOP_CENTER);
+        return card;
+    }
+
+    private HBox aboutSafetyAndFlowSection() {
+        HBox row = new HBox(10, aboutSafetySection(), aboutWorksSection());
+        row.getStyleClass().add("about-two-card-row");
+        HBox.setHgrow(row.getChildren().get(0), Priority.ALWAYS);
+        HBox.setHgrow(row.getChildren().get(1), Priority.ALWAYS);
+        return row;
+    }
+
+    private HBox aboutSafetySection() {
+        Label shield = AppUi.symbolIcon("\uE73E", "about-safety-icon");
+        VBox points = new VBox(4,
+                aboutCheckPoint("Trusted and official information"),
+                aboutCheckPoint("Verified service providers"),
+                aboutCheckPoint("Safe and transparent service flow"),
+                aboutCheckPoint("Fraud and suspicious activity reporting"),
+                aboutCheckPoint("Admin-controlled services and information"));
+        VBox copy = new VBox(7, sectionTitle("Safety & Verified Services"), points);
+        HBox card = new HBox(12, shield, copy);
+        card.getStyleClass().addAll("about-info-card", "about-safety-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return card;
+    }
+
+    private HBox aboutCheckPoint(String text) {
+        HBox point = new HBox(6, AppUi.symbolIcon("\uE930", "about-check-icon"), muted(text));
+        point.setAlignment(Pos.CENTER_LEFT);
+        return point;
+    }
+
+    private VBox aboutWorksSection() {
+        HBox flow = new HBox(6,
+                aboutFlowStep("\uE707", "Plan Your Visit", "Select destination, dates and preferences."),
+                aboutArrow(),
+                aboutFlowStep("\uE721", "Find Verified Services", "Explore transport, stay, puja and more."),
+                aboutArrow(),
+                aboutFlowStep("\uE8A5", "Book / Navigate Safely", "Book services or get routes and guidance."),
+                aboutArrow(),
+                aboutFlowStep("\uE7F4", "Receive Updates", "Get real-time updates, alerts and notices."),
+                aboutArrow(),
+                aboutFlowStep("\uE717", "Get Support", "24/7 help and emergency support."));
+        flow.setAlignment(Pos.CENTER_LEFT);
+        VBox card = new VBox(8, sectionTitle("How Simhastha Connect Works"), flow);
+        card.getStyleClass().add("about-section-card");
+        return card;
+    }
+
+    private VBox aboutFlowStep(String iconCode, String title, String detail) {
+        Label icon = AppUi.symbolIcon(iconCode, "about-flow-icon");
+        VBox step = new VBox(4, icon, strong(title), muted(detail));
+        step.getStyleClass().add("about-flow-step");
+        step.setAlignment(Pos.TOP_CENTER);
+        return step;
+    }
+
+    private Label aboutArrow() {
+        Label arrow = label("\u2192", "about-flow-arrow");
+        arrow.setMinWidth(18);
+        return arrow;
+    }
+
+    private HBox aboutSimhasthaAndHelpSection() {
+        HBox row = new HBox(10, aboutSimhastha2027Card(), aboutNeedHelpCard());
+        row.getStyleClass().add("about-two-card-row");
+        HBox.setHgrow(row.getChildren().get(0), Priority.ALWAYS);
+        HBox.setHgrow(row.getChildren().get(1), Priority.ALWAYS);
+        return row;
+    }
+
+    private HBox aboutSimhastha2027Card() {
+        Label icon = AppUi.symbolIcon("\uE80F", "about-info-icon");
+        VBox copy = new VBox(5,
+                sectionTitle("Nashik Simhastha 2027"),
+                paragraph("Nashik Simhastha 2027 is a major spiritual gathering that brings together millions of pilgrims. Simhastha Connect aims to provide a technology-enabled platform for better access to information, services, coordination and support."));
+        HBox card = new HBox(12, icon, copy);
+        card.getStyleClass().add("about-info-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return card;
+    }
+
+    private VBox aboutNeedHelpCard() {
+        HBox actions = new HBox(7,
+                aboutSupportAction("\uE783", "Emergency\nSupport", () -> showModulePage("emergency")),
+                aboutSupportAction("\uE789", "Official\nAnnouncements", () -> showModulePage("announcement")),
+                aboutSupportAction("\uE717", "Help &\nSupport", () -> showInfo("Help & Support", "Use the 24/7 Support panel or Emergency section for quick assistance.")),
+                aboutSupportAction("\uE946", "Report Fraud /\nSuspicious Activity", () -> showInfo("Report Fraud", "Use the Puja booking safety flow or contact official support to report suspicious activity.")));
+        actions.setAlignment(Pos.CENTER_LEFT);
+        VBox card = new VBox(8, sectionTitle("Need Help?"),
+                muted("We are here for you. Reach out anytime you need assistance."), actions);
+        card.getStyleClass().add("about-section-card");
+        return card;
+    }
+
+    private Button aboutSupportAction(String iconCode, String text, Runnable action) {
+        Button button = new Button(text);
+        button.setGraphic(AppUi.symbolIcon(iconCode, "about-support-icon"));
+        button.getStyleClass().add("about-support-button");
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private HBox aboutFooter() {
+        Label slogan = label("सेवा • सुरक्षा • श्रद्धा • समन्वय", "pilgrim-about-slogan");
+        Label copyright = muted("Simhastha Connect 2027");
+        HBox footer = new HBox(14, slogan, createSpacer(), copyright, smallGold("Nashik Simhastha 2027"));
+        footer.getStyleClass().add("about-footer");
+        footer.setAlignment(Pos.CENTER_LEFT);
+        return footer;
     }
 
     private VBox genericModulePage(String module) {
@@ -5484,6 +8248,481 @@ public class DashboardPage {
         return row;
     }
 
+    private HBox pujaBookingRow(AppDataStore.PujaBookingRecord booking) {
+        ImageView image = createImage(pujaBookingImage(booking.serviceId), 142, 92, 0.5, 0.5);
+        image.getStyleClass().add("puja-card-image");
+
+        Button details = new Button("View Details");
+        details.getStyleClass().add("puja-secondary-button");
+        details.setOnAction(event -> showPujaBookingDetailsPage(booking));
+
+        Button ticket = new Button("View QR / Ticket");
+        ticket.getStyleClass().add("transport-primary-button");
+        ticket.setDisable(booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank());
+        ticket.setOnAction(event -> showPujaTicketVerificationPage(booking.bookingId, booking.qrVerificationToken));
+
+        HBox badges = new HBox(7, badge(booking.bookingStatus), badge(booking.paymentStatus));
+        VBox text = new VBox(5,
+                strong(booking.serviceName),
+                muted("Booking ID: " + booking.bookingId),
+                muted("Date: " + booking.date + "  •  Time: " + booking.time),
+                muted("Temple/Ghat: " + pujaBookingTemple(booking.serviceId, valueOr(booking.location, booking.templeOrGhat))),
+                muted("Location: " + valueOr(booking.location, booking.locationName)),
+                muted("Provider: " + valueOr("Best available verified priest", booking.providerName)),
+                label("Amount: Rs. " + booking.totalAmount, "puja-price"),
+                badges);
+        HBox actions = new HBox(8, details, ticket);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        HBox row = new HBox(14, image, text, createSpacer(), actions);
+        row.getStyleClass().add("puja-booking-card");
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(text, Priority.ALWAYS);
+        return row;
+    }
+
+    private void showPujaBookingDetailsPage(AppDataStore.PujaBookingRecord booking) {
+        setActiveModule("bookings");
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("bookings"));
+
+        ImageView image = createImage(pujaBookingImage(booking.serviceId), 190, 112, 0.5, 0.5);
+        image.getStyleClass().add("puja-details-image");
+
+        VBox qr = booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank()
+                ? new VBox(8, sectionTitle("QR Ticket"), muted("QR ticket will be available after payment confirmation."))
+                : pujaTicketCard(booking, "SIMHASTHA-PUJA|" + booking.bookingId + "|" + booking.qrVerificationToken);
+        qr.getStyleClass().add("puja-ticket-compact");
+
+        GridPane bookingInfo = compactPujaInfoGridColumns(4,
+                pujaDetailCard("Date", booking.date),
+                pujaDetailCard("Time", booking.time),
+                pujaDetailCard("Location", valueOr(booking.location, booking.locationName)),
+                pujaDetailCard("Devotees", String.valueOf(booking.devoteesCount)),
+                pujaDetailCard("Language", booking.language),
+                pujaDetailCard("Mode", booking.mode),
+                pujaDetailCard("Amount", "Rs. " + booking.totalAmount),
+                pujaDetailCard("Payment Status", booking.paymentStatus),
+                pujaDetailCard("Booking Status", booking.bookingStatus));
+
+        Button ticket = new Button("View QR / Ticket");
+        ticket.getStyleClass().add("transport-primary-button");
+        ticket.setDisable(booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank());
+        ticket.setOnAction(event -> showPujaTicketVerificationPage(booking.bookingId, booking.qrVerificationToken));
+        Button retry = new Button("Retry Payment");
+        retry.getStyleClass().add("puja-secondary-button");
+        retry.setDisable("PAID".equalsIgnoreCase(booking.paymentStatus) || booking.totalAmount <= 0);
+        retry.setOnAction(event -> {
+            AppSession.User user = AppSession.currentUser();
+            if (user != null) {
+                startPujaRazorpayPayment(booking, user);
+            }
+        });
+        HBox actions = new HBox(10, createSpacer(), retry, ticket);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox right = new VBox(8,
+                sectionTitle(booking.serviceName),
+                muted("Booking ID: " + booking.bookingId),
+                new HBox(7, badge(booking.bookingStatus), badge(booking.paymentStatus)),
+                muted("Temple/Ghat: " + pujaBookingTemple(booking.serviceId, booking.templeOrGhat)),
+                muted("Provider: " + valueOr("Best available verified priest", booking.providerName)),
+                qr);
+        right.getStyleClass().add("puja-details-panel");
+        HBox hero = new HBox(16, image, right);
+        hero.getStyleClass().add("puja-success-hero");
+        HBox.setHgrow(right, Priority.ALWAYS);
+
+        VBox panel = new VBox(10,
+                hero,
+                bookingInfo,
+                actions);
+        panel.getStyleClass().add("puja-details-panel");
+        VBox shell = pageShell("Puja Booking Details", "Review your booking and QR ticket.",
+                back, panel);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private void showPujaTicketVerificationPage(String bookingId, String token) {
+        AppDataStore.PujaBookingRecord booking = AppDataStore.pujaBookings().stream()
+                .filter(item -> item.bookingId.equals(bookingId))
+                .findFirst()
+                .orElse(null);
+        if (booking == null || token == null || token.isBlank()
+                || booking.qrVerificationToken == null
+                || !booking.qrVerificationToken.equals(token)) {
+            showInfo("Ticket Not Available", "This Puja ticket is not available or the verification token is invalid.");
+            return;
+        }
+
+        setActiveModule("bookings");
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showPujaBookingDetailsPage(booking));
+
+        String payload = "SIMHASTHA-PUJA|" + booking.bookingId + "|" + token;
+        VBox ticketCard = pujaTicketCard(booking, payload);
+        ticketCard.getStyleClass().add("puja-ticket-compact");
+        GridPane details = compactPujaInfoGridColumns(4,
+                pujaDetailCard("Booking ID", booking.bookingId),
+                pujaDetailCard("Puja", booking.serviceName),
+                pujaDetailCard("Date", booking.date),
+                pujaDetailCard("Time", booking.time),
+                pujaDetailCard("Location", valueOr(booking.location, booking.locationName)),
+                pujaDetailCard("Devotees", String.valueOf(booking.devoteesCount)),
+                pujaDetailCard("Payment", booking.paymentStatus),
+                pujaDetailCard("Status", booking.bookingStatus));
+
+        VBox trust = new VBox(6,
+                sectionTitle("Verification Instructions"),
+                muted("Show this ticket at the Puja service counter. QR token is generated from your confirmed booking."));
+        trust.getStyleClass().add("puja-details-trust-card");
+
+        HBox hero = new HBox(16, ticketCard, trust);
+        hero.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(trust, Priority.ALWAYS);
+        VBox panel = new VBox(10, hero, details);
+        panel.getStyleClass().add("puja-details-panel");
+        VBox shell = pageShell("Puja QR Ticket", "Use this safe ticket for verification at the service counter.",
+                back, panel);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private VBox pujaTicketCard(AppDataStore.PujaBookingRecord booking, String payload) {
+        ImageView qr = new ImageView(createQrImage(payload, 178));
+        qr.setFitWidth(178);
+        qr.setFitHeight(178);
+        qr.setPreserveRatio(true);
+        qr.getStyleClass().add("ticket-qr-image");
+
+        VBox copy = new VBox(5,
+                strong("SIMHASTHA CONNECT PUJA TICKET"),
+                muted(booking.serviceName),
+                muted("Booking: " + booking.bookingId),
+                muted("Token: " + booking.qrVerificationToken));
+        copy.setAlignment(Pos.CENTER_LEFT);
+        HBox body = new HBox(18, qr, copy);
+        body.setAlignment(Pos.CENTER_LEFT);
+
+        VBox card = new VBox(12, body);
+        card.getStyleClass().add("ticket-card");
+        card.setPadding(new Insets(18));
+        return card;
+    }
+
+    private WritableImage createQrImage(String payload, int pixelSize) {
+        boolean[][] modules = createQrMatrix(payload == null ? "" : payload);
+        int quiet = 4;
+        int moduleCount = modules.length + quiet * 2;
+        int scale = Math.max(3, pixelSize / moduleCount);
+        int imageSize = moduleCount * scale;
+        WritableImage image = new WritableImage(imageSize, imageSize);
+        PixelWriter writer = image.getPixelWriter();
+        for (int y = 0; y < imageSize; y++) {
+            for (int x = 0; x < imageSize; x++) {
+                int moduleX = x / scale - quiet;
+                int moduleY = y / scale - quiet;
+                boolean dark = moduleX >= 0 && moduleY >= 0
+                        && moduleX < modules.length && moduleY < modules.length
+                        && modules[moduleY][moduleX];
+                writer.setColor(x, y, dark ? Color.BLACK : Color.WHITE);
+            }
+        }
+        return image;
+    }
+
+    private boolean[][] createQrMatrix(String text) {
+        final int version = 4;
+        final int size = version * 4 + 17;
+        boolean[][] modules = new boolean[size][size];
+        boolean[][] reserved = new boolean[size][size];
+        addQrFinder(modules, reserved, 0, 0);
+        addQrFinder(modules, reserved, size - 7, 0);
+        addQrFinder(modules, reserved, 0, size - 7);
+        addQrTiming(modules, reserved);
+        addQrAlignment(modules, reserved, 26, 26);
+        setQrModule(modules, reserved, 8, size - 8, true, true);
+        reserveQrFormat(reserved, size);
+
+        java.util.List<Integer> data = qrDataCodewords(text);
+        data.addAll(qrReedSolomonRemainder(data, 20));
+        placeQrData(modules, reserved, data, 0);
+        addQrFormatBits(modules, 0);
+        return modules;
+    }
+
+    private java.util.List<Integer> qrDataCodewords(String text) {
+        byte[] bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int length = Math.min(bytes.length, 78);
+        java.util.List<Integer> bits = new java.util.ArrayList<>();
+        appendQrBits(bits, 0b0100, 4);
+        appendQrBits(bits, length, 8);
+        for (int index = 0; index < length; index++) {
+            appendQrBits(bits, bytes[index] & 0xff, 8);
+        }
+        int maxBits = 80 * 8;
+        appendQrBits(bits, 0, Math.min(4, maxBits - bits.size()));
+        while (bits.size() % 8 != 0) {
+            bits.add(0);
+        }
+        java.util.List<Integer> codewords = new java.util.ArrayList<>();
+        for (int i = 0; i < bits.size(); i += 8) {
+            int value = 0;
+            for (int bit = 0; bit < 8; bit++) {
+                value = (value << 1) | bits.get(i + bit);
+            }
+            codewords.add(value);
+        }
+        for (int pad = 0; codewords.size() < 80; pad++) {
+            codewords.add((pad % 2 == 0) ? 0xec : 0x11);
+        }
+        return codewords;
+    }
+
+    private void appendQrBits(java.util.List<Integer> bits, int value, int count) {
+        for (int i = count - 1; i >= 0; i--) {
+            bits.add((value >>> i) & 1);
+        }
+    }
+
+    private void addQrFinder(boolean[][] modules, boolean[][] reserved, int x, int y) {
+        for (int dy = -1; dy <= 7; dy++) {
+            for (int dx = -1; dx <= 7; dx++) {
+                int xx = x + dx;
+                int yy = y + dy;
+                if (xx < 0 || yy < 0 || yy >= modules.length || xx >= modules.length) {
+                    continue;
+                }
+                boolean dark = dx >= 0 && dx <= 6 && dy >= 0 && dy <= 6
+                        && (dx == 0 || dx == 6 || dy == 0 || dy == 6
+                                || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4));
+                setQrModule(modules, reserved, xx, yy, dark, true);
+            }
+        }
+    }
+
+    private void addQrTiming(boolean[][] modules, boolean[][] reserved) {
+        for (int i = 8; i < modules.length - 8; i++) {
+            setQrModule(modules, reserved, i, 6, i % 2 == 0, true);
+            setQrModule(modules, reserved, 6, i, i % 2 == 0, true);
+        }
+    }
+
+    private void addQrAlignment(boolean[][] modules, boolean[][] reserved, int centerX, int centerY) {
+        for (int dy = -2; dy <= 2; dy++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                boolean dark = Math.max(Math.abs(dx), Math.abs(dy)) != 1;
+                setQrModule(modules, reserved, centerX + dx, centerY + dy, dark, true);
+            }
+        }
+    }
+
+    private void reserveQrFormat(boolean[][] reserved, int size) {
+        for (int i = 0; i < 9; i++) {
+            if (i != 6) {
+                reserved[8][i] = true;
+                reserved[i][8] = true;
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            reserved[8][size - 1 - i] = true;
+            reserved[size - 1 - i][8] = true;
+        }
+    }
+
+    private void setQrModule(boolean[][] modules, boolean[][] reserved, int x, int y, boolean dark, boolean reserve) {
+        modules[y][x] = dark;
+        if (reserve) {
+            reserved[y][x] = true;
+        }
+    }
+
+    private void placeQrData(boolean[][] modules, boolean[][] reserved, java.util.List<Integer> codewords, int mask) {
+        java.util.List<Integer> bits = new java.util.ArrayList<>();
+        for (int codeword : codewords) {
+            appendQrBits(bits, codeword, 8);
+        }
+        int bitIndex = 0;
+        int direction = -1;
+        for (int right = modules.length - 1; right >= 1; right -= 2) {
+            if (right == 6) {
+                right--;
+            }
+            for (int i = 0; i < modules.length; i++) {
+                int y = direction == -1 ? modules.length - 1 - i : i;
+                for (int dx = 0; dx < 2; dx++) {
+                    int x = right - dx;
+                    if (reserved[y][x]) {
+                        continue;
+                    }
+                    boolean bit = bitIndex < bits.size() && bits.get(bitIndex++) == 1;
+                    if (qrMask(mask, x, y)) {
+                        bit = !bit;
+                    }
+                    modules[y][x] = bit;
+                }
+            }
+            direction = -direction;
+        }
+    }
+
+    private boolean qrMask(int mask, int x, int y) {
+        return switch (mask) {
+            case 0 -> (x + y) % 2 == 0;
+            default -> false;
+        };
+    }
+
+    private void addQrFormatBits(boolean[][] modules, int mask) {
+        int size = modules.length;
+        int format = qrFormatBits(1, mask);
+        for (int i = 0; i <= 5; i++) {
+            modules[i][8] = ((format >>> i) & 1) != 0;
+        }
+        modules[7][8] = ((format >>> 6) & 1) != 0;
+        modules[8][8] = ((format >>> 7) & 1) != 0;
+        modules[8][7] = ((format >>> 8) & 1) != 0;
+        for (int i = 9; i < 15; i++) {
+            modules[14 - i][8] = ((format >>> i) & 1) != 0;
+        }
+        for (int i = 0; i < 8; i++) {
+            modules[8][size - 1 - i] = ((format >>> i) & 1) != 0;
+        }
+        for (int i = 8; i < 15; i++) {
+            modules[size - 15 + i][8] = ((format >>> i) & 1) != 0;
+        }
+    }
+
+    private int qrFormatBits(int errorLevelBits, int mask) {
+        int data = (errorLevelBits << 3) | mask;
+        int value = data << 10;
+        int generator = 0x537;
+        for (int i = 14; i >= 10; i--) {
+            if (((value >>> i) & 1) != 0) {
+                value ^= generator << (i - 10);
+            }
+        }
+        return ((data << 10) | value) ^ 0x5412;
+    }
+
+    private java.util.List<Integer> qrReedSolomonRemainder(java.util.List<Integer> data, int degree) {
+        int[] generator = qrRsGenerator(degree);
+        int[] remainder = new int[degree];
+        for (int value : data) {
+            int factor = value ^ remainder[0];
+            System.arraycopy(remainder, 1, remainder, 0, degree - 1);
+            remainder[degree - 1] = 0;
+            for (int i = 0; i < degree; i++) {
+                remainder[i] ^= qrGfMultiply(generator[i], factor);
+            }
+        }
+        java.util.List<Integer> result = new java.util.ArrayList<>();
+        for (int value : remainder) {
+            result.add(value);
+        }
+        return result;
+    }
+
+    private int[] qrRsGenerator(int degree) {
+        int[] generator = { 1 };
+        for (int i = 0; i < degree; i++) {
+            int[] next = new int[generator.length + 1];
+            for (int j = 0; j < generator.length; j++) {
+                next[j] ^= qrGfMultiply(generator[j], 1);
+                next[j + 1] ^= qrGfMultiply(generator[j], qrGfPow(2, i));
+            }
+            generator = next;
+        }
+        return java.util.Arrays.copyOfRange(generator, 1, generator.length);
+    }
+
+    private int qrGfPow(int value, int power) {
+        int result = 1;
+        for (int i = 0; i < power; i++) {
+            result = qrGfMultiply(result, value);
+        }
+        return result;
+    }
+
+    private int qrGfMultiply(int a, int b) {
+        int result = 0;
+        for (int i = 0; i < 8; i++) {
+            if ((b & 1) != 0) {
+                result ^= a;
+            }
+            boolean carry = (a & 0x80) != 0;
+            a = (a << 1) & 0xff;
+            if (carry) {
+                a ^= 0x1d;
+            }
+            b >>>= 1;
+        }
+        return result;
+    }
+
+    private String pujaBookingDetails(AppDataStore.PujaBookingRecord booking) {
+        return "Booking ID: " + booking.bookingId
+                + "\nPuja: " + booking.serviceName
+                + "\nProvider: " + valueOr("Best available verified priest", booking.providerName)
+                + "\nDate: " + booking.date
+                + "\nTime: " + booking.time
+                + "\nLocation: " + valueOr(booking.location, booking.locationName)
+                + "\nDevotees: " + booking.devoteesCount
+                + "\nLanguage: " + booking.language
+                + "\nMode: " + booking.mode
+                + "\nSamagri: " + (booking.samagriSelected ? "Included - Rs. " + booking.samagriAmount : "Not included")
+                + "\nPrasad: " + (booking.prasadSelected ? "Included - Rs. " + booking.prasadAmount : "Not included")
+                + "\nBase Price: Rs. " + booking.basePrice
+                + "\nService Fee: Rs. " + booking.serviceFee
+                + "\nTotal Amount: Rs. " + booking.totalAmount
+                + "\nSpecial Requirements: " + valueOr("None", booking.specialRequirements)
+                + "\nBooking Status: " + booking.bookingStatus
+                + "\nPayment Status: " + booking.paymentStatus
+                + "\nPayment Method: " + valueOr("Not started", booking.paymentMethod)
+                + "\nRazorpay Order ID: " + valueOr("Not available", booking.razorpayOrderId)
+                + "\nRazorpay Payment ID: " + valueOr("Not available", booking.razorpayPaymentId)
+                + "\nPayment Failure Reason: " + valueOr("None", booking.paymentFailureReason)
+                + "\n\nQR Code: Coming in a later part.";
+    }
+
+    private void updateOwnPujaBooking(AppDataStore.PujaBookingRecord booking, String status) {
+        if (("CANCELLED".equals(status))
+                && !("PENDING".equalsIgnoreCase(booking.bookingStatus)
+                        || "CONFIRMED".equalsIgnoreCase(booking.bookingStatus))) {
+            showInfo("Cannot Cancel", "Only Pending or Confirmed Puja bookings can be cancelled from user side.");
+            return;
+        }
+        try {
+            AppDataStore.updatePujaBookingStatus(booking.bookingId, status);
+            showInfo("Puja Booking Updated", "Booking status updated to " + status + ".");
+            showModulePage("bookings");
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Booking Update Failed", exception.getMessage());
+        }
+    }
+
+    private void submitPujaFraudReport(AppDataStore.PujaBookingRecord booking) {
+        AppSession.User user = AppSession.currentUser();
+        try {
+            AppDataStore.submitFraudReport(new AppDataStore.FraudReportRecord("",
+                    user == null ? "" : user.uid(),
+                    user == null ? "" : displayName(user),
+                    booking.bookingId,
+                    booking.serviceId,
+                    booking.serviceName,
+                    booking.providerId,
+                    booking.providerName,
+                    "User reported possible fraud from My Puja Bookings.",
+                    "OPEN",
+                    "",
+                    ""));
+            showInfo("Fraud Report Submitted", "Your report was saved and is visible to admin for review.");
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Fraud Report Failed", exception.getMessage());
+        }
+    }
+
     private VBox emergencyCard(String title, String number, String detail) {
         VBox card = new VBox(7, new HBox(10, moduleIcon("emergency", "pilgrim-card-icon"), badge("Call Info")),
                 strong(title), label(number, "pilgrim-emergency-number"), muted(detail), arrowAction("Call Info"));
@@ -5506,6 +8745,13 @@ public class DashboardPage {
 
     private VBox infoPanel(String title, String body) {
         VBox panel = new VBox(7, sectionTitle(title), paragraph(body));
+        panel.getStyleClass().add("pilgrim-panel");
+        return panel;
+    }
+
+    private VBox infoPanel(String title, Node... body) {
+        VBox panel = new VBox(7, sectionTitle(title));
+        panel.getChildren().addAll(body);
         panel.getStyleClass().add("pilgrim-panel");
         return panel;
     }
@@ -5651,6 +8897,10 @@ public class DashboardPage {
         return label;
     }
 
+    private String valueOr(String fallback, String value) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
     private Region createSpacer() {
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -5659,20 +8909,36 @@ public class DashboardPage {
     }
 
     private ImageView createImage(String path, double width, double height, double xBias, double yBias) {
-        URL imageUrl = getClass().getResource(path);
         ImageView imageView = new ImageView();
         imageView.setPreserveRatio(false);
         imageView.setFitWidth(width);
         imageView.setFitHeight(height);
-        if (imageUrl != null) {
-            Image image = localImageCache.computeIfAbsent(path, key -> new Image(imageUrl.toExternalForm()));
+        try {
+            String source = path == null || path.isBlank() ? "/images/trimbakeshwar.jpg" : path;
+            Image image = null;
+            if (source.startsWith("http") || source.startsWith("file:")) {
+                image = new Image(source, true);
+            } else {
+                URL imageUrl = getClass().getResource(source);
+                if (imageUrl != null) {
+                    String key = imageUrl.toExternalForm();
+                    image = IMAGE_CACHE.computeIfAbsent(key, Image::new);
+                }
+            }
+            if (image == null) {
+                return imageView;
+            }
             imageView.setImage(image);
-            double scale = Math.max(width / image.getWidth(), height / image.getHeight());
-            double cropWidth = Math.min(image.getWidth(), width / scale);
-            double cropHeight = Math.min(image.getHeight(), height / scale);
-            double x = Math.max(0, (image.getWidth() - cropWidth) * xBias);
-            double y = Math.max(0, (image.getHeight() - cropHeight) * yBias);
-            imageView.setViewport(new Rectangle2D(x, y, cropWidth, cropHeight));
+            if (image.getWidth() > 0 && image.getHeight() > 0) {
+                double scale = Math.max(width / image.getWidth(), height / image.getHeight());
+                double cropWidth = Math.min(image.getWidth(), width / scale);
+                double cropHeight = Math.min(image.getHeight(), height / scale);
+                double x = Math.max(0, (image.getWidth() - cropWidth) * xBias);
+                double y = Math.max(0, (image.getHeight() - cropHeight) * yBias);
+                imageView.setViewport(new Rectangle2D(x, y, cropWidth, cropHeight));
+            }
+        } catch (Exception ignored) {
+            // Decorative images should never break the dashboard.
         }
         return imageView;
     }

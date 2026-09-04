@@ -3,9 +3,9 @@ package com.simhastha.schedule;
 import java.time.LocalDate;
 import java.util.List;
 
-import com.simhastha.view.AppSession;
-import com.simhastha.view.FirebaseConfig;
-import com.simhastha.view.FirestoreGateway;
+import com.simhastha.gateway.firebase.FirebaseConfig;
+import com.simhastha.gateway.firebase.FirestoreGateway;
+import com.simhastha.util.AppSession;
 
 final class FirestoreScheduleDataSource implements ScheduleDataSource {
     private final FirestoreGateway gateway = new FirestoreGateway(FirebaseConfig.load());

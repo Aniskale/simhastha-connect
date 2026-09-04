@@ -1,5 +1,7 @@
 package com.simhastha.view;
 
+import com.simhastha.util.AppSession;
+
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;

@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.logging.Logger;
 
-import com.simhastha.view.FirebaseConfig;
+import com.simhastha.gateway.firebase.FirebaseConfig;
 
 /** Chooses Firestore until it fails, then uses one shared local development store for this app session. */
 public final class ScheduleService {

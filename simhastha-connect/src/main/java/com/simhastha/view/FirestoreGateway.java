@@ -1,9 +1,6 @@
 package com.simhastha.view;
 
-import com.simhastha.model.CloudImage;
-import com.simhastha.model.Ghat;
-import com.simhastha.model.GhatOperationalState;
-import com.simhastha.service.GhatRepository;
+import com.simhastha.packages.*;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -13,24 +10,23 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.logging.Logger;
 
-import com.simhastha.schedule.ScheduleAlert;
-import com.simhastha.schedule.ScheduleCategory;
-import com.simhastha.schedule.ScheduleEvent;
-
-public final class FirestoreGateway implements GhatRepository {
+public final class FirestoreGateway {
 
     private static final String ROOT = "https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents";
+    private static final Logger LOGGER = Logger.getLogger(FirestoreGateway.class.getName());
     private static final Pattern DOCUMENT_PATTERN = Pattern.compile("\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\".*?\"fields\"\\s*:\\s*\\{(.*?)\\}\\s*(?:,\\s*\"createTime\"|,\\s*\"updateTime\"|\\})", Pattern.DOTALL);
     private static final Pattern STRING_FIELD_PATTERN = Pattern.compile("\"%s\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"(.*?)\"\\s*\\}", Pattern.DOTALL);
 
     private final FirebaseConfig config;
-    private static final Logger LOGGER = Logger.getLogger(FirestoreGateway.class.getName());
     private final HttpClient client = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
@@ -42,65 +38,6 @@ public final class FirestoreGateway implements GhatRepository {
     public boolean isEnabled() {
         return config.isEnabled();
     }
-
-    /** Schedule-specific persistence uses the existing authenticated Firestore gateway. */
-    public List<ScheduleEvent> loadScheduleEventsByDate(java.time.LocalDate date, String idToken) throws IOException, InterruptedException {
-        List<ScheduleEvent> result = new ArrayList<>();
-        for (Document document : loadScheduleCollection("schedule_events", idToken)) {
-            String fields = document.fields;
-            if (!date.toString().equals(field(fields, "date"))) continue;
-            try {
-                result.add(new ScheduleEvent(valueOr(document.id, field(fields, "eventId")), field(fields, "title"),
-                        ScheduleCategory.valueOf(valueOr("IMPORTANT", field(fields, "category")).toUpperCase(Locale.ROOT)),
-                        field(fields, "location"), date, java.time.LocalTime.parse(field(fields, "startTime")),
-                        java.time.LocalTime.parse(field(fields, "endTime")), field(fields, "description"), field(fields, "organizer"),
-                        "true".equals(boolField(fields, "important")), field(fields, "note"), "CANCELLED".equalsIgnoreCase(field(fields, "status")),
-                        nullableDouble(numberField(fields, "latitude")), nullableDouble(numberField(fields, "longitude")), field(fields, "locationId")));
-            } catch (RuntimeException ignored) { LOGGER.fine("Skipping malformed schedule event " + document.id); }
-        }
-        return result.stream().sorted(java.util.Comparator.comparing(ScheduleEvent::startTime)).toList();
-    }
-
-    public List<ScheduleAlert> loadScheduleAlertsByDate(java.time.LocalDate date, String idToken) throws IOException, InterruptedException {
-        List<ScheduleAlert> result = new ArrayList<>();
-        for (Document document : loadScheduleCollection("schedule_alerts", idToken)) {
-            String fields = document.fields;
-            if (!date.toString().equals(field(fields, "date"))) continue;
-            try { result.add(new ScheduleAlert(valueOr(document.id, field(fields, "alertId")), field(fields, "title"), field(fields, "message"),
-                    field(fields, "location"), date, parseTime(field(fields, "startTime")), parseTime(field(fields, "endTime")),
-                    valueOr("INFO", field(fields, "severity")), !"false".equals(boolField(fields, "active"))));
-            } catch (RuntimeException ignored) { LOGGER.fine("Skipping malformed schedule alert " + document.id); }
-        }
-        return result;
-    }
-
-    private List<Document> loadScheduleCollection(String collection, String idToken) throws IOException, InterruptedException {
-        try {
-            return loadCollectionDocuments(collection, idToken);
-        } catch (IOException exception) {
-            AppSession.User user = AppSession.currentUser();
-            LOGGER.fine("Schedule Firestore read failed: collection=" + collection + ", status=" + exception.getMessage()
-                    + ", tokenPresent=" + (idToken != null && !idToken.isBlank())
-                    + ", role=" + (user == null ? "none" : user.role()));
-            throw exception;
-        }
-    }
-
-    public void saveScheduleEvent(ScheduleEvent event, String adminUid, String idToken) throws IOException, InterruptedException {
-        String now = String.valueOf(System.currentTimeMillis());
-        sendAuthorizedPatch(documentUri("schedule_events", event.id()), fieldsJson(fieldJson("eventId", event.id()), fieldJson("title", event.title()),
-                fieldJson("category", event.category().name()), fieldJson("location", event.location()), fieldJson("date", event.date().toString()),
-                fieldJson("startTime", event.startTime().toString()), fieldJson("endTime", event.endTime().toString()), fieldJson("description", event.description()),
-                fieldJson("organizer", event.organizer()), boolFieldJson("important", event.important()), fieldJson("note", event.note()),
-                fieldJson("status", event.cancelled() ? "CANCELLED" : "SCHEDULED"), boolFieldJson("active", true), optionalNumberFieldJson("latitude", event.latitude()), optionalNumberFieldJson("longitude", event.longitude()), fieldJson("locationId", event.locationId()), fieldJson("updatedAt", now), fieldJson("updatedBy", adminUid), fieldJson("createdAt", now), fieldJson("createdBy", adminUid)), idToken);
-    }
-
-    public void deleteScheduleEvent(String eventId, String idToken) throws IOException, InterruptedException { sendAuthorizedDelete(documentUri("schedule_events", eventId), idToken); }
-    public void saveScheduleAlert(ScheduleAlert alert, String adminUid, String idToken) throws IOException, InterruptedException {
-        String now = String.valueOf(System.currentTimeMillis());
-        sendAuthorizedPatch(documentUri("schedule_alerts", alert.id()), fieldsJson(fieldJson("alertId", alert.id()), fieldJson("title", alert.title()), fieldJson("message", alert.message()), fieldJson("location", alert.location()), fieldJson("date", alert.date().toString()), fieldJson("startTime", timeText(alert.startTime())), fieldJson("endTime", timeText(alert.endTime())), fieldJson("severity", alert.severity()), boolFieldJson("active", alert.active()), fieldJson("updatedAt", now), fieldJson("updatedBy", adminUid), fieldJson("createdAt", now), fieldJson("createdBy", adminUid)), idToken);
-    }
-    public void deleteScheduleAlert(String alertId, String idToken) throws IOException, InterruptedException { sendAuthorizedDelete(documentUri("schedule_alerts", alertId), idToken); }
 
     public List<AppDataStore.ServiceItem> loadItems() throws IOException, InterruptedException {
         return loadItems("");
@@ -120,147 +57,6 @@ public final class FirestoreGateway implements GhatRepository {
         }
         return items;
     }
-
-    /** Reads the ghat collection as structured data; controllers never parse Firestore fields directly. */
-    public List<Ghat> loadGhats(String idToken) throws IOException, InterruptedException {
-        if (!isEnabled()) {
-            return List.of();
-        }
-        List<Ghat> ghats = new ArrayList<>();
-        for (Document document : loadPublishedGhatDocuments(idToken)) {
-            Ghat ghat = parseGhat(document);
-            if (ghat != null && ghat.published() && ghat.active()) ghats.add(ghat);
-        }
-        return ghats;
-    }
-
-    /** Admin-only listing includes drafts and inactive records from the same ghats collection. */
-    public List<Ghat> loadAdminGhats(String idToken) throws IOException, InterruptedException {
-        if (!isEnabled()) return List.of();
-        List<Ghat> ghats = new ArrayList<>();
-        List<Document> documents;
-        try {
-            documents = loadCollectionDocuments("ghats", idToken);
-        } catch (IOException exception) {
-            LOGGER.info("Admin Ghat collection read is not allowed by Firestore rules; using published Ghat query instead. " + exception.getMessage());
-            documents = loadPublishedGhatDocuments(idToken);
-        }
-        LOGGER.info("Admin Ghat records loaded: count=" + documents.size());
-        for (Document document : documents) {
-            Ghat ghat = parseGhat(document);
-            if (ghat != null) ghats.add(ghat);
-        }
-        return ghats;
-    }
-
-    @Override
-    public Ghat loadGhat(String ghatId, String idToken) throws IOException, InterruptedException {
-        HttpRequest request = authorizedBuilder(documentUri("ghats", ghatId), idToken)
-                .timeout(Duration.ofSeconds(8)).GET().build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() >= 400) {
-            throw firestoreFailure("GET", documentUri("ghats", ghatId), response);
-        }
-        return parseDocuments(response.body()).stream().map(this::parseGhat).filter(java.util.Objects::nonNull)
-                .findFirst().orElseThrow(() -> new IOException("Ghat document could not be parsed: " + ghatId));
-    }
-
-    private Ghat parseGhat(Document document) {
-            try {
-                String fields = document.fields;
-                String name = firstNonBlank(field(fields, "ghatName"), field(fields, "name"), field(fields, "title"));
-                if (!notBlank(name)) return null;
-                Ghat ghat = new Ghat(document.id, name, firstNonBlank(field(fields, "area"), field(fields, "location")),
-                    field(fields, "description"), decimalField(fields, "latitude"), decimalField(fields, "longitude"),
-                    decimalField(fields, "entryLatitude"), decimalField(fields, "entryLongitude"), field(fields, "imageUrl"),
-                    field(fields, "imagePublicId"),
-                    enumValue(Ghat.OperationalStatus.class, field(fields, "operationalStatus"), Ghat.OperationalStatus.INFORMATION_ONLY),
-                    enumValue(Ghat.CrowdLevel.class, field(fields, "crowdLevel"), Ghat.CrowdLevel.UNKNOWN),
-                    integerField(fields, "estimatedWaitMinutes"), "true".equalsIgnoreCase(boolField(fields, "bathingAvailable")),
-                    new Ghat.Walking(enumValue(Ghat.WalkingDifficulty.class, field(fields, "walkingDifficulty"), Ghat.WalkingDifficulty.MODERATE),
-                            integerField(fields, "approximateSteps"), integerField(fields, "walkingDistanceMeters"),
-                            "true".equalsIgnoreCase(boolField(fields, "seniorFriendly")),
-                            "true".equalsIgnoreCase(boolField(fields, "wheelchairAccessible"))),
-                    stringListField(fields, "facilities"),
-                    new Ghat.Weather(integerField(fields, "weatherTemperatureCelsius"), field(fields, "weatherCondition")),
-                    new Ghat.History(field(fields, "historicalBackground"), field(fields, "religiousSignificance"),
-                            field(fields, "simhasthaConnection"), field(fields, "associatedSacredPlaces"),
-                            field(fields, "rituals"), field(fields, "didYouKnow"), field(fields, "historyImageUrl")),
-                    firstNonBlank(field(fields, "lastUpdated"), field(fields, "updatedAt"), timestampField(fields, "updatedAt")),
-                    operationalState(fields), !"false".equalsIgnoreCase(boolField(fields, "published")),
-                    !"false".equalsIgnoreCase(boolField(fields, "active")));
-                LOGGER.info("Parsed Ghat record: ghatId=" + ghat.id()
-                        + ", imageUrlPresent=" + notBlank(ghat.imageUrl())
-                        + ", imagePublicIdPresent=" + notBlank(ghat.imagePublicId())
-                        + ", weatherPresent=" + ghat.weather().available());
-                return ghat;
-            } catch (RuntimeException exception) {
-                LOGGER.warning("Skipping malformed ghat document " + document.id + ": " + exception.getMessage());
-                return null;
-            }
-    }
-
-    /** Persists the shared Ghat model directly; no Admin-only document shape is used. */
-    public void saveGhat(Ghat ghat, String idToken) throws IOException, InterruptedException {
-        String now = String.valueOf(System.currentTimeMillis());
-        String json = fieldsJson(
-                fieldJson("ghatName", ghat.name()), fieldJson("area", ghat.area()), fieldJson("description", ghat.description()),
-                fieldJson("imageUrl", ghat.imageUrl()), fieldJson("imagePublicId", ghat.imagePublicId()),
-                numberOrNullFieldJson("latitude", ghat.latitude()), numberOrNullFieldJson("longitude", ghat.longitude()),
-                numberOrNullFieldJson("entryLatitude", ghat.entryLatitude()), numberOrNullFieldJson("entryLongitude", ghat.entryLongitude()),
-                fieldJson("operationalStatus", ghat.operationalStatus().name()), fieldJson("crowdLevel", ghat.crowdLevel().name()),
-                numberOrNullFieldJson("estimatedWaitMinutes", ghat.estimatedWaitMinutes()), boolFieldJson("bathingAvailable", ghat.bathingAvailable()),
-                fieldJson("walkingDifficulty", ghat.walking().difficulty().name()), numberOrNullFieldJson("approximateSteps", ghat.walking().approximateSteps()),
-                numberOrNullFieldJson("walkingDistanceMeters", ghat.walking().distanceMeters()), boolFieldJson("seniorFriendly", ghat.walking().seniorFriendly()),
-                boolFieldJson("wheelchairAccessible", ghat.walking().wheelchairAccessible()), stringArrayFieldJson("facilities", ghat.facilities()),
-                numberOrNullFieldJson("weatherTemperatureCelsius", ghat.weather().temperatureCelsius()), fieldJson("weatherCondition", ghat.weather().condition()),
-                fieldJson("historicalBackground", ghat.history().historicalBackground()), fieldJson("religiousSignificance", ghat.history().religiousSignificance()),
-                fieldJson("simhasthaConnection", ghat.history().simhasthaConnection()), fieldJson("associatedSacredPlaces", ghat.history().associatedSacredPlaces()),
-                fieldJson("rituals", ghat.history().rituals()), fieldJson("didYouKnow", ghat.history().didYouKnow()), fieldJson("historyImageUrl", ghat.history().imageUrl()),
-                fieldJson("bathingStatus", ghat.operationalState().bathingStatus().name()),
-                fieldJson("waterSafety", ghat.operationalState().waterSafety().name()), fieldJson("restrictionReason", ghat.operationalState().restrictionReason()),
-                fieldJson("alertPriority", ghat.operationalState().priorityAlert().priority().name()), fieldJson("alertMessage", ghat.operationalState().priorityAlert().message()),
-                stringArrayFieldJson("gates", ghat.operationalState().gates().stream().map(gate -> gate.name() + "|" + gate.status() + "|" + gate.note()).toList()),
-                stringArrayFieldJson("zones", ghat.operationalState().zones().stream().map(zone -> zone.name() + "|" + zone.status() + "|" + zone.crowdLevel() + "|" + (zone.bathingAvailable() ? "AVAILABLE" : "UNAVAILABLE") + "|" + zone.hazard()).toList()),
-                stringArrayFieldJson("hazards", ghat.operationalState().hazards().stream().map(hazard -> hazard.type() + "|" + hazard.message() + "|" + hazard.priority()).toList()),
-                stringArrayFieldJson("facilityStatuses", ghat.operationalState().facilities().stream().map(facility -> facility.name() + "|" + facility.status()).toList()),
-                stringArrayFieldJson("accessWindows", ghat.operationalState().accessWindows().stream().map(window -> window.start() + "|" + window.end() + "|" + window.accessStatus() + "|" + window.note()).toList()),
-                fieldJson("cleaningStatus", ghat.operationalState().cleaningStatus().name()), fieldJson("operationalUpdatedAt", ghat.operationalState().lastUpdated()),
-                boolFieldJson("published", ghat.published()), boolFieldJson("active", ghat.active()), fieldJson("updatedAt", now));
-        sendAuthorizedPatch(documentUri("ghats", ghat.id()), json, idToken);
-    }
-
-    /** Image-only update avoids overwriting operational data during Admin Change Image. */
-    @Override
-    public void updateGhatImage(String ghatId, String imageUrl, String imagePublicId, String idToken) throws IOException, InterruptedException {
-        LOGGER.info("Firestore Ghat image save started: ghatId=" + ghatId
-                + ", secureUrlPresent=" + notBlank(imageUrl)
-                + ", publicIdPresent=" + notBlank(imagePublicId));
-        String json = fieldsJson(fieldJson("imageUrl", imageUrl), fieldJson("imagePublicId", imagePublicId),
-                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        URI document = documentUri("ghats", ghatId);
-        sendAuthorizedPatch(URI.create(documentUrl("ghats", ghatId)
-                + "&updateMask.fieldPaths=imageUrl&updateMask.fieldPaths=imagePublicId&updateMask.fieldPaths=updatedAt"), json, idToken);
-        LOGGER.info("Firestore Ghat image save success: ghatId=" + ghatId);
-    }
-
-    private GhatOperationalState operationalState(String fields) {
-        GhatOperationalState.BathingStatus bathing = enumValue(GhatOperationalState.BathingStatus.class,
-                field(fields, "bathingStatus"), "true".equalsIgnoreCase(boolField(fields, "bathingAvailable")) ? GhatOperationalState.BathingStatus.AVAILABLE : GhatOperationalState.BathingStatus.UNAVAILABLE);
-        GhatOperationalState.WaterSafety water = enumValue(GhatOperationalState.WaterSafety.class, field(fields, "waterSafety"), GhatOperationalState.WaterSafety.CAUTION);
-        return new GhatOperationalState(bathing, water, hazards(stringListField(fields, "hazards")), zones(stringListField(fields, "zones")),
-                gates(stringListField(fields, "gates")), facilities(stringListField(fields, "facilityStatuses")), accessWindows(stringListField(fields, "accessWindows")),
-                enumValue(GhatOperationalState.CleaningStatus.class, field(fields, "cleaningStatus"), GhatOperationalState.CleaningStatus.NORMAL),
-                field(fields, "restrictionReason"), new GhatOperationalState.PriorityAlert(enumValue(GhatOperationalState.AlertPriority.class,
-                        field(fields, "alertPriority"), GhatOperationalState.AlertPriority.INFO), field(fields, "alertMessage")),
-                firstNonBlank(field(fields, "operationalUpdatedAt"), timestampField(fields, "operationalUpdatedAt")));
-    }
-
-    private List<GhatOperationalState.Hazard> hazards(List<String> values) { return values.stream().map(value -> { String[] parts = value.split("\\|", 3); return new GhatOperationalState.Hazard(enumValue(GhatOperationalState.HazardType.class, parts[0], GhatOperationalState.HazardType.OTHER), parts.length > 1 ? parts[1] : value, parts.length > 2 ? enumValue(GhatOperationalState.AlertPriority.class, parts[2], GhatOperationalState.AlertPriority.ADVISORY) : GhatOperationalState.AlertPriority.ADVISORY); }).toList(); }
-    private List<GhatOperationalState.Zone> zones(List<String> values) { return values.stream().map(value -> { String[] p = value.split("\\|", 5); return new GhatOperationalState.Zone(p[0], p[0], p.length > 1 ? enumValue(GhatOperationalState.ZoneStatus.class, p[1], GhatOperationalState.ZoneStatus.OPEN) : GhatOperationalState.ZoneStatus.OPEN, p.length > 2 ? enumValue(Ghat.CrowdLevel.class, p[2], Ghat.CrowdLevel.MODERATE) : Ghat.CrowdLevel.MODERATE, p.length <= 3 || "AVAILABLE".equalsIgnoreCase(p[3]), p.length > 4 ? p[4] : "", ""); }).toList(); }
-    private List<GhatOperationalState.Gate> gates(List<String> values) { return values.stream().map(value -> { String[] p = value.split("\\|", 3); return new GhatOperationalState.Gate(p[0], p[0], p.length > 1 ? enumValue(GhatOperationalState.GateStatus.class, p[1], GhatOperationalState.GateStatus.OPEN) : GhatOperationalState.GateStatus.OPEN, p.length > 2 ? p[2] : ""); }).toList(); }
-    private List<GhatOperationalState.Facility> facilities(List<String> values) { return values.stream().map(value -> { String[] p = value.split("\\|", 2); return new GhatOperationalState.Facility(p[0], p.length > 1 ? enumValue(GhatOperationalState.FacilityStatus.class, p[1], GhatOperationalState.FacilityStatus.UNAVAILABLE) : GhatOperationalState.FacilityStatus.AVAILABLE); }).toList(); }
-    private List<GhatOperationalState.AccessWindow> accessWindows(List<String> values) { return values.stream().map(value -> { try { String[] p = value.split("\\|", 4); return new GhatOperationalState.AccessWindow(java.time.LocalTime.parse(p[0]), java.time.LocalTime.parse(p[1]), enumValue(GhatOperationalState.ZoneStatus.class, p[2], GhatOperationalState.ZoneStatus.OPEN), p.length > 3 ? p[3] : ""); } catch (Exception exception) { LOGGER.warning("Ignoring malformed ghat access window: " + value); return null; } }).filter(java.util.Objects::nonNull).toList(); }
 
     public List<AppDataStore.ApprovalRequest> loadApprovals() throws IOException, InterruptedException {
         return loadApprovals("");
@@ -331,37 +127,6 @@ public final class FirestoreGateway implements GhatRepository {
         return records;
     }
 
-    public List<AppDataStore.FaqRecord> loadFaqs(String idToken) throws IOException, InterruptedException {
-        List<AppDataStore.FaqRecord> records = new ArrayList<>();
-        for (Document document : loadCollectionDocuments("faqs", idToken)) {
-            String fields = document.fields;
-            records.add(new AppDataStore.FaqRecord(
-                    valueOr(document.id, field(fields, "id")),
-                    field(fields, "category"),
-                    field(fields, "question"),
-                    field(fields, "answer"),
-                    !"false".equalsIgnoreCase(boolField(fields, "active")),
-                    field(fields, "sortOrder")));
-        }
-        return records;
-    }
-
-    public void saveFaq(AppDataStore.FaqRecord faq, String idToken) throws IOException, InterruptedException {
-        String json = fieldsJson(
-                fieldJson("id", faq.id),
-                fieldJson("category", faq.category),
-                fieldJson("question", faq.question),
-                fieldJson("answer", faq.answer),
-                boolFieldJson("active", faq.active),
-                fieldJson("sortOrder", faq.sortOrder),
-                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(documentUri("faqs", faq.id), json, idToken);
-    }
-
-    public void deleteFaq(String id, String idToken) throws IOException, InterruptedException {
-        sendAuthorizedDelete(documentUri("faqs", id), idToken);
-    }
-
     public List<AppDataStore.BusinessRecord> loadBusinesses(String idToken) throws IOException, InterruptedException {
         List<AppDataStore.BusinessRecord> records = new ArrayList<>();
         for (Document document : loadCollectionDocuments("businesses", idToken)) {
@@ -382,11 +147,6 @@ public final class FirestoreGateway implements GhatRepository {
                     field(fields, "priceRange"),
                     field(fields, "status"),
                     "true".equalsIgnoreCase(approved),
-                    field(fields, "logoUrl"),
-                    field(fields, "logoPublicId"),
-                    field(fields, "coverPhotoUrl"),
-                    field(fields, "coverPhotoPublicId"),
-                    stringListField(fields, "galleryImages").stream().map(CloudImage::parse).toList(),
                     field(fields, "createdAt"),
                     field(fields, "updatedAt")));
         }
@@ -410,6 +170,144 @@ public final class FirestoreGateway implements GhatRepository {
                     numberField(fields, "vehicleCount"),
                     numberField(fields, "routesSubmitted"),
                     numberField(fields, "activeRoutes"),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.PujaProviderRecord> loadPujaProviders(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.PujaProviderRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("pujaProviders", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.PujaProviderRecord(
+                    document.id,
+                    field(fields, "fullName"),
+                    field(fields, "profilePhoto"),
+                    firstNonBlank(field(fields, "phone"), field(fields, "mobile")),
+                    field(fields, "email"),
+                    field(fields, "address"),
+                    field(fields, "experience"),
+                    field(fields, "specialization"),
+                    field(fields, "languages"),
+                    firstNonBlank(field(fields, "templeOrganization"), field(fields, "temple"), field(fields, "organization")),
+                    field(fields, "identityDocument"),
+                    field(fields, "supportingCertificates"),
+                    field(fields, "servicesOffered"),
+                    field(fields, "serviceLocations"),
+                    firstNonBlank(field(fields, "status"), "pending"),
+                    "true".equalsIgnoreCase(boolField(fields, "approved")),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt")));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.PujaServiceRecord> loadPujaServices(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.PujaServiceRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("pujaServices", idToken)) {
+            records.add(pujaServiceFrom(document));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.PujaServiceRecord> loadPublicPujaServices(String idToken)
+            throws IOException, InterruptedException {
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"pujaServices\"}],"
+                + "\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"published\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}},"
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"enabled\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}},"
+                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"verificationStatus\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"VERIFIED\"}}}"
+                + "]}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())),
+                query, idToken);
+        List<AppDataStore.PujaServiceRecord> records = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            AppDataStore.PujaServiceRecord service = pujaServiceFrom(document);
+            if (service.published && service.enabled && "VERIFIED".equalsIgnoreCase(service.verificationStatus)) {
+                records.add(service);
+            }
+        }
+        return records;
+    }
+
+    private AppDataStore.PujaServiceRecord pujaServiceFrom(Document document) {
+        String fields = document.fields;
+        return new AppDataStore.PujaServiceRecord(
+                document.id,
+                firstNonBlank(field(fields, "name"), field(fields, "pujaName"), field(fields, "title")),
+                field(fields, "description"),
+                field(fields, "pujaType"),
+                firstNonBlank(field(fields, "templeOrGhat"), field(fields, "templeGhat")),
+                field(fields, "price"),
+                field(fields, "duration"),
+                field(fields, "providerId"),
+                firstNonBlank(field(fields, "providerName"), field(fields, "provider")),
+                firstNonBlank(field(fields, "verificationStatus"), "PENDING"),
+                field(fields, "availableSlots"),
+                field(fields, "mode"),
+                field(fields, "languages"),
+                firstNonBlank(field(fields, "imageUrl"), field(fields, "image")),
+                field(fields, "imagePublicId"),
+                firstNonBlank(field(fields, "bookingStatus"), "OPEN"),
+                firstNonBlank(field(fields, "status"), "draft"),
+                "true".equalsIgnoreCase(boolField(fields, "published")),
+                !"false".equalsIgnoreCase(boolField(fields, "enabled"))
+                        && !"false".equalsIgnoreCase(boolField(fields, "active")),
+                "true".equalsIgnoreCase(boolField(fields, "adminApproved"))
+                        || "true".equalsIgnoreCase(boolField(fields, "approved")),
+                field(fields, "createdAt"),
+                field(fields, "updatedAt"),
+                field(fields, "createdBy"),
+                firstNonBlank(field(fields, "updatedBy"), field(fields, "updatedByAdminId")),
+                field(fields, "verifiedAt"),
+                field(fields, "verifiedBy"));
+    }
+
+    public List<AppDataStore.PujaBookingRecord> loadPujaBookings(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.PujaBookingRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("pujaBookings", idToken)) {
+            records.add(pujaBookingFrom(document));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.PujaBookingRecord> loadPujaBookingsForUser(String userId, String idToken)
+            throws IOException, InterruptedException {
+        if (!notBlank(userId)) {
+            return List.of();
+        }
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"pujaBookings\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"userId\"},"
+                + "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + escape(userId) + "\"}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())),
+                query, idToken);
+        List<AppDataStore.PujaBookingRecord> records = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            records.add(pujaBookingFrom(document));
+        }
+        return records;
+    }
+
+    public List<AppDataStore.FraudReportRecord> loadFraudReports(String idToken)
+            throws IOException, InterruptedException {
+        List<AppDataStore.FraudReportRecord> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("fraudReports", idToken)) {
+            String fields = document.fields;
+            records.add(new AppDataStore.FraudReportRecord(
+                    document.id,
+                    field(fields, "userId"),
+                    field(fields, "userName"),
+                    field(fields, "bookingId"),
+                    field(fields, "serviceId"),
+                    field(fields, "serviceName"),
+                    field(fields, "providerId"),
+                    field(fields, "providerName"),
+                    field(fields, "issue"),
+                    firstNonBlank(field(fields, "status"), "OPEN"),
                     field(fields, "createdAt"),
                     field(fields, "updatedAt")));
         }
@@ -502,15 +400,7 @@ public final class FirestoreGateway implements GhatRepository {
             String fields = document.fields;
             String title = firstNonBlank(field(fields, titleField), field(fields, "title"), field(fields, "businessName"));
             if (notBlank(title)) {
-                target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory,
-                        firstNonBlank(field(fields, "packageThumbnailUrl"), field(fields, "pujaImageUrl"),
-                                field(fields, "thumbnailUrl"), field(fields, "imageUrl"), field(fields, "mainImageUrl"),
-                                field(fields, "logoUrl"), field(fields, "coverPhotoUrl")),
-                        firstNonBlank(field(fields, "packageThumbnailPublicId"), field(fields, "pujaImagePublicId"),
-                                field(fields, "thumbnailPublicId"), field(fields, "imagePublicId"),
-                                field(fields, "mainImagePublicId"), field(fields, "logoPublicId"),
-                                field(fields, "coverPhotoPublicId")),
-                        stringListField(fields, "galleryImages").stream().map(CloudImage::parse).toList()));
+                target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory));
             }
         }
     }
@@ -572,17 +462,62 @@ public final class FirestoreGateway implements GhatRepository {
             if (!notBlank(title)) {
                 continue;
             }
-            target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory,
-                    firstNonBlank(field(fields, "packageThumbnailUrl"), field(fields, "pujaImageUrl"),
-                            field(fields, "thumbnailUrl"), field(fields, "imageUrl"), field(fields, "mainImageUrl"),
-                            field(fields, "logoUrl"), field(fields, "coverPhotoUrl")),
-                    firstNonBlank(field(fields, "packageThumbnailPublicId"), field(fields, "pujaImagePublicId"),
-                            field(fields, "thumbnailPublicId"), field(fields, "imagePublicId"),
-                            field(fields, "mainImagePublicId"), field(fields, "logoPublicId"),
-                            field(fields, "coverPhotoPublicId")),
-                    stringListField(fields, "galleryImages").stream().map(CloudImage::parse).toList()));
+            target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory));
         }
     }
+
+    private PackageBooking packageBookingFrom(Document document) {
+        String fields = document.fields;
+        PrimaryContact contact = new PrimaryContact(field(fields, "primaryContactName"),
+                field(fields, "primaryContactMobile"), field(fields, "primaryContactEmail"));
+        return new PackageBooking(valueOr(document.id, field(fields, "bookingId")), field(fields, "userId"),
+                field(fields, "packageId"), field(fields, "packageName"), field(fields, "route"), field(fields, "duration"),
+                contact, decodeTravellers(field(fields, "travellers")), decodeStringMap(field(fields, "selections")),
+                decodeIntegerMap(field(fields, "componentPrices")), parseInt(numberField(fields, "baseAmount"), 0),
+                parseInt(numberField(fields, "finalAmount"), 0), firstNonBlank(field(fields, "currency"), "INR"),
+                field(fields, "paymentMode"), field(fields, "paymentStatus"), field(fields, "bookingStatus"),
+                firstNonBlank(field(fields, "applicationReference"), field(fields, "bookingId")), field(fields, "createdAt"));
+    }
+
+    private String encodeStringMap(Map<String, String> values) {
+        return values.entrySet().stream().map(entry -> encode(entry.getKey()) + ":" + encode(entry.getValue()))
+                .collect(java.util.stream.Collectors.joining(";"));
+    }
+
+    private Map<String, String> decodeStringMap(String value) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (value == null || value.isBlank()) return result;
+        for (String entry : value.split(";")) { String[] pair = entry.split(":", 2); if (pair.length == 2) result.put(decode(pair[0]), decode(pair[1])); }
+        return result;
+    }
+
+    private String encodeIntegerMap(Map<String, Integer> values) {
+        return values.entrySet().stream().map(entry -> encode(entry.getKey()) + ":" + entry.getValue())
+                .collect(java.util.stream.Collectors.joining(";"));
+    }
+
+    private Map<String, Integer> decodeIntegerMap(String value) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        if (value == null || value.isBlank()) return result;
+        for (String entry : value.split(";")) { String[] pair = entry.split(":", 2); if (pair.length == 2) result.put(decode(pair[0]), parseInt(pair[1], 0)); }
+        return result;
+    }
+
+    private String encodeTravellers(List<PackageBooking.BookingTraveller> travellers) {
+        return travellers.stream().map(traveller -> String.join(":", encode(traveller.fullName()), Integer.toString(traveller.age()),
+                encode(traveller.gender()), encode(traveller.idType()), encode(traveller.maskedId())))
+                .collect(java.util.stream.Collectors.joining(";"));
+    }
+
+    private List<PackageBooking.BookingTraveller> decodeTravellers(String value) {
+        List<PackageBooking.BookingTraveller> result = new ArrayList<>();
+        if (value == null || value.isBlank()) return result;
+        for (String entry : value.split(";")) { String[] parts = entry.split(":", -1); if (parts.length == 5) result.add(new PackageBooking.BookingTraveller(decode(parts[0]), parseInt(parts[1], 0), decode(parts[2]), decode(parts[3]), decode(parts[4]))); }
+        return result;
+    }
+
+    private String encode(String value) { return Base64.getUrlEncoder().withoutPadding().encodeToString((value == null ? "" : value).getBytes(StandardCharsets.UTF_8)); }
+    private String decode(String value) { try { return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8); } catch (IllegalArgumentException ignored) { return ""; } }
 
     private AppDataStore.BookingRecord bookingFrom(Document document) {
         String fields = document.fields;
@@ -604,6 +539,52 @@ public final class FirestoreGateway implements GhatRepository {
                 firstNonBlank(field(fields, "paymentStatus"), "UNPAID"),
                 field(fields, "internalPaymentId"),
                 field(fields, "razorpayPaymentId"));
+    }
+
+    private AppDataStore.PujaBookingRecord pujaBookingFrom(Document document) {
+        String fields = document.fields;
+        return new AppDataStore.PujaBookingRecord(
+                valueOr(document.id, field(fields, "bookingId")),
+                field(fields, "userId"),
+                field(fields, "userName"),
+                field(fields, "userPhone"),
+                field(fields, "userEmail"),
+                field(fields, "serviceId"),
+                field(fields, "serviceName"),
+                firstNonBlank(field(fields, "serviceType"), field(fields, "pujaType")),
+                field(fields, "providerId"),
+                field(fields, "providerName"),
+                field(fields, "templeOrGhat"),
+                firstNonBlank(field(fields, "date"), field(fields, "bookingDate")),
+                firstNonBlank(field(fields, "time"), field(fields, "bookingTime")),
+                firstNonBlank(field(fields, "location"), field(fields, "locationName")),
+                parseInt(numberField(fields, "devoteesCount"), 1),
+                field(fields, "language"),
+                field(fields, "mode"),
+                parseLong(firstNonBlank(numberField(fields, "amount"), numberField(fields, "totalAmount")), 0),
+                firstNonBlank(field(fields, "bookingStatus"), "PENDING"),
+                firstNonBlank(field(fields, "paymentStatus"), "UNPAID"),
+                field(fields, "createdAt"),
+                field(fields, "updatedAt"),
+                field(fields, "locationId"),
+                field(fields, "locationName"),
+                "true".equalsIgnoreCase(boolField(fields, "samagriSelected")),
+                parseLong(numberField(fields, "samagriAmount"), 0),
+                "true".equalsIgnoreCase(boolField(fields, "prasadSelected")),
+                parseLong(numberField(fields, "prasadAmount"), 0),
+                parseLong(numberField(fields, "basePrice"), 0),
+                parseLong(numberField(fields, "serviceFee"), 0),
+                parseLong(firstNonBlank(numberField(fields, "totalAmount"), numberField(fields, "amount")), 0),
+                field(fields, "specialRequirements"),
+                field(fields, "internalPaymentId"),
+                field(fields, "razorpayOrderId"),
+                field(fields, "razorpayPaymentId"),
+                field(fields, "paymentMethod"),
+                field(fields, "paymentCreatedAt"),
+                field(fields, "paymentCompletedAt"),
+                field(fields, "paymentFailureReason"),
+                field(fields, "qrTicketId"),
+                field(fields, "qrVerificationToken"));
     }
 
     public void updateApprovalRequestStatus(String requestId, String status, String idToken)
@@ -637,7 +618,6 @@ public final class FirestoreGateway implements GhatRepository {
         fields.add(fieldJson("updatedBy", adminUid));
         fields.add(fieldJson("publishedAt", String.valueOf(System.currentTimeMillis())));
         fields.add(fieldJson("publishedBy", adminUid));
-        fields.addAll(mediaFieldsForModule(module, item));
         fields.addAll(moduleFields(module, item.detail));
         String json = fieldsJson(fields.toArray(new String[0]));
         sendAuthorizedPatch(documentUri(collection, item.id), json, idToken);
@@ -814,9 +794,7 @@ public final class FirestoreGateway implements GhatRepository {
                 email,
                 mobile,
                 role,
-                status,
-                field(body, "profilePhotoUrl"),
-                field(body, "profilePhotoPublicId"));
+                status);
     }
 
     public void saveUserProfile(UserProfile profile, String idToken) throws IOException, InterruptedException {
@@ -827,8 +805,6 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("mobile", profile.mobile()),
                 fieldJson("role", profile.role()),
                 fieldJson("status", profile.status()),
-                fieldJson("profilePhotoUrl", profile.profilePhotoUrl()),
-                fieldJson("profilePhotoPublicId", profile.profilePhotoPublicId()),
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())),
                 fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
         sendAuthorizedPatch(documentUri("users", profile.uid()), json, idToken);
@@ -847,11 +823,6 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("description", account.category + " service for Simhastha pilgrims"),
                 fieldJson("operatingHours", "Not provided"),
                 fieldJson("priceRange", "Not provided"),
-                fieldJson("logoUrl", account.logoUrl),
-                fieldJson("logoPublicId", account.logoPublicId),
-                fieldJson("coverPhotoUrl", account.coverPhotoUrl),
-                fieldJson("coverPhotoPublicId", account.coverPhotoPublicId),
-                stringArrayFieldJson("galleryImages", account.galleryImages.stream().map(CloudImage::serialize).toList()),
                 fieldJson("status", "pending"),
                 boolFieldJson("approved", false),
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())),
@@ -881,9 +852,7 @@ public final class FirestoreGateway implements GhatRepository {
         String resolvedOwnerId = valueOr(ownerId, field(fields, "ownerId"));
         return new BusinessProfile(ownerId, resolvedOwnerId, field(fields, "businessName"), field(fields, "ownerName"),
                 field(fields, "category"), field(fields, "location"), field(fields, "description"),
-                field(fields, "status"), boolField(fields, "approved"), field(fields, "logoUrl"),
-                field(fields, "logoPublicId"), field(fields, "coverPhotoUrl"), field(fields, "coverPhotoPublicId"),
-                stringListField(fields, "galleryImages").stream().map(CloudImage::parse).toList());
+                field(fields, "status"), boolField(fields, "approved"));
     }
 
     public List<BusinessInventoryItem> loadBusinessItems(String businessId, String ownerId, String idToken)
@@ -943,101 +912,6 @@ public final class FirestoreGateway implements GhatRepository {
                 + "&updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt"), json, idToken);
     }
 
-    public void updateUserProfileDetails(String uid, String name, String email, String mobile,
-            String dateOfBirth, String gender, String address, String idToken) throws IOException, InterruptedException {
-        String json = fieldsJson(
-                fieldJson("name", name),
-                fieldJson("email", email),
-                fieldJson("mobile", mobile),
-                fieldJson("dateOfBirth", dateOfBirth),
-                fieldJson("gender", gender),
-                fieldJson("address", address),
-                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(URI.create(documentUrl("users", uid)
-                + "&updateMask.fieldPaths=name"
-                + "&updateMask.fieldPaths=email"
-                + "&updateMask.fieldPaths=mobile"
-                + "&updateMask.fieldPaths=dateOfBirth"
-                + "&updateMask.fieldPaths=gender"
-                + "&updateMask.fieldPaths=address"
-                + "&updateMask.fieldPaths=updatedAt"), json, idToken);
-    }
-
-    public void updateUserProfilePhoto(
-        String uid,
-        String profilePhotoUrl,
-        String profilePhotoPublicId,
-        String idToken
-) throws IOException, InterruptedException {
-
-    String json = fieldsJson(
-            fieldJson("profilePhotoUrl", profilePhotoUrl),
-            fieldJson("profilePhotoPublicId", profilePhotoPublicId),
-            fieldJson("updatedAt", String.valueOf(System.currentTimeMillis()))
-    );
-
-    sendAuthorizedPatch(
-            URI.create(documentUrl("users", uid)
-                    + "&updateMask.fieldPaths=profilePhotoUrl"
-                    + "&updateMask.fieldPaths=profilePhotoPublicId"
-                    + "&updateMask.fieldPaths=updatedAt"),
-            json,
-            idToken
-    );
-}
-
-    public void updateBusinessMedia(String businessId, String logoUrl, String logoPublicId,
-            String coverPhotoUrl, String coverPhotoPublicId, List<CloudImage> galleryImages, String idToken)
-            throws IOException, InterruptedException {
-        String json = fieldsJson(
-                fieldJson("logoUrl", logoUrl),
-                fieldJson("logoPublicId", logoPublicId),
-                fieldJson("coverPhotoUrl", coverPhotoUrl),
-                fieldJson("coverPhotoPublicId", coverPhotoPublicId),
-                stringArrayFieldJson("galleryImages", (galleryImages == null ? List.<CloudImage>of() : galleryImages)
-                        .stream().map(CloudImage::serialize).toList()),
-                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(URI.create(documentUrl("businesses", businessId)
-                        + "&updateMask.fieldPaths=logoUrl&updateMask.fieldPaths=logoPublicId"
-                        + "&updateMask.fieldPaths=coverPhotoUrl&updateMask.fieldPaths=coverPhotoPublicId"
-                        + "&updateMask.fieldPaths=galleryImages&updateMask.fieldPaths=updatedAt"),
-                json, idToken);
-    }
-
-    private List<String> mediaFieldsForModule(String module, AppDataStore.ServiceItem item) {
-        if (item == null || (item.imageUrl.isBlank() && item.imagePublicId.isBlank()
-                && (item.galleryImages == null || item.galleryImages.isEmpty()))) {
-            return List.of();
-        }
-        List<String> fields = new ArrayList<>();
-        switch (module) {
-            case "packages" -> {
-                fields.add(fieldJson("packageThumbnailUrl", item.imageUrl));
-                fields.add(fieldJson("packageThumbnailPublicId", item.imagePublicId));
-                fields.add(fieldJson("thumbnailUrl", item.imageUrl));
-                fields.add(fieldJson("thumbnailPublicId", item.imagePublicId));
-            }
-            case "puja" -> {
-                fields.add(fieldJson("pujaImageUrl", item.imageUrl));
-                fields.add(fieldJson("pujaImagePublicId", item.imagePublicId));
-                fields.add(fieldJson("imageUrl", item.imageUrl));
-                fields.add(fieldJson("imagePublicId", item.imagePublicId));
-            }
-            case "stay" -> {
-                fields.add(fieldJson("mainImageUrl", item.imageUrl));
-                fields.add(fieldJson("mainImagePublicId", item.imagePublicId));
-                fields.add(fieldJson("imageUrl", item.imageUrl));
-                fields.add(fieldJson("imagePublicId", item.imagePublicId));
-            }
-            default -> {
-                fields.add(fieldJson("imageUrl", item.imageUrl));
-                fields.add(fieldJson("imagePublicId", item.imagePublicId));
-            }
-        }
-        fields.add(stringArrayFieldJson("galleryImages", item.galleryImages.stream().map(CloudImage::serialize).toList()));
-        return fields;
-    }
-
     public void updateDocumentStatus(String collection, String documentId, String status, boolean approved,
             String idToken) throws IOException, InterruptedException {
         String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
@@ -1091,6 +965,57 @@ public final class FirestoreGateway implements GhatRepository {
         sendAuthorizedPatch(documentUri("bookings", booking.bookingId), json, idToken);
     }
 
+    /** Kumbh-package confirmations have their own collection and never share the generic bookings schema. */
+    public void savePackageBooking(PackageBooking booking, String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("bookingId", booking.bookingId()), fieldJson("userId", booking.userId()),
+                fieldJson("packageId", booking.packageId()), fieldJson("packageName", booking.packageName()),
+                fieldJson("route", booking.route()), fieldJson("duration", booking.duration()),
+                fieldJson("primaryContactName", booking.primaryContact().fullName()),
+                fieldJson("primaryContactMobile", booking.primaryContact().mobileNumber()),
+                fieldJson("primaryContactEmail", booking.primaryContact().emailAddress()),
+                numberFieldJson("travellerCount", booking.travellers().size()),
+                fieldJson("travellers", encodeTravellers(booking.travellers())),
+                fieldJson("selections", encodeStringMap(booking.selections())),
+                fieldJson("componentPrices", encodeIntegerMap(booking.componentPrices())),
+                numberFieldJson("baseAmount", booking.baseAmount()), numberFieldJson("finalAmount", booking.finalAmount()),
+                fieldJson("currency", booking.currency()), fieldJson("paymentMode", booking.paymentMode()),
+                fieldJson("paymentStatus", booking.paymentStatus()), fieldJson("bookingStatus", booking.bookingStatus()),
+                fieldJson("applicationReference", booking.demoReference()), fieldJson("createdAt", booking.createdAt()));
+        URI uri = documentUri("package_bookings", booking.bookingId());
+        String path = "package_bookings/" + booking.bookingId();
+        boolean tokenPresent = idToken != null && !idToken.isBlank();
+        LOGGER.info(() -> "Kumbh package booking Firestore CREATE: bookingId=" + booking.bookingId()
+                + ", ownerUid=" + booking.userId() + ", packageId=" + booking.packageId()
+                + ", path=" + path + ", operation=CREATE, authTokenPresent=" + tokenPresent);
+        HttpResponse<String> response = client.send(authorizedBuilder(uri, idToken)
+                .timeout(Duration.ofSeconds(8))
+                .header("Content-Type", "application/json")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(json))
+                .build(), HttpResponse.BodyHandlers.ofString());
+        String firestoreMessage = firestoreErrorMessage(response.body());
+        if (response.statusCode() >= 400) {
+            LOGGER.warning(() -> "Kumbh package booking Firestore CREATE failed: bookingId=" + booking.bookingId()
+                    + ", ownerUid=" + booking.userId() + ", path=" + path + ", operation=CREATE, httpStatus="
+                    + response.statusCode() + ", firestoreError=" + firestoreMessage);
+            throw new FirestoreWriteException(response.statusCode(), firestoreMessage);
+        }
+        LOGGER.info(() -> "Kumbh package booking Firestore CREATE succeeded: bookingId=" + booking.bookingId()
+                + ", ownerUid=" + booking.userId() + ", path=" + path + ", operation=CREATE, httpStatus="
+                + response.statusCode());
+    }
+
+    public List<PackageBooking> loadPackageBookingsForUser(String userId, String idToken)
+            throws IOException, InterruptedException {
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"package_bookings\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"userId\"},\"op\":\"EQUAL\","
+                + "\"value\":{\"stringValue\":\"" + escape(userId) + "\"}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())), query, idToken);
+        List<PackageBooking> records = new ArrayList<>();
+        for (Document document : parseDocuments(json)) records.add(packageBookingFrom(document));
+        return records;
+    }
+
     public void saveTransportRoute(AppDataStore.RouteRecord route, String idToken)
             throws IOException, InterruptedException {
         String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
@@ -1116,6 +1041,201 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("updatedAt", now),
                 fieldJson("updatedBy", adminUid));
         sendAuthorizedPatch(documentUri("transportRoutes", route.routeId), json, idToken);
+    }
+
+    public void savePujaProvider(AppDataStore.PujaProviderRecord provider, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("fullName", provider.fullName),
+                fieldJson("profilePhoto", provider.profilePhoto),
+                fieldJson("phone", provider.phone),
+                fieldJson("email", provider.email),
+                fieldJson("address", provider.address),
+                fieldJson("experience", provider.experience),
+                fieldJson("specialization", provider.specialization),
+                fieldJson("languages", provider.languages),
+                fieldJson("templeOrganization", provider.templeOrganization),
+                fieldJson("identityDocument", provider.identityDocument),
+                fieldJson("supportingCertificates", provider.supportingCertificates),
+                fieldJson("servicesOffered", provider.servicesOffered),
+                fieldJson("serviceLocations", provider.serviceLocations),
+                fieldJson("status", provider.status),
+                boolFieldJson("approved", provider.approved),
+                boolFieldJson("verified", provider.approved),
+                fieldJson("createdAt", valueOr(now, provider.createdAt)),
+                fieldJson("updatedAt", now));
+        sendAuthorizedPatch(documentUri("pujaProviders", provider.providerId), json, idToken);
+    }
+
+    public void savePujaService(AppDataStore.PujaServiceRecord service, String idToken)
+            throws IOException, InterruptedException {
+        String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("serviceId", service.serviceId),
+                fieldJson("name", service.name),
+                fieldJson("pujaName", service.name),
+                fieldJson("description", service.description),
+                fieldJson("pujaType", service.pujaType),
+                fieldJson("templeOrGhat", service.templeOrGhat),
+                fieldJson("templeGhat", service.templeOrGhat),
+                fieldJson("price", service.price),
+                fieldJson("duration", service.duration),
+                fieldJson("providerId", service.providerId),
+                fieldJson("providerName", service.providerName),
+                fieldJson("provider", service.providerName),
+                fieldJson("verificationStatus", service.verificationStatus),
+                fieldJson("availableSlots", service.availableSlots),
+                fieldJson("mode", service.mode),
+                fieldJson("languages", service.languages),
+                fieldJson("imageUrl", service.imageUrl),
+                fieldJson("imagePublicId", service.imagePublicId),
+                fieldJson("bookingStatus", service.bookingStatus),
+                fieldJson("status", service.status),
+                boolFieldJson("published", service.published),
+                boolFieldJson("enabled", service.enabled),
+                boolFieldJson("active", service.enabled),
+                boolFieldJson("adminApproved", service.adminApproved),
+                boolFieldJson("approved", service.adminApproved),
+                boolFieldJson("verified", "VERIFIED".equalsIgnoreCase(service.verificationStatus)),
+                fieldJson("createdAt", valueOr(now, service.createdAt)),
+                fieldJson("updatedAt", now),
+                fieldJson("createdBy", valueOr(adminUid, service.createdBy)),
+                fieldJson("updatedBy", adminUid),
+                fieldJson("updatedByAdminId", adminUid),
+                fieldJson("verifiedAt", "VERIFIED".equalsIgnoreCase(service.verificationStatus)
+                        ? valueOr(now, service.verifiedAt)
+                        : service.verifiedAt),
+                fieldJson("verifiedBy", "VERIFIED".equalsIgnoreCase(service.verificationStatus)
+                        ? valueOr(adminUid, service.verifiedBy)
+                        : service.verifiedBy));
+        sendAuthorizedPatch(documentUri("pujaServices", service.serviceId), json, idToken);
+    }
+
+    public void deletePujaService(String serviceId, String idToken) throws IOException, InterruptedException {
+        sendAuthorizedDelete(documentUri("pujaServices", serviceId), idToken);
+    }
+
+    public void savePujaBooking(AppDataStore.PujaBookingRecord booking, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("bookingId", booking.bookingId),
+                fieldJson("userId", booking.userId),
+                fieldJson("userName", booking.userName),
+                fieldJson("userPhone", booking.userPhone),
+                fieldJson("userEmail", booking.userEmail),
+                fieldJson("serviceId", booking.serviceId),
+                fieldJson("serviceName", booking.serviceName),
+                fieldJson("serviceType", booking.serviceType),
+                fieldJson("providerId", booking.providerId),
+                fieldJson("providerName", booking.providerName),
+                fieldJson("templeOrGhat", booking.templeOrGhat),
+                fieldJson("date", booking.date),
+                fieldJson("bookingDate", booking.date),
+                fieldJson("time", booking.time),
+                fieldJson("bookingTime", booking.time),
+                fieldJson("locationId", booking.locationId),
+                fieldJson("location", booking.location),
+                fieldJson("locationName", booking.locationName),
+                numberFieldJson("devoteesCount", booking.devoteesCount),
+                fieldJson("language", booking.language),
+                fieldJson("mode", booking.mode),
+                numberFieldJson("amount", booking.amount),
+                boolFieldJson("samagriSelected", booking.samagriSelected),
+                numberFieldJson("samagriAmount", booking.samagriAmount),
+                boolFieldJson("prasadSelected", booking.prasadSelected),
+                numberFieldJson("prasadAmount", booking.prasadAmount),
+                numberFieldJson("basePrice", booking.basePrice),
+                numberFieldJson("serviceFee", booking.serviceFee),
+                numberFieldJson("totalAmount", booking.totalAmount),
+                fieldJson("specialRequirements", booking.specialRequirements),
+                fieldJson("bookingStatus", booking.bookingStatus),
+                fieldJson("paymentStatus", booking.paymentStatus),
+                fieldJson("internalPaymentId", booking.internalPaymentId),
+                fieldJson("razorpayOrderId", booking.razorpayOrderId),
+                fieldJson("razorpayPaymentId", booking.razorpayPaymentId),
+                fieldJson("paymentMethod", booking.paymentMethod),
+                fieldJson("paymentCreatedAt", booking.paymentCreatedAt),
+                fieldJson("paymentCompletedAt", booking.paymentCompletedAt),
+                fieldJson("paymentFailureReason", booking.paymentFailureReason),
+                fieldJson("qrTicketId", booking.qrTicketId),
+                fieldJson("qrVerificationToken", booking.qrVerificationToken),
+                fieldJson("createdAt", valueOr(now, booking.createdAt)),
+                fieldJson("updatedAt", now));
+        sendAuthorizedPatch(documentUri("pujaBookings", booking.bookingId), json, idToken);
+    }
+
+    public void updatePujaBookingStatus(String bookingId, String bookingStatus, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("bookingStatus", bookingStatus),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("pujaBookings", bookingId)
+                        + "&updateMask.fieldPaths=bookingStatus&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void updatePujaBookingQrTicket(String bookingId, String qrTicketId, String qrVerificationToken,
+            String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("qrTicketId", qrTicketId),
+                fieldJson("qrVerificationToken", qrVerificationToken),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("pujaBookings", bookingId)
+                        + "&updateMask.fieldPaths=qrTicketId"
+                        + "&updateMask.fieldPaths=qrVerificationToken"
+                        + "&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void updatePujaBookingPayment(String bookingId, String bookingStatus, String paymentStatus,
+            String internalPaymentId, String razorpayOrderId, String razorpayPaymentId, String paymentMethod,
+            String paymentCreatedAt, String paymentCompletedAt, String paymentFailureReason, String idToken)
+            throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("bookingStatus", bookingStatus),
+                fieldJson("paymentStatus", paymentStatus),
+                fieldJson("internalPaymentId", internalPaymentId),
+                fieldJson("razorpayOrderId", razorpayOrderId),
+                fieldJson("razorpayPaymentId", razorpayPaymentId),
+                fieldJson("paymentMethod", paymentMethod),
+                fieldJson("paymentCreatedAt", paymentCreatedAt),
+                fieldJson("paymentCompletedAt", paymentCompletedAt),
+                fieldJson("paymentFailureReason", paymentFailureReason),
+                fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
+        sendAuthorizedPatch(URI.create(documentUrl("pujaBookings", bookingId)
+                        + "&updateMask.fieldPaths=bookingStatus"
+                        + "&updateMask.fieldPaths=paymentStatus"
+                        + "&updateMask.fieldPaths=internalPaymentId"
+                        + "&updateMask.fieldPaths=razorpayOrderId"
+                        + "&updateMask.fieldPaths=razorpayPaymentId"
+                        + "&updateMask.fieldPaths=paymentMethod"
+                        + "&updateMask.fieldPaths=paymentCreatedAt"
+                        + "&updateMask.fieldPaths=paymentCompletedAt"
+                        + "&updateMask.fieldPaths=paymentFailureReason"
+                        + "&updateMask.fieldPaths=updatedAt"),
+                json, idToken);
+    }
+
+    public void saveFraudReport(AppDataStore.FraudReportRecord report, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("reportId", report.reportId),
+                fieldJson("userId", report.userId),
+                fieldJson("userName", report.userName),
+                fieldJson("bookingId", report.bookingId),
+                fieldJson("serviceId", report.serviceId),
+                fieldJson("serviceName", report.serviceName),
+                fieldJson("providerId", report.providerId),
+                fieldJson("providerName", report.providerName),
+                fieldJson("issue", report.issue),
+                fieldJson("status", report.status),
+                fieldJson("createdAt", valueOr(now, report.createdAt)),
+                fieldJson("updatedAt", now));
+        sendAuthorizedPatch(documentUri("fraudReports", report.reportId), json, idToken);
     }
 
     public void updateRouteFlags(String routeId, boolean published, boolean active, String idToken)
@@ -1164,6 +1284,37 @@ public final class FirestoreGateway implements GhatRepository {
         patch(documentUrl("appItems", item.id), itemJson(module, item));
     }
 
+    /** Package documents are intentionally a dedicated collection rather than generic operational items. */
+    public List<ManagedKumbhPackage> loadKumbhPackages(String idToken) throws IOException, InterruptedException {
+        List<ManagedKumbhPackage> result = new ArrayList<>();
+        List<Document> documents;
+        if (idToken == null || idToken.isBlank()) {
+            String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"kumbh_packages\"}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"status\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"PUBLISHED\"}}}}}";
+            documents = parseDocuments(post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())), query, ""));
+        } else {
+            documents = loadCollectionDocuments("kumbh_packages", idToken);
+        }
+        for (Document document : documents) {
+            String fields = document.fields;
+            List<String> activities = splitLines(field(fields, "itineraryActivities"));
+            List<KumbhPackage.Item> items = new ArrayList<>();
+            for (String activity : activities) items.add(new KumbhPackage.Item(ItineraryItemType.OTHER, activity, ""));
+            List<KumbhPackage.Day> itinerary = items.isEmpty() ? List.of() : List.of(new KumbhPackage.Day(valueOr("Day 1 — Journey", field(fields, "itineraryDayTitle")), items));
+            Map<String, String> policies = new LinkedHashMap<>();
+            for (String policy : splitLines(field(fields, "policies"))) { int split = policy.indexOf(':'); policies.put(split < 0 ? "Policy" : policy.substring(0, split).trim(), split < 0 ? policy : policy.substring(split + 1).trim()); }
+            result.add(new ManagedKumbhPackage(document.id, field(fields, "packageCode"), field(fields, "name"), category(field(fields, "category")), field(fields, "theme"), field(fields, "badge"), field(fields, "origin"), valueOr("Nashik – Simhastha 2027", field(fields, "destination")), integer(fields, "days"), integer(fields, "nights"), field(fields, "shortDescription"), field(fields, "description"), splitLines(field(fields, "travelOptions")), splitLines(field(fields, "stayOptions")), splitLines(field(fields, "mealOptions")), splitLines(field(fields, "facilities")), splitLines(field(fields, "touristPlaces")), itinerary, integer(fields, "basePrice"), integer(fields, "startingPrice"), integer(fields, "originalPrice"), integer(fields, "discount"), splitLines(field(fields, "inclusions")), splitLines(field(fields, "exclusions")), policies, field(fields, "availableFrom"), field(fields, "availableUntil"), field(fields, "departureDates"), integer(fields, "maximumCapacity"), integer(fields, "minimumTravellers"), status(field(fields, "status")), field(fields, "createdBy"), field(fields, "createdAt"), field(fields, "updatedAt"), field(fields, "publishedAt"), media(field(fields, "coverImage"), PackageMediaType.COVER), media(field(fields, "heroImage"), PackageMediaType.HERO), gallery(field(fields, "gallery"))));
+        }
+        return result;
+    }
+
+    public void saveKumbhPackage(ManagedKumbhPackage p, String idToken) throws IOException, InterruptedException {
+        String itineraryTitle = p.itinerary().isEmpty() ? "" : p.itinerary().get(0).title();
+        String itineraryActivities = p.itinerary().isEmpty() ? "" : p.itinerary().stream().flatMap(day -> day.items().stream()).map(KumbhPackage.Item::text).collect(java.util.stream.Collectors.joining("\n"));
+        String policies = p.policies().entrySet().stream().map(e -> e.getKey() + ": " + e.getValue()).collect(java.util.stream.Collectors.joining("\n"));
+        String json = fieldsJson(fieldJson("packageId", p.packageId()), fieldJson("packageCode", p.packageCode()), fieldJson("name", p.name()), fieldJson("category", p.category().name()), fieldJson("theme", p.theme()), fieldJson("badge", p.badge()), fieldJson("origin", p.origin()), fieldJson("destination", p.destination()), numberFieldJson("days", p.days()), numberFieldJson("nights", p.nights()), fieldJson("shortDescription", p.shortDescription()), fieldJson("description", p.description()), fieldJson("travelOptions", joinLines(p.travelOptions())), fieldJson("stayOptions", joinLines(p.stayOptions())), fieldJson("mealOptions", joinLines(p.mealOptions())), fieldJson("facilities", joinLines(p.facilities())), fieldJson("touristPlaces", joinLines(p.touristPlaces())), fieldJson("itineraryDayTitle", itineraryTitle), fieldJson("itineraryActivities", itineraryActivities), numberFieldJson("basePrice", p.basePrice()), numberFieldJson("startingPrice", p.startingPrice()), numberFieldJson("originalPrice", p.originalPrice()), numberFieldJson("discount", p.discount()), fieldJson("inclusions", joinLines(p.inclusions())), fieldJson("exclusions", joinLines(p.exclusions())), fieldJson("policies", policies), fieldJson("availableFrom", p.availableFrom()), fieldJson("availableUntil", p.availableUntil()), fieldJson("departureDates", p.departureDates()), numberFieldJson("maximumCapacity", p.maximumCapacity()), numberFieldJson("minimumTravellers", p.minimumTravellers()), fieldJson("status", p.status().name()), fieldJson("createdBy", p.createdBy()), fieldJson("createdAt", p.createdAt()), fieldJson("updatedAt", p.updatedAt()), fieldJson("publishedAt", p.publishedAt()), fieldJson("coverImage", mediaValue(p.coverImage())), fieldJson("heroImage", mediaValue(p.heroImage())), fieldJson("gallery", galleryValue(p.gallery())));
+        sendAuthorizedPatch(documentUri("kumbh_packages", p.packageId()), json, idToken);
+    }
+
     public void saveItem(String module, AppDataStore.ServiceItem item, String idToken) throws IOException, InterruptedException {
         sendAuthorizedPatch(documentUri("appItems", item.id), itemJson(module, item), idToken);
     }
@@ -1203,7 +1354,7 @@ public final class FirestoreGateway implements GhatRepository {
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw firestoreFailure("GET", URI.create(url), response);
+            throw new IOException("Firestore read failed: " + response.statusCode());
         }
         return response.body();
     }
@@ -1215,7 +1366,7 @@ public final class FirestoreGateway implements GhatRepository {
                 .POST(HttpRequest.BodyPublishers.ofString(json))
                 .build(), HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() >= 400) {
-            throw firestoreFailure("POST", uri, response);
+            throw new IOException("Firestore query failed: " + response.statusCode());
         }
         return response.body();
     }
@@ -1263,24 +1414,23 @@ public final class FirestoreGateway implements GhatRepository {
                 .method("PATCH", HttpRequest.BodyPublishers.ofString(json))
                 .build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-        LOGGER.info("Firestore PATCH response: path=" + uri.getPath() + ", status=" + response.statusCode());
         if (response.statusCode() >= 400) {
-            throw firestoreFailure("PATCH", uri, response);
+            throw new IOException("Firestore write failed: HTTP " + response.statusCode()
+                    + " " + compactError(response.body()));
         }
     }
 
-    private IOException firestoreFailure(String method, URI uri, HttpResponse<String> response) {
-        String body = response.body() == null ? "" : response.body();
-        return new IOException("Firestore " + method + " failed: HTTP " + response.statusCode() + " body=" + body);
-    }
-
     private void sendAuthorizedDelete(URI uri, String idToken) throws IOException, InterruptedException {
-        HttpResponse<String> response = client.send(authorizedBuilder(uri, idToken).timeout(Duration.ofSeconds(8)).DELETE().build(), HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() >= 400) throw new IOException("Firestore delete failed: " + response.statusCode());
+        HttpRequest request = authorizedBuilder(uri, idToken)
+                .timeout(Duration.ofSeconds(8))
+                .DELETE()
+                .build();
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 400 && response.statusCode() != 404) {
+            throw new IOException("Firestore delete failed: HTTP " + response.statusCode()
+                    + " " + compactError(response.body()));
+        }
     }
-
-    private java.time.LocalTime parseTime(String value) { return value == null || value.isBlank() ? null : java.time.LocalTime.parse(value); }
-    private String timeText(java.time.LocalTime value) { return value == null ? "" : value.toString(); }
 
     private HttpRequest.Builder authorizedBuilder(URI uri, String idToken) {
         HttpRequest.Builder builder = HttpRequest.newBuilder(uri);
@@ -1322,6 +1472,20 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())));
     }
 
+    private String firestoreErrorMessage(String body) {
+        Matcher matcher = Pattern.compile("\\\"message\\\"\\s*:\\s*\\\"(.*?)\\\"", Pattern.DOTALL)
+                .matcher(body == null ? "" : body);
+        if (matcher.find()) return unescape(matcher.group(1)).replaceAll("[\\r\\n]+", " ").trim();
+        String compact = (body == null ? "" : body).replaceAll("[\\r\\n]+", " ").trim();
+        return compact.isBlank() ? "No Firestore error message returned." : compact.substring(0, Math.min(600, compact.length()));
+    }
+
+    private static final class FirestoreWriteException extends IOException {
+        private FirestoreWriteException(int status, String message) {
+            super("Firestore write failed: HTTP " + status + " — " + message);
+        }
+    }
+
     private String fieldsJson(String... fields) {
         return "{\"fields\":{" + String.join(",", fields) + "}}";
     }
@@ -1338,62 +1502,15 @@ public final class FirestoreGateway implements GhatRepository {
         return "\"" + escape(name) + "\":{\"integerValue\":\"" + value + "\"}";
     }
 
-    private String numberOrNullFieldJson(String name, Number value) {
-        return value == null ? "\"" + escape(name) + "\":{\"nullValue\":null}"
-                : "\"" + escape(name) + "\":{\"doubleValue\":" + value + "}";
-    }
-
-    private String stringArrayFieldJson(String name, List<String> values) {
-        String entries = (values == null ? List.<String>of() : values).stream()
-                .map(value -> "{\"stringValue\":\"" + escape(value) + "\"}").collect(java.util.stream.Collectors.joining(","));
-        return "\"" + escape(name) + "\":{\"arrayValue\":{\"values\":[" + entries + "]}}";
-    }
-
     private List<Document> parseDocuments(String json) {
         List<Document> documents = new ArrayList<>();
-        String source = json == null ? "" : json;
-        Matcher matcher = Pattern.compile("\"name\"\\s*:\\s*\"([^\"]+)\"").matcher(source);
+        Matcher matcher = DOCUMENT_PATTERN.matcher(json == null ? "" : json);
         while (matcher.find()) {
-            int fieldsKey = source.indexOf("\"fields\"", matcher.end());
-            if (fieldsKey < 0) continue;
-            int fieldsStart = source.indexOf('{', fieldsKey);
-            if (fieldsStart < 0) continue;
-            int fieldsEnd = matchingBrace(source, fieldsStart);
-            if (fieldsEnd < 0) continue;
             String name = unescape(matcher.group(1));
             String id = name.substring(name.lastIndexOf('/') + 1);
-            documents.add(new Document(id, source.substring(fieldsStart + 1, fieldsEnd)));
-            matcher.region(fieldsEnd, source.length());
+            documents.add(new Document(id, matcher.group(2)));
         }
         return documents;
-    }
-
-    private int matchingBrace(String text, int openIndex) {
-        int depth = 0;
-        boolean inString = false;
-        boolean escaping = false;
-        for (int index = openIndex; index < text.length(); index++) {
-            char ch = text.charAt(index);
-            if (escaping) {
-                escaping = false;
-                continue;
-            }
-            if (ch == '\\' && inString) {
-                escaping = true;
-                continue;
-            }
-            if (ch == '"') {
-                inString = !inString;
-                continue;
-            }
-            if (inString) continue;
-            if (ch == '{') depth++;
-            else if (ch == '}') {
-                depth--;
-                if (depth == 0) return index;
-            }
-        }
-        return -1;
     }
 
     private String field(String fieldsJson, String name) {
@@ -1419,9 +1536,6 @@ public final class FirestoreGateway implements GhatRepository {
         return matcher.find() ? matcher.group(1) : "";
     }
 
-    private Double nullableDouble(String value) { try { return value == null || value.isBlank() ? null : Double.valueOf(value); } catch (NumberFormatException ignored) { return null; } }
-    private String optionalNumberFieldJson(String name, Double value) { return value == null ? fieldJson(name, "") : "\"" + escape(name) + "\":{\"doubleValue\":" + value + "}"; }
-
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (notBlank(value)) {
@@ -1439,59 +1553,23 @@ public final class FirestoreGateway implements GhatRepository {
         }
     }
 
-    /** Query constraint is required because Firestore rules must be able to prove every returned ghat is public. */
-    private List<Document> loadPublishedGhatDocuments(String idToken) throws IOException, InterruptedException {
-        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"ghats\"}],\"where\":{\"compositeFilter\":{\"op\":\"AND\",\"filters\":["
-                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"published\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}},"
-                + "{\"fieldFilter\":{\"field\":{\"fieldPath\":\"active\"},\"op\":\"EQUAL\",\"value\":{\"booleanValue\":true}}}]}}}}";
-        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())),
-                query, idToken);
-        return parseDocuments(json);
+    private int integer(String fields, String name) { return parseInt(numberField(fields, name), 0); }
+    private PackageCategory category(String value) { try { return PackageCategory.valueOf(value); } catch (Exception ignored) { return PackageCategory.STANDARD; } }
+    private PackageStatus status(String value) { try { return PackageStatus.valueOf(value); } catch (Exception ignored) { return PackageStatus.DRAFT; } }
+    private List<String> splitLines(String value) { return java.util.Arrays.stream(value == null ? new String[0] : value.split("\\r?\\n")).map(String::trim).filter(v -> !v.isEmpty()).toList(); }
+    private String joinLines(List<String> values) { return String.join("\n", values == null ? List.of() : values); }
+    // Compact escaped metadata string; no image bytes/base64 are persisted in Firestore.
+    private PackageMedia media(String value, PackageMediaType fallbackType) {
+        if (value == null || value.isBlank()) return null;
+        String[] parts = value.split("\\|", -1);
+        try { return new PackageMedia(part(parts, 0), part(parts, 1), part(parts, 2), part(parts, 3), PackageMediaType.valueOf(part(parts, 4, fallbackType.name())), parseInt(part(parts, 5, "0"), 0), Boolean.parseBoolean(part(parts, 6, "false")), part(parts, 7)); } catch (Exception ignored) { return null; }
     }
-
-    private Integer integerField(String fieldsJson, String name) {
-        String value = numberField(fieldsJson, name);
-        if (!notBlank(value)) return null;
-        try { return Integer.valueOf(value.trim()); } catch (NumberFormatException exception) { return null; }
-    }
-
-    private Double decimalField(String fieldsJson, String name) {
-        String value = numberField(fieldsJson, name);
-        if (!notBlank(value)) return null;
-        try { return Double.valueOf(value.trim()); } catch (NumberFormatException exception) { return null; }
-    }
-
-    private String timestampField(String fieldsJson, String name) {
-        Matcher matcher = Pattern.compile("\"" + Pattern.quote(name)
-                + "\"\\s*:\\s*\\{\\s*\"timestampValue\"\\s*:\\s*\"(.*?)\"\\s*\\}", Pattern.DOTALL)
-                .matcher(fieldsJson == null ? "" : fieldsJson);
-        return matcher.find() ? unescape(matcher.group(1)) : "";
-    }
-
-    private List<String> stringListField(String fieldsJson, String name) {
-        String plainValue = field(fieldsJson, name);
-        if (notBlank(plainValue)) return splitValues(plainValue);
-        Matcher fieldMatcher = Pattern.compile("\"" + Pattern.quote(name)
-                + "\"\\s*:\\s*\\{\\s*\"arrayValue\"\\s*:\\s*\\{\\s*\"values\"\\s*:\\s*\\[(.*?)\\]", Pattern.DOTALL)
-                .matcher(fieldsJson == null ? "" : fieldsJson);
-        if (!fieldMatcher.find()) return List.of();
-        Matcher values = Pattern.compile("\"stringValue\"\\s*:\\s*\"(.*?)\"", Pattern.DOTALL).matcher(fieldMatcher.group(1));
-        List<String> result = new ArrayList<>();
-        while (values.find()) { String value = unescape(values.group(1)).trim(); if (!value.isBlank()) result.add(value); }
-        return result;
-    }
-
-    private List<String> splitValues(String value) {
-        if (!notBlank(value)) return List.of();
-        return java.util.Arrays.stream(value.split("[,|]"))
-                .map(String::trim).filter(this::notBlank).toList();
-    }
-
-    private <T extends Enum<T>> T enumValue(Class<T> type, String value, T fallback) {
-        if (!notBlank(value)) return fallback;
-        try { return Enum.valueOf(type, value.trim().toUpperCase(Locale.ROOT).replace(' ', '_').replace('-', '_')); }
-        catch (IllegalArgumentException exception) { return fallback; }
-    }
+    private List<PackageMedia> gallery(String value) { List<PackageMedia> result = new ArrayList<>(); for (String line : splitLines(value)) { PackageMedia media = media(line, PackageMediaType.GALLERY); if (media != null) result.add(media); } return result.stream().sorted(java.util.Comparator.comparingInt(PackageMedia::sortOrder)).toList(); }
+    private String mediaValue(PackageMedia media) { return media == null ? "" : String.join("|", safe(media.mediaId()), safe(media.url()), safe(media.publicId()), safe(media.caption()), media.mediaType().name(), String.valueOf(media.sortOrder()), String.valueOf(media.primary()), safe(media.createdAt())); }
+    private String galleryValue(List<PackageMedia> media) { return media == null ? "" : media.stream().sorted(java.util.Comparator.comparingInt(PackageMedia::sortOrder)).map(this::mediaValue).collect(java.util.stream.Collectors.joining("\n")); }
+    private String part(String[] value, int index) { return part(value, index, ""); }
+    private String part(String[] value, int index, String fallback) { return index < value.length ? value[index] : fallback; }
+    private String safe(String value) { return value == null ? "" : value.replace("|", " ").replace("\n", " ").replace("\r", " "); }
 
     private List<Document> loadOptionalCollectionDocuments(String collection, String idToken) {
         try {
@@ -1644,6 +1722,14 @@ public final class FirestoreGateway implements GhatRepository {
         return notBlank(value) ? value : fallback;
     }
 
+    private String compactError(String body) {
+        if (body == null || body.isBlank()) {
+            return "";
+        }
+        String compact = body.replaceAll("\\s+", " ").trim();
+        return compact.length() > 360 ? compact.substring(0, 360) + "..." : compact;
+    }
+
     private boolean notBlank(String value) {
         return value != null && !value.trim().isEmpty();
     }
@@ -1653,26 +1739,21 @@ public final class FirestoreGateway implements GhatRepository {
     }
 
     private String escape(String value) {
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+        return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "\\r").replace("\n", "\\n");
     }
 
     private String unescape(String value) {
-        return value.replace("\\\"", "\"").replace("\\\\", "\\");
+        return value.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"").replace("\\\\", "\\");
     }
 
     private record Document(String id, String fields) {
     }
 
-    public record UserProfile(String uid, String name, String email, String mobile, String role, String status,
-            String profilePhotoUrl, String profilePhotoPublicId) {
-        public UserProfile(String uid, String name, String email, String mobile, String role, String status) {
-            this(uid, name, email, mobile, role, status, "", "");
-        }
+    public record UserProfile(String uid, String name, String email, String mobile, String role, String status) {
     }
 
     public record BusinessProfile(String businessId, String ownerId, String businessName, String ownerName,
-            String category, String location, String description, String status, String approved, String logoUrl,
-            String logoPublicId, String coverPhotoUrl, String coverPhotoPublicId, List<CloudImage> galleryImages) {
+            String category, String location, String description, String status, String approved) {
     }
 
     public record BusinessInventoryItem(String itemId, String businessId, String ownerId, String category,

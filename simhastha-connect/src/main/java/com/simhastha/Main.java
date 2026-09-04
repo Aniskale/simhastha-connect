@@ -9,7 +9,7 @@ import javafx.stage.Stage;
 public class Main extends Application {
 
     @Override
-    public void start(Stage stage) {                    
+    public void start(Stage stage) {
 
         IntroPage introPage = new IntroPage();
         Scene scene = introPage.createScene(stage);
@@ -22,7 +22,11 @@ public class Main extends Application {
         stage.show();
     }
 
+
+
+
+
     public static void main(String[] args) {
         launch(args);
-    }
+    } 
 }

@@ -1,16 +1,8 @@
 package com.simhastha.view;
 
-import com.simhastha.config.CloudinaryFolders;
-import com.simhastha.model.CloudinaryUploadResult;
-import com.simhastha.service.CloudinaryService;
-
-import com.simhastha.model.Ghat;
-import com.simhastha.model.GhatOperationalState;
-import com.simhastha.service.GhatCatalogueService;
-import com.simhastha.service.GhatImageService;
-import com.simhastha.service.GhatService;
+import java.io.File;
 import java.net.URL;
-import java.time.Instant;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -22,7 +14,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.Optional;
+import java.util.EnumMap;
+import java.util.EnumSet;
 
+import javafx.animation.Animation;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -31,15 +29,17 @@ import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.CheckBox;
-import javafx.scene.control.DatePicker;
-import javafx.scene.control.Dialog;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextArea;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
@@ -50,11 +50,8 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
-
-import com.simhastha.schedule.ScheduleCategory;
-import com.simhastha.schedule.ScheduleEvent;
-import com.simhastha.schedule.ScheduleAlert;
-import com.simhastha.schedule.ScheduleService;
+import javafx.stage.FileChooser;
+import javafx.util.Duration;
 
 public class AdminDashboardPage {
 
@@ -73,17 +70,20 @@ public class AdminDashboardPage {
     private String editingRouteId = "";
     private String editingOperationalId = "";
     private String editingOperationalModule = "";
-    private final GhatService ghatService = new GhatService(new FirestoreGateway(FirebaseConfig.load()));
-    private final GhatCatalogueService ghatCatalogueService = new GhatCatalogueService();
-    private final GhatImageService ghatImageService = new GhatImageService();
-    private List<Ghat> managedGhats = List.of();
-    private VBox managedGhatRows;
-    private String ghatSearchQuery = "";
-    private String ghatLocationFilter = "All Locations";
-    private String ghatStatusFilter = "All Status";
-    private String ghatTypeFilter = "All Types";
-    private String ghatSort = "Name A-Z";
-    private final ScheduleService scheduleService = new ScheduleService();
+    private boolean adminRefreshInProgress;
+    private Timeline pujaAdminLiveRefresh;
+    private boolean pujaEditorDirty;
+    private boolean pujaEditorFocused;
+    private boolean pujaEditorUpdating;
+    private boolean pujaEditorVisible;
+    private String pendingPujaEditorServiceId = "";
+    private Path selectedPujaImageFile;
+    private String selectedPujaImageUrl = "";
+    private String selectedPujaImagePublicId = "";
+    private boolean selectedPujaImageRemoved;
+    private ImageView pujaImagePreview;
+    private Label pujaImageStatus;
+    private static final Map<String, Image> IMAGE_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
 
     public Scene createScene(Stage stage) {
         this.stage = stage;
@@ -100,6 +100,7 @@ public class AdminDashboardPage {
         ThemeManager.addTheme(scene, this);
         ThemeManager.addListener(() -> ThemeManager.applyTo(root));
         refreshAdminData();
+        startAdminPujaLiveRefreshIfNeeded();
         return scene;
     }
 
@@ -204,14 +205,43 @@ public class AdminDashboardPage {
     }
 
     private void refreshAdminData() {
+        if (adminRefreshInProgress) {
+            return;
+        }
+        adminRefreshInProgress = true;
         String token = AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken();
         java.util.concurrent.CompletableFuture.runAsync(() -> {
             AppDataStore.refreshFirebaseData(token);
             AppDataStore.refreshAdminOverview(token);
-        }).whenComplete((ignored, error) -> Platform.runLater(() -> showSection(selectedSection)));
+        }).whenComplete((ignored, error) -> Platform.runLater(() -> {
+            adminRefreshInProgress = false;
+            if (!isPujaEditorProtectedFromRefresh()) {
+                showSection(selectedSection);
+            }
+        }));
+    }
+
+    private void refreshAdminPujaData() {
+        if (adminRefreshInProgress || !"Puja Services".equals(selectedSection)) {
+            return;
+        }
+        adminRefreshInProgress = true;
+        String token = AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken();
+        java.util.concurrent.CompletableFuture.runAsync(() -> AppDataStore.refreshPujaFirebaseData(token))
+                .whenComplete((ignored, error) -> Platform.runLater(() -> {
+                    adminRefreshInProgress = false;
+                    if ("Puja Services".equals(selectedSection) && !isPujaEditorProtectedFromRefresh()) {
+                        showSection(selectedSection);
+                    }
+                }));
     }
 
     private void showSection(String section) {
+        if (!"Puja Services".equals(section)) {
+            pujaEditorDirty = false;
+            pujaEditorFocused = false;
+            pujaEditorUpdating = false;
+        }
         selectedSection = section;
         setActiveSection(section);
         Node page = switch (section) {
@@ -231,12 +261,27 @@ public class AdminDashboardPage {
             case "Schedule & Events" -> schedulePage();
             case "Announcements" -> announcementsPage();
             case "FAQs / Help Center" -> faqManagementPage();
-            case "Emergency" -> emergencyPage();
+            case "Emergency" -> {
+                loadEmergencyReportsAsync();
+                loadEmergencyServicesAsync();
+                yield emergencyPage();
+            }
             case "Reports & Analytics" -> reportsPage();
             case "System" -> systemPage();
             default -> dashboardPage();
         };
         root.setCenter(scroll(page));
+        startAdminPujaLiveRefreshIfNeeded();
+    }
+
+    private void startAdminPujaLiveRefreshIfNeeded() {
+        stopAdminPujaLiveRefresh();
+    }
+
+    private void stopAdminPujaLiveRefresh() {
+        if (pujaAdminLiveRefresh != null) {
+            pujaAdminLiveRefresh.stop();
+        }
     }
 
     private void setActiveSection(String section) {
@@ -318,6 +363,13 @@ public class AdminDashboardPage {
             items.add(new NotificationCenter.NotificationItem("approval-" + request.ownerId,
                     request.type + " Pending", request.title + " is waiting for review.",
                     "Approval", "pending", section));
+        }
+        for (AppDataStore.PujaProviderRecord provider : AppDataStore.pujaProviders()) {
+            if ("pending".equalsIgnoreCase(provider.status)) {
+                items.add(new AdminNotification("puja-provider-" + provider.providerId, "Puja Provider Verification",
+                        valueOr(provider.providerId, provider.fullName) + " is waiting for admin review.",
+                        "Puja Services"));
+            }
         }
         for (AppDataStore.TransportOperatorRecord operator : AppDataStore.transportOperators()) {
             if (!"suspended".equalsIgnoreCase(operator.status) && !"disabled".equalsIgnoreCase(operator.status)) {
@@ -409,7 +461,10 @@ public class AdminDashboardPage {
         VBox rows = new VBox(8,
                 metricRow("Users", String.valueOf(overview.totalUsers()), "Total registered accounts"),
                 metricRow("Approved Businesses", String.valueOf(overview.approvedBusinesses()), "Verified providers"),
-                metricRow("Pending Approvals", String.valueOf(AppDataStore.pendingApprovals().size()), "Business registrations"),
+                metricRow("Pending Approvals", String.valueOf(AppDataStore.pendingApprovals().size()
+                        + AppDataStore.pujaProviders().stream()
+                                .filter(provider -> "pending".equalsIgnoreCase(provider.status))
+                                .count()), "Business and puja provider registrations"),
                 metricRow("Today's Bookings", String.valueOf(overview.todaysBookings()), "Booking records"));
         VBox panel = new VBox(12, sectionTitle("Operational Overview"), rows);
         panel.getStyleClass().add("pilgrim-panel");
@@ -987,19 +1042,1244 @@ public class AdminDashboardPage {
     }
 
     private VBox packagesPage() {
-        VBox form = structuredForm("Package Name", "Package Type", "Source City", "Destination", "Duration",
-                "Start Date", "End Date", "Price", "Seats / Capacity", "Hotel / Stay", "Itinerary", "Highlights");
-        return pageShell("Kumbh Packages", "Manage published pilgrimage packages and booking readiness.",
-                infoPanel("Package Manager", form, actionRow("packages", form, "Add", "Edit", "Publish", "Disable")),
-                listPanel("Published Kumbh Packages", "packages", "No Kumbh packages published yet.", form));
+        List<ManagedKumbhPackage> packages;
+        try {
+            // Always load afresh from the same source used by Save Draft.
+            packages = PackageRepository.adminSource().getAllPackagesForAdmin(adminToken());
+        } catch (Exception exception) {
+            return pageShell("Kumbh Packages", "Package catalogue could not be reloaded.",
+                    infoPanel("Firestore package load failed", "No package count is shown because the source could not be read. "
+                            + actionablePackageError(exception)));
+        }
+        HBox stats = new HBox(12,
+                metric(String.valueOf(packages.size()), "Total Packages"),
+                metric(String.valueOf(countPackages(packages, PackageStatus.PUBLISHED)), "Published"),
+                metric(String.valueOf(countPackages(packages, PackageStatus.DRAFT)), "Draft"),
+                metric(String.valueOf(countPackages(packages, PackageStatus.PAUSED)), "Paused"),
+                metric(String.valueOf(countPackages(packages, PackageStatus.ARCHIVED)), "Archived"));
+        Button create = smallButton("+ Create New Package"); create.getStyleClass().add("admin-success-action"); create.setOnAction(e -> showPackageEditor(null));
+        VBox rows = new VBox(10);
+        if (packages.isEmpty()) rows.getChildren().add(infoPanel("No admin-created packages", "Create a draft, then publish it when the catalogue information is ready."));
+        else packages.forEach(p -> rows.getChildren().add(packageAdminRow(p)));
+        return pageShell("Kumbh Packages", "Admin-owned package catalogue. Only published packages are visible to pilgrims.", stats, create, infoPanel("Package Catalogue", rows));
     }
 
+    private long countPackages(List<ManagedKumbhPackage> packages, PackageStatus status) { return packages.stream().filter(p -> p.status() == status).count(); }
+    private String adminToken() { return AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken(); }
+    private HBox packageAdminRow(ManagedKumbhPackage p) {
+        Button view = smallButton("View"); view.setOnAction(e -> showPackagePreview(p)); Button edit = smallButton("Edit"); edit.setOnAction(e -> showPackageEditor(p));
+        Button lifecycle = smallButton(p.status() == PackageStatus.PUBLISHED ? "Unpublish" : "Publish"); lifecycle.setOnAction(e -> changePackageStatus(p, p.status() == PackageStatus.PUBLISHED ? PackageStatus.PAUSED : PackageStatus.PUBLISHED));
+        Button archive = smallButton("Archive"); archive.setOnAction(e -> changePackageStatus(p, PackageStatus.ARCHIVED));
+        VBox info = new VBox(2, strong(p.name()), muted(p.packageCode() + " | " + p.origin() + " → " + p.destination() + " | " + p.days() + "D / " + p.nights() + "N | ₹" + String.format("%,d", p.startingPrice()) + " | " + p.travelOptions().stream().findFirst().orElse("Travel not set")), muted("Status: " + p.status() + " | Updated: " + valueOr("Not yet", p.updatedAt())));
+        HBox row = new HBox(10, moduleIcon("Kumbh Packages", "pilgrim-row-icon"), info, createSpacer(), badge(p.category().name()), statusBadge(p.status().name()), view, edit, lifecycle, archive); row.setAlignment(Pos.CENTER_LEFT); row.getStyleClass().add("pilgrim-data-row"); return row;
+    }
+    private void changePackageStatus(ManagedKumbhPackage p, PackageStatus status) {
+        try { if (status == PackageStatus.PUBLISHED && !validForPublishing(p)) { showInfo("Cannot publish", "Add a package name, origin, duration, starting price and at least one itinerary activity before publishing."); return; }
+            if (status == PackageStatus.PUBLISHED) PackageRepository.adminSource().publishPackage(p, adminToken()); else if (status == PackageStatus.PAUSED) PackageRepository.adminSource().pausePackage(p, adminToken()); else PackageRepository.adminSource().archivePackage(p, adminToken()); showSection("Kumbh Packages");
+        } catch (Exception ex) { showInfo("Package update failed", ex.getMessage() == null ? "Could not save package status." : ex.getMessage()); }
+    }
+    private boolean validForPublishing(ManagedKumbhPackage p) { return !p.name().isBlank() && !p.origin().isBlank() && p.days() > 0 && p.startingPrice() > 0 && !p.itinerary().isEmpty(); }
+
+    private void showPackageEditor(ManagedKumbhPackage existing) { root.setCenter(scroll(packageEditorPage(existing))); }
+    private VBox packageEditorPage(ManagedKumbhPackage existing) {
+        PackageEditor editor = new PackageEditor(existing); Button back = smallButton("← Back to package list"); back.setOnAction(e -> showSection("Kumbh Packages")); Button preview = smallButton("Preview Package"); preview.setOnAction(e -> showPackagePreview(editor.toPackage(existing == null ? PackageStatus.DRAFT : existing.status()))); Button draft = smallButton("Save Draft"); draft.setOnAction(e -> savePackage(editor, PackageStatus.DRAFT)); Button publish = smallButton("Publish Package"); publish.getStyleClass().add("admin-success-action"); publish.setOnAction(e -> savePackage(editor, PackageStatus.PUBLISHED));
+        HBox actions = new HBox(10, back, createSpacer(), preview, draft, publish); actions.setAlignment(Pos.CENTER_LEFT);
+        return pageShell(existing == null ? "Create Kumbh Package" : "Edit Kumbh Package", "Connection A package configuration. Photos and booking settings are intentionally excluded.", actions,
+                infoPanel("Basic Information", editor.basic()), infoPanel("Travel", editor.travel()), infoPanel("Stay Options", editor.stay()), infoPanel("Meals", editor.meals()), infoPanel("Kumbh Experience", editor.experience()), infoPanel("Nashik Sightseeing", editor.sightseeing()), infoPanel("Itinerary", editor.itinerary()), infoPanel("Pricing", editor.pricing()), infoPanel("Inclusions / Exclusions", editor.inclusions()), infoPanel("Policies", editor.policies()), infoPanel("Availability", editor.availability()), infoPanel("Photos & Gallery", editor.media()), infoPanel("Preview & Publish", muted("Save Draft keeps the package admin-only. Publish validates the core catalogue details and makes it visible to users.")));
+    }
+    private void savePackage(PackageEditor editor, PackageStatus status) {
+        ManagedKumbhPackage item = editor.toPackage(status); if (status == PackageStatus.PUBLISHED && !validForPublishing(item)) { showInfo("Cannot publish", "Package Name, Origin, Days, Starting Price and at least one itinerary activity are required."); return; }
+        try { PackageRepository.adminSource().saveAndReload(item, adminToken()); showInfo(status == PackageStatus.PUBLISHED ? "Package published" : "Draft saved", status == PackageStatus.PUBLISHED ? "The package will appear on a pilgrim's next catalogue refresh." : "Draft " + item.packageCode() + " is persisted and appears in Admin Package Management."); showSection("Kumbh Packages"); } catch (Exception ex) { showInfo("Package save failed", actionablePackageError(ex)); }
+    }
+    private String actionablePackageError(Exception exception) { String message = exception.getMessage(); return (message == null || message.isBlank() ? "Could not read or write the kumbh_packages collection." : message) + " Verify Firebase is enabled, the admin user profile has role = admin, the ID token is current, and Firestore rules are deployed."; }
+    private void showPackagePreview(ManagedKumbhPackage p) { Button back = smallButton("← Back to package list"); back.setOnAction(e -> showSection("Kumbh Packages")); VBox gallery = new VBox(8); if (p.gallery().isEmpty()) gallery.getChildren().add(muted("No gallery images selected.")); else { HBox thumbs = new HBox(8); p.gallery().stream().limit(5).forEach(media -> thumbs.getChildren().add(adminMediaPreview(media, 120, 76))); gallery.getChildren().add(thumbs); } root.setCenter(scroll(pageShell("Package Preview", "Preview uses the same package media metadata that published users receive.", back, infoPanel("Hero / Cover", adminMediaPreview(p.heroImage() == null ? p.coverImage() : p.heroImage(), 760, 210)), infoPanel("Gallery", gallery), infoPanel("Package Summary", paragraph(p.name() + "\n" + p.category() + " • " + p.origin() + " → " + p.destination() + " • " + p.days() + "D / " + p.nights() + "N\nStarting ₹" + String.format("%,d", p.startingPrice()) + "\n\nTravel: " + String.join(", ", p.travelOptions()) + "\nStay: " + String.join(", ", p.stayOptions()) + "\nMeals: " + String.join(", ", p.mealOptions()) + "\nFacilities: " + String.join(", ", p.facilities())))))); }
+    private StackPane adminMediaPreview(PackageMedia media, double width, double height) { StackPane frame = new StackPane(); frame.setPrefSize(width, height); frame.setMaxSize(width, height); frame.getStyleClass().add("package-gallery-main"); if (media == null || !PackageMediaService.temporary().isUsable(media)) { frame.getChildren().add(muted("No image selected")); return frame; } try { Image image = new Image(PackageMediaService.temporary().resolveReference(media), false); ImageView view = new ImageView(image); view.setFitWidth(width); view.setFitHeight(height); view.setPreserveRatio(true); frame.getChildren().add(view); } catch (Exception ignored) { frame.getChildren().add(muted("Image unavailable")); } return frame; }
+
     private VBox pujaServicesPage() {
-        VBox form = structuredForm("Puja Name", "Temple / Ghat", "Puja Type", "Price", "Available Slots",
-                "Pandit / Provider", "Verification Status", "Booking Status");
+        VBox form = pujaServiceEditorForm();
+        protectPujaEditorFromLiveRefresh(form);
+        VBox editor = new VBox(12, pujaServiceTopActionBar(form), form, pujaServiceImageSection());
+        if (pujaEditorVisible && !pendingPujaEditorServiceId.isBlank()) {
+            adminVisiblePujaServices().stream()
+                    .filter(service -> service.serviceId.equals(pendingPujaEditorServiceId))
+                    .findFirst()
+                    .ifPresent(service -> fillPujaServiceForm(service, form));
+            pendingPujaEditorServiceId = "";
+        }
+
+        Button addNew = smallButton("+ Add New Puja Service");
+        addNew.getStyleClass().add("admin-success-action");
+        addNew.setOnAction(event -> {
+            pujaEditorVisible = true;
+            editingOperationalId = "";
+            editingOperationalModule = "";
+            clearPujaEditorImageState();
+            showSection("Puja Services");
+        });
+
+        Node editorPanel = pujaEditorVisible
+                ? infoPanel(hasSelectedPujaService() ? "Edit Puja Service" : "Add New Puja Service",
+                        editor, pujaServiceActionRow(form))
+                : compactAdminPujaAddPanel(addNew);
+
         return pageShell("Puja Services", "Manage verified puja services and booking readiness.",
-                infoPanel("Puja Service Editor", form, actionRow("puja", form, "Add", "Edit", "Verify", "Disable", "View Bookings")),
-                listPanel("Published Puja Services", "puja", "No puja services published yet.", form));
+                adminPujaTrustBanner(),
+                editorPanel,
+                pujaProviderVerificationPanel(),
+                pujaServiceRegistryPanel(form),
+                pujaBookingsPanel(),
+                pujaFraudReportsPanel());
+    }
+
+    private VBox pujaServiceEditorForm() {
+        TextField name = AppUi.textField("Puja Name");
+        TextField description = AppUi.textField("Description");
+        TextField temple = AppUi.textField("Temple / Ghat");
+        TextField location = AppUi.textField("Location");
+        TextField type = AppUi.textField("Puja Type");
+        TextField price = AppUi.textField("Price");
+        TextField duration = AppUi.textField("Duration");
+        TextField slots = AppUi.textField("Available Slots");
+        TextField provider = AppUi.textField("Verified Pandit / Provider");
+        TextField languages = AppUi.textField("Languages");
+        TextField mode = AppUi.textField("Mode");
+        TextField verification = AppUi.textField("Verification Status");
+        TextField booking = AppUi.textField("Booking Status");
+
+        VBox form = new VBox(12,
+                pujaEditorGroup("Basic Information", name, description, type, temple, location),
+                pujaEditorGroup("Booking Information", price, duration, slots, mode, languages),
+                pujaEditorGroup("Provider", provider, verification, booking));
+        form.getStyleClass().add("admin-structured-form");
+        form.getProperties().put("orderedTextFields", List.of(name, description, type, temple, location,
+                price, duration, slots, provider, languages, mode, verification, booking));
+        return form;
+    }
+
+    private VBox pujaEditorGroup(String title, TextField... fields) {
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        for (int i = 0; i < fields.length; i++) {
+            fields[i].setMaxWidth(Double.MAX_VALUE);
+            grid.add(fields[i], i % 2, i / 2);
+            GridPane.setHgrow(fields[i], Priority.ALWAYS);
+        }
+        VBox group = new VBox(10, strong(title), grid);
+        group.getStyleClass().add("admin-puja-editor-group");
+        return group;
+    }
+
+    private HBox adminPujaTrustBanner() {
+        HBox banner = new HBox(12,
+                adminPujaTrustItem("\uE73E", "Verified Providers", "Priests and service counters are checked before listing."),
+                adminPujaTrustItem("\uE8C7", "Transparent Pricing", "Starting prices are shown clearly before booking."),
+                adminPujaTrustItem("\uE72E", "Secure Booking", "Booking details stay inside the official flow."),
+                adminPujaTrustItem("\uE8D7", "No Agent Payments", "Do not pay unofficial middlemen or unknown agents."));
+        banner.getStyleClass().add("puja-trust-banner");
+        return banner;
+    }
+
+    private VBox adminPujaTrustItem(String icon, String title, String detail) {
+        VBox item = new VBox(7, AppUi.symbolIcon(icon, "puja-trust-icon"), strong(title), muted(detail));
+        item.getStyleClass().add("puja-trust-item");
+        HBox.setHgrow(item, Priority.ALWAYS);
+        return item;
+    }
+
+    private VBox compactAdminPujaAddPanel(Button addNew) {
+        HBox row = new HBox(14,
+                moduleIcon("Puja Services", "pilgrim-row-icon"),
+                new VBox(4, strong("Published Puja Services are managed from Firestore"),
+                        muted("Click Add New Puja Service to open the editor. Existing services can be edited from the list below.")),
+                createSpacer(),
+                addNew);
+        row.setAlignment(Pos.CENTER_LEFT);
+        VBox panel = new VBox(row);
+        panel.getStyleClass().add("admin-puja-compact-add-panel");
+        return panel;
+    }
+
+    private HBox pujaServiceTopActionBar(VBox form) {
+        Button addFresh = smallButton("+ Add Puja");
+        addFresh.getStyleClass().add("admin-success-action");
+        addFresh.setOnAction(event -> {
+            editingOperationalId = "";
+            editingOperationalModule = "";
+            clearPujaServiceForm(form);
+            clearPujaEditorImageState();
+            pujaEditorVisible = true;
+            pujaEditorDirty = false;
+            pujaEditorFocused = false;
+        });
+
+        Button save = smallButton(hasSelectedPujaService() ? "Save Update" : "Save Puja Service");
+        save.getStyleClass().add("admin-success-action");
+        save.setOnAction(event -> {
+            if (hasSelectedPujaService()) {
+                savePujaServiceFromForm(form, false, false, "");
+            } else {
+                savePujaServiceFromForm(form, false, false, "PENDING");
+            }
+        });
+
+        Button savePublish = smallButton("Save & Publish");
+        savePublish.getStyleClass().add("admin-success-action");
+        savePublish.setOnAction(event -> savePujaServiceFromForm(form, true, true, "VERIFIED"));
+
+        Button close = smallButton("Close");
+        close.setOnAction(event -> {
+            editingOperationalId = "";
+            editingOperationalModule = "";
+            pendingPujaEditorServiceId = "";
+            pujaEditorVisible = false;
+            pujaEditorDirty = false;
+            pujaEditorFocused = false;
+            clearPujaEditorImageState();
+            showSection("Puja Services");
+        });
+
+        HBox bar = new HBox(10,
+                moduleIcon("Puja Services", "pilgrim-row-icon"),
+                new VBox(3,
+                        strong(hasSelectedPujaService() ? "Edit selected Puja Service" : "Create a new Puja Service"),
+                        muted("Use these buttons to save without scrolling to the bottom.")),
+                createSpacer(),
+                addFresh,
+                save,
+                savePublish,
+                close);
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.getStyleClass().add("admin-puja-top-action-bar");
+        return bar;
+    }
+
+    private HBox pujaServiceActionRow(VBox form) {
+        Button add = smallButton("Add Service");
+        add.setOnAction(event -> savePujaServiceFromForm(form, false, false, "PENDING"));
+        Button update = smallButton("Edit / Update");
+        update.setOnAction(event -> {
+            if (!hasSelectedPujaService()) {
+                showInfo("Select Service", "Select a Puja service row first, then click Edit / Update.");
+                return;
+            }
+            savePujaServiceFromForm(form, false, false, "");
+        });
+        Button verify = smallButton("Verify Service");
+        verify.getStyleClass().add("admin-success-action");
+        verify.setOnAction(event -> {
+            if (!hasSelectedPujaService()) {
+                showInfo("Select Service", "Select a Puja service row first, then click Verify Service.");
+                return;
+            }
+            savePujaServiceFromForm(form, true, false, "VERIFIED");
+        });
+        Button publish = smallButton("Publish Service");
+        publish.getStyleClass().add("admin-success-action");
+        publish.setOnAction(event -> {
+            if (!hasSelectedPujaService()) {
+                showInfo("Select Service", "Select a Puja service row first, then click Publish Service.");
+                return;
+            }
+            savePujaServiceFromForm(form, true, true, "VERIFIED");
+        });
+        Button disable = smallButton("Disable Selected");
+        disable.setOnAction(event -> updateSelectedPujaService(form, false, false, "", "Disable"));
+        Button enable = smallButton("Enable Selected");
+        enable.setOnAction(event -> updateSelectedPujaService(form, true, true, "VERIFIED", "Enable"));
+        Button delete = smallButton("Delete Selected");
+        delete.getStyleClass().add("admin-danger-action");
+        delete.setOnAction(event -> deleteSelectedPujaService(form));
+        Button bookings = smallButton("View Bookings");
+        bookings.setOnAction(event -> showPujaBookingsDialog());
+        Button cancel = smallButton("Close Editor");
+        cancel.setOnAction(event -> {
+            editingOperationalId = "";
+            editingOperationalModule = "";
+            pendingPujaEditorServiceId = "";
+            pujaEditorVisible = false;
+            pujaEditorDirty = false;
+            pujaEditorFocused = false;
+            clearPujaEditorImageState();
+            showSection("Puja Services");
+        });
+        return new HBox(10, add, update, verify, publish, disable, enable, delete, bookings, cancel);
+    }
+
+    private boolean hasSelectedPujaService() {
+        return "puja".equals(editingOperationalModule) && editingOperationalId != null && !editingOperationalId.isBlank();
+    }
+
+    private VBox pujaServiceImageSection() {
+        pujaImagePreview = new ImageView();
+        pujaImagePreview.setFitWidth(170);
+        pujaImagePreview.setFitHeight(105);
+        pujaImagePreview.setPreserveRatio(false);
+        pujaImagePreview.getStyleClass().add("admin-puja-image-preview");
+        setPujaImagePreview(selectedPujaImageUrl);
+        pujaImageStatus = new Label(selectedPujaImageUrl == null || selectedPujaImageUrl.isBlank()
+                ? "No Cloudinary image selected. Default image will be used."
+                : "Current image ready.");
+        pujaImageStatus.getStyleClass().add("admin-muted-text");
+
+        Button upload = smallButton("Upload Image / Change Image");
+        upload.setOnAction(event -> choosePujaServiceImage());
+        Button remove = smallButton("Remove Image");
+        remove.setOnAction(event -> {
+            if (!confirm("Remove Service Image", "Remove the selected service image and use the default placeholder?")) {
+                return;
+            }
+            selectedPujaImageFile = null;
+            selectedPujaImageUrl = "";
+            selectedPujaImagePublicId = "";
+            selectedPujaImageRemoved = true;
+            setPujaImagePreview("");
+            if (pujaImageStatus != null) {
+                pujaImageStatus.setText("Image removed. Save/Update to apply this change.");
+            }
+            pujaEditorDirty = true;
+        });
+        HBox actions = new HBox(10, upload, remove);
+        VBox text = new VBox(6, strong("Service Image"), muted("Upload JPG, JPEG, PNG or WEBP. Saved image URL comes from Cloudinary."), pujaImageStatus, actions);
+        HBox section = new HBox(14, pujaImagePreview, text);
+        section.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(text, Priority.ALWAYS);
+        VBox wrap = new VBox(section);
+        wrap.getStyleClass().add("admin-puja-image-section");
+        return wrap;
+    }
+
+    private void choosePujaServiceImage() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Select Puja Service Image");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Images", "*.jpg", "*.jpeg", "*.png", "*.webp"));
+        File file = chooser.showOpenDialog(stage);
+        if (file == null) {
+            return;
+        }
+        try {
+            ImageUploadService.get().validateImage(file.toPath());
+            selectedPujaImageFile = file.toPath();
+            selectedPujaImageRemoved = false;
+            setPujaImagePreview(file.toURI().toString());
+            if (pujaImageStatus != null) {
+                pujaImageStatus.setText("Selected: " + file.getName() + ". Save/Update will upload to Cloudinary.");
+            }
+            pujaEditorDirty = true;
+        } catch (RuntimeException exception) {
+            showInfo("Invalid Image", exception.getMessage());
+        }
+    }
+
+    private void setPujaImagePreview(String uri) {
+        if (pujaImagePreview == null) {
+            return;
+        }
+        String source = uri == null || uri.isBlank() ? "/images/trimbakeshwar.jpg" : uri;
+        try {
+            if (source.startsWith("http") || source.startsWith("file:")) {
+                pujaImagePreview.setImage(new Image(source, true));
+            } else {
+                URL imageUrl = getClass().getResource(source);
+                if (imageUrl != null) {
+                    String key = imageUrl.toExternalForm();
+                    pujaImagePreview.setImage(IMAGE_CACHE.computeIfAbsent(key, value -> new Image(value, true)));
+                }
+            }
+        } catch (Exception ignored) {
+            // Preview is best-effort; saving logic still preserves the stored URL.
+        }
+    }
+
+    private void savePujaServiceFromForm(VBox form, boolean adminApproved, boolean published, String verificationStatus) {
+        List<TextField> fields = formFields(form);
+        String name = valueAt(fields, 0);
+        System.out.println("ADMIN PUJA: save started, selectedServiceId="
+                + valueOr("new", editingOperationalId) + ", fieldCount=" + fields.size());
+        if (name.isBlank()) {
+            showInfo("Missing Puja Name", "Enter Puja Name before saving.");
+            return;
+        }
+        if (!isValidPujaPrice(valueAt(fields, 5))) {
+            showInfo("Invalid Price", "Enter a valid numeric Puja price, for example 101 or Rs. 5100.");
+            return;
+        }
+        String id = editingOperationalModule.equals("puja") && !editingOperationalId.isBlank()
+                ? editingOperationalId
+                : "puja-service-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        AppDataStore.PujaServiceRecord existing = adminVisiblePujaServices().stream()
+                .filter(service -> service.serviceId.equals(id))
+                .findFirst()
+                .orElse(null);
+        System.out.println("IMAGE: serviceId=" + id
+                + ", old image present=" + (existing != null && !existing.imageUrl.isBlank())
+                + ", new image selected=" + (selectedPujaImageFile != null));
+        boolean finalPublished = published || (existing != null && existing.published);
+        boolean finalApproved = adminApproved || (existing != null && existing.adminApproved);
+        String finalVerification = verificationStatus == null || verificationStatus.isBlank()
+                ? valueOr(existing == null ? "PENDING" : existing.verificationStatus, valueAt(fields, 11))
+                : verificationStatus;
+        String imageUrl = selectedPujaImageRemoved ? "/images/trimbakeshwar.jpg"
+                : valueOr(existing == null ? "/images/trimbakeshwar.jpg" : existing.imageUrl, selectedPujaImageUrl);
+        String imagePublicId = selectedPujaImageRemoved ? ""
+                : valueOr(existing == null ? "" : existing.imagePublicId, selectedPujaImagePublicId);
+        String description = valueOr(name + " at " + valueAt(fields, 3), valueAt(fields, 1));
+        String templeOrLocation = valueOr(valueAt(fields, 3), valueAt(fields, 4));
+        AppDataStore.PujaServiceRecord draft = new AppDataStore.PujaServiceRecord(id, name,
+                description,
+                valueOr("Custom", valueAt(fields, 2)), templeOrLocation, valueAt(fields, 5),
+                valueOr("Varies", valueAt(fields, 6)),
+                "", valueAt(fields, 8), finalVerification, valueOr("Varies", valueAt(fields, 7)),
+                valueOr("Offline", valueAt(fields, 10)), valueOr("Marathi, Hindi, Sanskrit", valueAt(fields, 9)),
+                imageUrl, imagePublicId,
+                valueOr("OPEN", valueAt(fields, 12)), finalPublished && finalApproved ? "active" : "draft",
+                finalPublished, true, finalApproved, existing == null ? "" : existing.createdAt, "",
+                existing == null ? "" : existing.createdBy, existing == null ? "" : existing.updatedBy,
+                existing == null ? "" : existing.verifiedAt, existing == null ? "" : existing.verifiedBy);
+        persistPujaServiceWithOptionalImage(form, draft, existing);
+    }
+
+    private boolean isValidPujaPrice(String text) {
+        String digits = text == null ? "" : text.replaceAll("[^0-9]", "");
+        return !digits.isBlank();
+    }
+
+    private void persistPujaServiceWithOptionalImage(VBox form, AppDataStore.PujaServiceRecord draft,
+            AppDataStore.PujaServiceRecord existing) {
+        if (pujaImageStatus != null) {
+            pujaImageStatus.setText(selectedPujaImageFile == null ? "Saving service..." : "Uploading image to Cloudinary...");
+        }
+        System.out.println("IMAGE: upload started=" + (selectedPujaImageFile != null) + ", serviceId=" + draft.serviceId);
+        java.util.concurrent.CompletableFuture<AppDataStore.PujaServiceRecord> prepared =
+                selectedPujaImageFile == null
+                        ? java.util.concurrent.CompletableFuture.completedFuture(draft)
+                        : ImageUploadService.get().uploadImage(selectedPujaImageFile, "puja-services")
+                                .thenApply(result -> draft.withImage(result.secureUrl(), result.publicId()));
+        prepared.thenAccept(service -> {
+            try {
+                AppDataStore.savePujaService(service);
+                System.out.println("ADMIN PUJA: persistence success, serviceId=" + service.serviceId
+                        + ", imageUrl present=" + !service.imageUrl.isBlank()
+                        + ", imagePublicId present=" + !service.imagePublicId.isBlank());
+                if (existing != null && selectedPujaImageFile != null && !existing.imagePublicId.isBlank()
+                        && !existing.imagePublicId.equals(service.imagePublicId)) {
+                    ImageUploadService.get().deleteImage(existing.imagePublicId);
+                }
+                Platform.runLater(() -> {
+                    clearPujaEditorImageState();
+                    editingOperationalId = "";
+                    editingOperationalModule = "";
+                    formFields(form).forEach(TextField::clear);
+                    pujaEditorVisible = false;
+                    pujaEditorDirty = false;
+                    pujaEditorFocused = false;
+                    showSection("Puja Services");
+                    refreshAdminPujaData();
+                });
+            } catch (AppDataStore.ApprovalUpdateException exception) {
+                Platform.runLater(() -> showInfo("Puja Service Save Failed", exception.getMessage()));
+            }
+        }).exceptionally(error -> {
+            Platform.runLater(() -> {
+                System.out.println("IMAGE: upload/persistence failure, serviceId=" + draft.serviceId
+                        + ", message=" + (error.getCause() == null ? error.getMessage() : error.getCause().getMessage()));
+                if (pujaImageStatus != null) {
+                    pujaImageStatus.setText("Image upload failed. Form was not cleared.");
+                }
+                showInfo("Puja Image Upload Failed", error.getCause() == null ? error.getMessage() : error.getCause().getMessage());
+            });
+            return null;
+        });
+    }
+
+    private void clearPujaEditorImageState() {
+        selectedPujaImageFile = null;
+        selectedPujaImageUrl = "";
+        selectedPujaImagePublicId = "";
+        selectedPujaImageRemoved = false;
+    }
+
+    private void updateSelectedPujaService(VBox form, boolean enabled, boolean adminApproved,
+            String verificationStatus, String action) {
+        if (editingOperationalId == null || editingOperationalId.isBlank()) {
+            showInfo("Select Service", "Select a Puja service row first, then click " + action + ".");
+            return;
+        }
+        try {
+            AppDataStore.PujaServiceRecord current = adminVisiblePujaServices().stream()
+                    .filter(service -> service.serviceId.equals(editingOperationalId))
+                    .findFirst()
+                    .orElse(null);
+            if (current == null) {
+                showInfo("Select Service", "Selected Puja service was not found.");
+                return;
+            }
+            AppDataStore.savePujaService(current.withControl(
+                    enabled && current.published,
+                    enabled,
+                    adminApproved || current.adminApproved,
+                    verificationStatus == null || verificationStatus.isBlank()
+                            ? current.verificationStatus
+                            : verificationStatus));
+            editingOperationalId = "";
+            editingOperationalModule = "";
+            formFields(form).forEach(TextField::clear);
+            pujaEditorVisible = false;
+            pujaEditorDirty = false;
+            pujaEditorFocused = false;
+            showSection("Puja Services");
+            refreshAdminPujaData();
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Puja Service Update Failed", exception.getMessage());
+        }
+    }
+
+    private void deleteSelectedPujaService(VBox form) {
+        if (!hasSelectedPujaService()) {
+            showInfo("Select Service", "Select a Puja service row first, then click Delete Selected.");
+            return;
+        }
+        String serviceId = editingOperationalId;
+        AppDataStore.PujaServiceRecord current = adminVisiblePujaServices().stream()
+                .filter(service -> service.serviceId.equals(serviceId))
+                .findFirst()
+                .orElse(null);
+        if (current == null) {
+            showInfo("Select Service", "Selected Puja service was not found.");
+            return;
+        }
+        if (!confirm("Delete Puja Service", "Delete " + valueOr(serviceId, current.name)
+                + " from Firestore? This will remove it from the user page too.")) {
+            return;
+        }
+        try {
+            AppDataStore.deletePujaService(serviceId);
+            editingOperationalId = "";
+            editingOperationalModule = "";
+            formFields(form).forEach(TextField::clear);
+            pujaEditorVisible = false;
+            pujaEditorDirty = false;
+            pujaEditorFocused = false;
+            showSection("Puja Services");
+            refreshAdminPujaData();
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Puja Service Delete Failed", exception.getMessage());
+        }
+    }
+
+    private VBox pujaServiceRegistryPanel(VBox form) {
+        List<AppDataStore.PujaServiceRecord> services = adminVisiblePujaServices();
+        System.out.println("ADMIN PUJA: raw service count=" + AppDataStore.pujaServices().size()
+                + ", mapped/displayable count=" + services.size());
+        TextField search = AppUi.textField("Search Puja, Temple, Priest or Location...");
+        search.getStyleClass().add("admin-puja-search-field");
+        ComboBox<String> type = adminPujaFilter("Puja Type", "All Types", "Abhishek", "Jaap", "Hawan", "Darshan", "Remote", "Prasad", "Custom");
+        ComboBox<String> location = adminPujaFilter("Location", "All Locations", "Ramkund", "Trimbakeshwar", "Panchavati", "Kalaram Mandir", "Online");
+        ComboBox<String> language = adminPujaFilter("Language", "Any Language", "Marathi", "Hindi", "English", "Sanskrit");
+        ComboBox<String> mode = adminPujaFilter("Mode", "Any Mode", "Offline", "Online", "Both");
+        ComboBox<String> price = adminPujaFilter("Price", "Any Price", "Under Rs. 500", "Rs. 500 - Rs. 1500", "Above Rs. 1500");
+        CheckBox today = new CheckBox("Available Today");
+        today.getStyleClass().add("puja-today-filter");
+
+        VBox rows = new VBox(10);
+        Runnable render = () -> {
+            List<AppDataStore.PujaServiceRecord> filtered = services.stream()
+                    .filter(service -> adminPujaServiceMatches(service, search.getText(), type.getValue(),
+                            location.getValue(), language.getValue(), mode.getValue(), price.getValue(), today.isSelected()))
+                    .toList();
+            rows.getChildren().clear();
+            if (filtered.isEmpty()) {
+                rows.getChildren().add(dataRow("Puja Services", "No Puja service records",
+                        "Firestore pujaServices records and existing admin Puja items will appear here."));
+            } else {
+                filtered.stream().limit(10).forEach(service -> rows.getChildren().add(pujaServiceRow(service, form)));
+                if (filtered.size() > 10) {
+                    rows.getChildren().add(dataRow("Puja Services", "Showing 1 to 10 of " + filtered.size() + " services",
+                            "Use search/filter to narrow the list. Pagination-ready list avoids rendering heavy cards at once."));
+                }
+            }
+        };
+        search.textProperty().addListener((obs, oldValue, newValue) -> render.run());
+        type.setOnAction(event -> render.run());
+        location.setOnAction(event -> render.run());
+        language.setOnAction(event -> render.run());
+        mode.setOnAction(event -> render.run());
+        price.setOnAction(event -> render.run());
+        today.setOnAction(event -> render.run());
+
+        Button reset = smallButton("Reset All");
+        reset.setOnAction(event -> {
+            search.clear();
+            type.setValue("All Types");
+            location.setValue("All Locations");
+            language.setValue("Any Language");
+            mode.setValue("Any Mode");
+            price.setValue("Any Price");
+            today.setSelected(false);
+            render.run();
+        });
+        Button addNew = smallButton("+ Add New Puja Service");
+        addNew.getStyleClass().add("admin-success-action");
+        addNew.setOnAction(event -> {
+            pujaEditorVisible = true;
+            editingOperationalId = "";
+            editingOperationalModule = "";
+            clearPujaEditorImageState();
+            showSection("Puja Services");
+        });
+
+        HBox topRow = new HBox(10, search, today, smallButton("Search"));
+        ((Button) topRow.getChildren().get(2)).setOnAction(event -> render.run());
+        topRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(search, Priority.ALWAYS);
+        javafx.scene.layout.FlowPane filters = new javafx.scene.layout.FlowPane(10, 10,
+                type, location, language, mode, price, reset);
+        VBox searchPanel = new VBox(12, topRow, filters);
+        searchPanel.getStyleClass().add("puja-filter-panel");
+
+        Label count = muted(services.size() + " Services");
+        HBox header = new HBox(10, sectionTitle("Published Puja Services"), count, createSpacer(), addNew);
+        header.setAlignment(Pos.CENTER_LEFT);
+        render.run();
+        VBox panel = new VBox(13, searchPanel, header, rows);
+        panel.getStyleClass().add("pilgrim-panel");
+        return panel;
+    }
+
+    private ComboBox<String> adminPujaFilter(String prompt, String... values) {
+        ComboBox<String> combo = new ComboBox<>();
+        combo.getItems().addAll(values);
+        combo.setValue(values.length == 0 ? prompt : values[0]);
+        combo.setPromptText(prompt);
+        combo.getStyleClass().add("puja-filter-combo");
+        combo.setMaxWidth(Double.MAX_VALUE);
+        return combo;
+    }
+
+    private boolean adminPujaServiceMatches(AppDataStore.PujaServiceRecord service, String query, String type,
+            String location, String language, String mode, String price, boolean availableToday) {
+        String search = query == null ? "" : query.trim().toLowerCase();
+        boolean queryOk = search.isBlank() || (service.name + " " + service.description + " " + service.templeOrGhat
+                + " " + service.pujaType + " " + service.providerName + " " + service.languages)
+                .toLowerCase().contains(search);
+        boolean typeOk = type == null || "All Types".equals(type) || service.pujaType.equalsIgnoreCase(type);
+        boolean locationOk = location == null || "All Locations".equals(location)
+                || service.templeOrGhat.toLowerCase().contains(location.toLowerCase());
+        boolean languageOk = language == null || "Any Language".equals(language)
+                || service.languages.toLowerCase().contains(language.toLowerCase());
+        boolean modeOk = mode == null || "Any Mode".equals(mode)
+                || service.mode.equalsIgnoreCase(mode) || "Both".equalsIgnoreCase(service.mode);
+        boolean todayOk = !availableToday || "OPEN".equalsIgnoreCase(service.bookingStatus);
+        int numericPrice = parseAdminPujaPrice(service.price);
+        boolean priceOk = switch (price == null ? "Any Price" : price) {
+            case "Under Rs. 500" -> numericPrice < 500;
+            case "Rs. 500 - Rs. 1500" -> numericPrice >= 500 && numericPrice <= 1500;
+            case "Above Rs. 1500" -> numericPrice > 1500;
+            default -> true;
+        };
+        return queryOk && typeOk && locationOk && languageOk && modeOk && todayOk && priceOk;
+    }
+
+    private int parseAdminPujaPrice(String text) {
+        try {
+            String digits = text == null ? "" : text.replaceAll("[^0-9]", "");
+            return digits.isBlank() ? 0 : Integer.parseInt(digits);
+        } catch (Exception exception) {
+            return 0;
+        }
+    }
+
+    private List<AppDataStore.PujaServiceRecord> adminVisiblePujaServices() {
+        List<AppDataStore.PujaServiceRecord> services = new java.util.ArrayList<>(AppDataStore.pujaServices());
+        for (AppDataStore.ServiceItem item : AppDataStore.items("puja")) {
+            boolean exists = services.stream().anyMatch(service -> service.serviceId.equals(item.id)
+                    || service.name.equalsIgnoreCase(item.title));
+            if (!exists) {
+                services.add(pujaServiceFromItem(item));
+            }
+        }
+        return services;
+    }
+
+    private AppDataStore.PujaServiceRecord pujaServiceFromItem(AppDataStore.ServiceItem item) {
+        String detail = item.detail == null ? "" : item.detail;
+        return new AppDataStore.PujaServiceRecord(item.id, item.title,
+                valueOr("Admin-published puja service.", detail),
+                valueOr("Custom", detailValue(detail, "Puja Type")),
+                valueOr("Approved Location", detailValue(detail, "Temple / Ghat")),
+                valueOr("0", detailValue(detail, "Price")),
+                valueOr("Varies", detailValue(detail, "Duration")),
+                "",
+                valueOr("Admin", detailValue(detail, "Pandit / Provider")),
+                valueOr("VERIFIED", detailValue(detail, "Verification Status")),
+                valueOr("Varies", detailValue(detail, "Available Slots")),
+                valueOr("Offline", detailValue(detail, "Mode")),
+                valueOr("Marathi, Hindi, Sanskrit", detailValue(detail, "Languages")),
+                "/images/trimbakeshwar.jpg",
+                valueOr("OPEN", detailValue(detail, "Booking Status")),
+                "active",
+                true,
+                true,
+                true,
+                "",
+                "");
+    }
+
+    private HBox pujaServiceRow(AppDataStore.PujaServiceRecord service, VBox form) {
+        ImageView thumb = createPujaServiceThumbnail(service.imageUrl);
+        Button edit = smallButton("Edit");
+        edit.setText("Edit Service");
+        edit.setOnAction(event -> {
+            pujaEditorVisible = true;
+            pendingPujaEditorServiceId = service.serviceId;
+            showSection("Puja Services");
+        });
+        Button view = smallButton("View Details");
+        view.setOnAction(event -> showAdminPujaServiceDetailsPage(service));
+        Button publish = smallButton(service.published ? "Unpublish" : "Publish");
+        publish.setOnAction(event -> updatePujaServicePublish(service, !service.published));
+        Button enable = smallButton(service.enabled ? "Disable" : "Enable");
+        enable.setOnAction(event -> updatePujaServiceEnabled(service, !service.enabled));
+        Button delete = smallButton("Delete");
+        delete.getStyleClass().add("admin-danger-action");
+        delete.setOnAction(event -> {
+            editingOperationalId = service.serviceId;
+            editingOperationalModule = "puja";
+            deleteSelectedPujaService(form);
+        });
+        Button bookings = smallButton("View Bookings");
+        bookings.setOnAction(event -> showPujaBookingsDialog(service.serviceId));
+        HBox badges = new HBox(6,
+                badge(service.verificationStatus),
+                badge(service.published ? "Published" : "Draft"),
+                badge(service.enabled ? "Enabled" : "Disabled"));
+        VBox text = new VBox(3,
+                strong(valueOr(service.serviceId, service.name)),
+                muted(valueOr("Admin-published puja service.", service.description)),
+                muted("Type: " + service.pujaType
+                        + "  •  Temple/Ghat: " + service.templeOrGhat
+                        + "  •  Provider: " + valueOr("Admin", service.providerName)),
+                muted("Price: Rs. " + parseAdminPujaPrice(service.price)
+                        + "  •  Duration: " + service.duration
+                        + "  •  Location: " + service.templeOrGhat),
+                muted("Languages: " + service.languages
+                        + "  •  Mode: " + service.mode
+                        + "  •  Booking: " + service.bookingStatus),
+                badges);
+        HBox row = new HBox(12, thumb, text, createSpacer(), view, edit, publish, enable, delete, bookings);
+        row.getStyleClass().add("admin-puja-service-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private ImageView createPujaServiceThumbnail(String imageUrl) {
+        ImageView image = new ImageView();
+        image.setFitWidth(92);
+        image.setFitHeight(62);
+        image.setPreserveRatio(false);
+        image.getStyleClass().add("admin-puja-thumb");
+        String source = valueOr("/images/trimbakeshwar.jpg", imageUrl);
+        try {
+            if (source.startsWith("http") || source.startsWith("file:")) {
+                image.setImage(new Image(source, true));
+            } else {
+                URL url = getClass().getResource(source);
+                if (url != null) {
+                    String key = url.toExternalForm();
+                    image.setImage(IMAGE_CACHE.computeIfAbsent(key, value -> new Image(value, true)));
+                }
+            }
+        } catch (Exception ignored) {
+            // Thumbnail is decorative; row remains usable if the remote image fails.
+        }
+        return image;
+    }
+
+    private void showAdminPujaServiceDetailsPage(AppDataStore.PujaServiceRecord service) {
+        selectedSection = "Puja Services";
+        setActiveSection("Puja Services");
+        Button back = smallButton("← Back");
+        back.setOnAction(event -> showSection("Puja Services"));
+
+        ImageView image = createPujaServiceThumbnail(service.imageUrl);
+        image.setFitWidth(340);
+        image.setFitHeight(220);
+        image.getStyleClass().add("puja-details-image");
+
+        GridPane details = twoColumnGrid(
+                adminPujaDetailCard("Service ID", service.serviceId),
+                adminPujaDetailCard("Puja Type", service.pujaType),
+                adminPujaDetailCard("Temple / Ghat", service.templeOrGhat),
+                adminPujaDetailCard("Duration", service.duration),
+                adminPujaDetailCard("Available Slots", service.availableSlots),
+                adminPujaDetailCard("Provider", valueOr("Admin", service.providerName)),
+                adminPujaDetailCard("Languages", service.languages),
+                adminPujaDetailCard("Mode", service.mode),
+                adminPujaDetailCard("Price", "Rs. " + parseAdminPujaPrice(service.price)),
+                adminPujaDetailCard("Booking Status", service.bookingStatus));
+
+        HBox status = new HBox(8,
+                badge(service.verificationStatus),
+                badge(service.published ? "Published" : "Draft"),
+                badge(service.enabled ? "Enabled" : "Disabled"));
+        VBox text = new VBox(12,
+                sectionTitle(service.name),
+                paragraph(valueOr("Admin-published puja service.", service.description)),
+                status,
+                details);
+        HBox hero = new HBox(18, image, text);
+        hero.getStyleClass().add("puja-details-panel");
+        HBox.setHgrow(text, Priority.ALWAYS);
+
+        Button edit = smallButton("Edit Service");
+        edit.getStyleClass().add("admin-success-action");
+        edit.setOnAction(event -> {
+            pujaEditorVisible = true;
+            pendingPujaEditorServiceId = service.serviceId;
+            showSection("Puja Services");
+        });
+        Button bookings = smallButton("View Bookings");
+        bookings.setOnAction(event -> showPujaBookingsDialog(service.serviceId));
+        HBox actions = new HBox(10, createSpacer(), edit, bookings);
+        actions.setAlignment(Pos.CENTER_LEFT);
+
+        root.setCenter(scroll(pageShell("Puja Service Details",
+                "Review the active Firestore service record used by pilgrims.",
+                back,
+                hero,
+                infoPanel("Stored Image",
+                        paragraph("imageUrl: " + service.imageUrl + "\nimagePublicId: "
+                                + valueOr("Not uploaded", service.imagePublicId))),
+                actions)));
+    }
+
+    private VBox adminPujaDetailCard(String title, String value) {
+        VBox card = new VBox(5, muted(title), strong(valueOr("Not available", value)));
+        card.getStyleClass().add("puja-mini-panel");
+        return card;
+    }
+
+    private void fillPujaServiceForm(AppDataStore.PujaServiceRecord service, VBox form) {
+        editingOperationalId = service.serviceId;
+        editingOperationalModule = "puja";
+        List<TextField> fields = formFields(form);
+        String[] values = { service.name, service.description, service.pujaType, service.templeOrGhat,
+                service.templeOrGhat, service.price, service.duration, service.availableSlots, service.providerName,
+                service.languages, service.mode, service.verificationStatus, service.bookingStatus };
+        pujaEditorUpdating = true;
+        for (int i = 0; i < fields.size() && i < values.length; i++) {
+            fields.get(i).setText(values[i]);
+        }
+        pujaEditorUpdating = false;
+        pujaEditorDirty = false;
+        selectedPujaImageFile = null;
+        selectedPujaImageUrl = service.imageUrl;
+        selectedPujaImagePublicId = service.imagePublicId;
+        selectedPujaImageRemoved = false;
+        setPujaImagePreview(service.imageUrl);
+        if (pujaImageStatus != null) {
+            pujaImageStatus.setText(service.imageUrl.startsWith("http")
+                    ? "Cloudinary image loaded. Change Image only if you want to replace it."
+                    : "Default image loaded. Upload Image to add a Cloudinary image.");
+        }
+    }
+
+    private void protectPujaEditorFromLiveRefresh(VBox form) {
+        for (TextField field : formFields(form)) {
+            field.textProperty().addListener((observable, oldValue, newValue) -> {
+                if (!pujaEditorUpdating && "Puja Services".equals(selectedSection)) {
+                    pujaEditorDirty = true;
+                }
+            });
+            field.focusedProperty().addListener((observable, wasFocused, isFocused) -> {
+                if ("Puja Services".equals(selectedSection)) {
+                    pujaEditorFocused = formFields(form).stream().anyMatch(TextField::isFocused);
+                }
+            });
+        }
+    }
+
+    private boolean isPujaEditorProtectedFromRefresh() {
+        return "Puja Services".equals(selectedSection) && (pujaEditorDirty || pujaEditorFocused);
+    }
+
+    private void updatePujaServicePublish(AppDataStore.PujaServiceRecord service, boolean published) {
+        try {
+            AppDataStore.savePujaService(service.withControl(published, service.enabled,
+                    published || service.adminApproved, published ? "VERIFIED" : service.verificationStatus));
+            refreshAdminData();
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Puja Service Update Failed", exception.getMessage());
+        }
+    }
+
+    private void updatePujaServiceEnabled(AppDataStore.PujaServiceRecord service, boolean enabled) {
+        try {
+            AppDataStore.savePujaService(service.withControl(service.published && enabled, enabled,
+                    service.adminApproved, service.verificationStatus));
+            refreshAdminData();
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Puja Service Update Failed", exception.getMessage());
+        }
+    }
+
+    private VBox pujaBookingsPanel() {
+        VBox rows = new VBox(10);
+        if (AppDataStore.pujaBookings().isEmpty()) {
+            rows.getChildren().add(dataRow("Puja Services", "No Puja bookings yet",
+                    "User pujaBookings records will appear here after pilgrims click Book Now."));
+        } else {
+            AppDataStore.pujaBookings().forEach(booking -> rows.getChildren().add(pujaBookingAdminRow(booking)));
+        }
+        return infoPanel("Puja Bookings", rows);
+    }
+
+    private HBox pujaBookingAdminRow(AppDataStore.PujaBookingRecord booking) {
+        ImageView image = createPujaServiceThumbnail(adminPujaBookingImage(booking.serviceId));
+        Button view = smallButton("View Details");
+        view.setOnAction(event -> showAdminPujaBookingDetailsPage(booking));
+        Button confirm = smallButton("Confirm");
+        confirm.getStyleClass().add("admin-success-action");
+        confirm.setOnAction(event -> updatePujaBookingStatus(booking, "CONFIRMED"));
+        Button assign = smallButton("Priest Assigned");
+        assign.setOnAction(event -> updatePujaBookingStatus(booking, "PRIEST_ASSIGNED"));
+        Button complete = smallButton("Complete");
+        complete.getStyleClass().add("admin-success-action");
+        complete.setOnAction(event -> updatePujaBookingStatus(booking, "COMPLETED"));
+        Button cancel = smallButton("Cancel");
+        cancel.getStyleClass().add("admin-danger-action");
+        cancel.setOnAction(event -> updatePujaBookingStatus(booking, "CANCELLED"));
+        ComboBox<String> status = new ComboBox<>();
+        status.getItems().addAll("PENDING", "CONFIRMED", "PRIEST_ASSIGNED", "READY", "IN_PROGRESS",
+                "COMPLETED", "CANCELLED", "DISPUTED", "REFUNDED");
+        status.getSelectionModel().select(booking.bookingStatus);
+        status.getStyleClass().add("input-combo");
+        Button update = smallButton("Update Status");
+        update.setOnAction(event -> updatePujaBookingStatus(booking, status.getValue()));
+        VBox text = new VBox(4,
+                strong(valueOr(booking.bookingId, booking.serviceName)),
+                muted("Booking ID: " + booking.bookingId + "  •  User: " + valueOr("Unknown", booking.userName)),
+                muted("Provider: " + valueOr("Admin", booking.providerName)
+                        + "  •  Date: " + valueOr("Not set", booking.date)
+                        + "  •  Time: " + valueOr("Not set", booking.time)),
+                muted("Location: " + valueOr("Not set", booking.location)
+                        + "  •  Amount: Rs " + booking.totalAmount),
+                new HBox(6, badge(booking.paymentStatus), badge(booking.bookingStatus)));
+        HBox actions = new HBox(8, view, confirm, assign, complete, cancel, status, update);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+        HBox row = new HBox(12, image, text, createSpacer(), actions);
+        row.getStyleClass().add("admin-puja-booking-card");
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(text, Priority.ALWAYS);
+        return row;
+    }
+
+    private void showPujaBookingsDialog() {
+        showPujaBookingsDialog("");
+    }
+
+    private void showPujaBookingsDialog(String serviceId) {
+        selectedSection = "Puja Services";
+        setActiveSection("Puja Services");
+        List<AppDataStore.PujaBookingRecord> bookings = AppDataStore.pujaBookings().stream()
+                .filter(booking -> serviceId == null || serviceId.isBlank() || booking.serviceId.equals(serviceId))
+                .toList();
+        TextField search = AppUi.textField("Search Booking ID, User or Puja");
+        search.getStyleClass().add("admin-puja-search-field");
+        ComboBox<String> status = new ComboBox<>();
+        status.getItems().addAll("All Status", "PENDING", "PAYMENT_PENDING", "CONFIRMED", "PRIEST_ASSIGNED",
+                "READY", "IN_PROGRESS", "COMPLETED", "CANCELLED", "DISPUTED", "REFUNDED");
+        status.setValue("All Status");
+        status.getStyleClass().add("input-combo");
+        ComboBox<String> service = new ComboBox<>();
+        service.getItems().add("All Services");
+        AppDataStore.pujaBookings().stream()
+                .map(booking -> booking.serviceName)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .forEach(service.getItems()::add);
+        service.setValue("All Services");
+        service.getStyleClass().add("input-combo");
+
+        VBox rows = new VBox(10);
+        Runnable render = () -> renderAdminPujaBookings(rows, bookings, search.getText(), status.getValue(), service.getValue());
+        search.textProperty().addListener((obs, oldValue, newValue) -> render.run());
+        search.setOnAction(event -> render.run());
+        status.setOnAction(event -> render.run());
+        service.setOnAction(event -> render.run());
+        render.run();
+
+        HBox filters = new HBox(10, search, status, service);
+        filters.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(search, Priority.ALWAYS);
+        Button back = smallButton("← Back");
+        back.setOnAction(event -> showSection("Puja Services"));
+        root.setCenter(scroll(pageShell("Puja Bookings",
+                serviceId == null || serviceId.isBlank()
+                        ? "View and manage Puja service bookings."
+                        : "View and manage bookings for selected Puja service.",
+                back,
+                infoPanel("Search & Filters", filters),
+                infoPanel("Booking Records", rows))));
+    }
+
+    private void renderAdminPujaBookings(VBox rows, List<AppDataStore.PujaBookingRecord> bookings,
+            String query, String status, String service) {
+        List<AppDataStore.PujaBookingRecord> filtered = bookings.stream()
+                .filter(booking -> adminPujaBookingMatches(booking, query, status, service))
+                .toList();
+        rows.getChildren().clear();
+        if (filtered.isEmpty()) {
+            rows.getChildren().add(dataRow("Puja Services", "No Puja bookings found",
+                    "Try changing search or filters. User pujaBookings records will appear here after pilgrims book services."));
+        } else {
+            filtered.forEach(booking -> rows.getChildren().add(pujaBookingAdminRow(booking)));
+        }
+    }
+
+    private boolean adminPujaBookingMatches(AppDataStore.PujaBookingRecord booking, String query, String status,
+            String service) {
+        String search = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
+        String source = String.join(" ",
+                valueOr("", booking.bookingId),
+                valueOr("", booking.userName),
+                valueOr("", booking.serviceName),
+                valueOr("", booking.providerName),
+                valueOr("", booking.location)).toLowerCase(java.util.Locale.ROOT);
+        boolean queryOk = search.isBlank() || source.contains(search);
+        boolean statusOk = status == null || "All Status".equals(status)
+                || booking.bookingStatus.equalsIgnoreCase(status)
+                || booking.paymentStatus.equalsIgnoreCase(status);
+        boolean serviceOk = service == null || "All Services".equals(service)
+                || booking.serviceName.equalsIgnoreCase(service);
+        return queryOk && statusOk && serviceOk;
+    }
+
+    private String adminPujaBookingImage(String serviceId) {
+        return AppDataStore.pujaServices().stream()
+                .filter(service -> service.serviceId.equals(serviceId))
+                .map(service -> service.imageUrl)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse("/images/trimbakeshwar.jpg");
+    }
+
+    private void showAdminPujaBookingDetailsPage(AppDataStore.PujaBookingRecord booking) {
+        selectedSection = "Puja Services";
+        setActiveSection("Puja Services");
+        Button back = smallButton("← Back");
+        back.setOnAction(event -> showPujaBookingsDialog());
+        ImageView image = createPujaServiceThumbnail(adminPujaBookingImage(booking.serviceId));
+        image.setFitWidth(300);
+        image.setFitHeight(175);
+        VBox qr = booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank()
+                ? new VBox(8, sectionTitle("QR Verification"), muted("QR ticket has not been generated yet."))
+                : new VBox(8, sectionTitle("QR Verification"),
+                        muted("Ticket ID: " + valueOr("Not available", booking.qrTicketId)),
+                        muted("Token: " + booking.qrVerificationToken));
+        qr.getStyleClass().add("puja-details-trust-card");
+        GridPane details = twoColumnGrid(
+                adminPujaDetailCard("Booking ID", booking.bookingId),
+                adminPujaDetailCard("User", valueOr("Not available", booking.userName)),
+                adminPujaDetailCard("Puja", valueOr("Not available", booking.serviceName)),
+                adminPujaDetailCard("Provider", valueOr("Not available", booking.providerName)),
+                adminPujaDetailCard("Date", valueOr("Not available", booking.date)),
+                adminPujaDetailCard("Time", valueOr("Not available", booking.time)),
+                adminPujaDetailCard("Location", valueOr("Not available", booking.location)),
+                adminPujaDetailCard("Amount", "Rs. " + booking.totalAmount),
+                adminPujaDetailCard("Payment Status", booking.paymentStatus),
+                adminPujaDetailCard("Booking Status", booking.bookingStatus),
+                adminPujaDetailCard("Razorpay Payment", valueOr("Not available", booking.razorpayPaymentId)),
+                adminPujaDetailCard("QR Status", booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank()
+                        ? "Not generated" : "Generated"));
+        HBox hero = new HBox(16, image, new VBox(12, sectionTitle(valueOr(booking.bookingId, booking.serviceName)),
+                muted("Booking ID: " + booking.bookingId), new HBox(7, badge(booking.paymentStatus), badge(booking.bookingStatus)), qr));
+        hero.getStyleClass().add("puja-details-panel");
+        VBox panel = new VBox(14,
+                hero,
+                details);
+        panel.getStyleClass().add("puja-details-panel");
+        root.setCenter(scroll(pageShell("Puja Booking Details",
+                "Review booking, payment and QR information from the same Firestore record.",
+                back,
+                panel)));
+    }
+
+    private String pujaBookingDetails(AppDataStore.PujaBookingRecord booking) {
+        return "Booking ID: " + booking.bookingId
+                + "\nUser: " + valueOr("Not available", booking.userName)
+                + "\nPuja: " + valueOr("Not available", booking.serviceName)
+                + "\nProvider: " + valueOr("Not available", booking.providerName)
+                + "\nDate: " + valueOr("Not available", booking.date)
+                + "\nTime: " + valueOr("Not available", booking.time)
+                + "\nLocation: " + valueOr("Not available", booking.location)
+                + "\nDevotees: " + booking.devoteesCount
+                + "\nLanguage: " + valueOr("Not available", booking.language)
+                + "\nMode: " + valueOr("Not available", booking.mode)
+                + "\nSamagri: " + (booking.samagriSelected ? "Included - Rs " + booking.samagriAmount : "Not included")
+                + "\nPrasad: " + (booking.prasadSelected ? "Included - Rs " + booking.prasadAmount : "Not included")
+                + "\nBase Price: Rs " + booking.basePrice
+                + "\nService Fee: Rs " + booking.serviceFee
+                + "\nTotal Amount: Rs " + booking.totalAmount
+                + "\nSpecial Requirements: " + valueOr("None", booking.specialRequirements)
+                + "\nPayment Status: " + booking.paymentStatus
+                + "\nPayment Method: " + valueOr("Not started", booking.paymentMethod)
+                + "\nInternal Payment ID: " + valueOr("Not available", booking.internalPaymentId)
+                + "\nRazorpay Order ID: " + valueOr("Not available", booking.razorpayOrderId)
+                + "\nRazorpay Payment ID: " + valueOr("Not available", booking.razorpayPaymentId)
+                + "\nPayment Failure Reason: " + valueOr("None", booking.paymentFailureReason)
+                + "\nBooking Status: " + booking.bookingStatus
+                + "\nCreated: " + valueOr("Not available", booking.createdAt);
+    }
+
+    private void updatePujaBookingStatus(AppDataStore.PujaBookingRecord booking, String status) {
+        if (!confirm("Update Puja Booking", "Set " + booking.bookingId + " to " + status + "?")) {
+            return;
+        }
+        try {
+            AppDataStore.updatePujaBookingStatus(booking.bookingId, status);
+            refreshAdminData();
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Booking Update Failed", exception.getMessage());
+        }
+    }
+
+    private VBox pujaFraudReportsPanel() {
+        VBox rows = new VBox(10);
+        List<AppDataStore.FraudReportRecord> reports = AppDataStore.fraudReports();
+        List<AppDataStore.PujaBookingRecord> disputes = AppDataStore.pujaBookings().stream()
+                .filter(booking -> "DISPUTED".equalsIgnoreCase(booking.bookingStatus))
+                .toList();
+        if (reports.isEmpty() && disputes.isEmpty()) {
+            rows.getChildren().add(dataRow("Puja Services", "No disputes or fraud reports",
+                    "User disputes and fraudReports records will appear here."));
+        } else {
+            for (AppDataStore.PujaBookingRecord booking : disputes) {
+                rows.getChildren().add(dataRow("Puja Services", "Disputed Booking: " + booking.bookingId,
+                        booking.serviceName + " | User: " + booking.userName + " | Status: " + booking.bookingStatus));
+            }
+            for (AppDataStore.FraudReportRecord report : reports) {
+                rows.getChildren().add(dataRow("Puja Services", "Fraud Report: " + report.reportId,
+                        valueOr("Unknown service", report.serviceName)
+                                + " | User: " + valueOr("Unknown", report.userName)
+                                + " | Provider: " + valueOr("Not available", report.providerName)
+                                + " | Status: " + report.status));
+            }
+        }
+        return infoPanel("Puja Disputes & Fraud Reports", rows);
+    }
+
+    private VBox pujaProviderVerificationPanel() {
+        VBox rows = new VBox(10);
+        List<AppDataStore.PujaProviderRecord> providers = AppDataStore.pujaProviders();
+        if (providers.isEmpty()) {
+            rows.getChildren().add(dataRow("Puja Services", "No provider registrations",
+                    "Provider Registration submissions from pujaProviders will appear here."));
+        } else {
+            providers.forEach(provider -> rows.getChildren().add(pujaProviderRow(provider)));
+        }
+        HBox stats = new HBox(12,
+                metric(String.valueOf(providers.stream().filter(p -> "pending".equalsIgnoreCase(p.status)).count()), "Pending"),
+                metric(String.valueOf(providers.stream().filter(p -> p.approved).count()), "Approved"),
+                metric(String.valueOf(providers.stream().filter(p -> "suspended".equalsIgnoreCase(p.status)).count()), "Suspended"),
+                metric(String.valueOf(providers.stream().filter(p -> "banned".equalsIgnoreCase(p.status)).count()), "Banned"));
+        VBox panel = infoPanel("Provider Verification", stats, rows);
+        return panel;
+    }
+
+    private HBox pujaProviderRow(AppDataStore.PujaProviderRecord provider) {
+        Button view = smallButton("View Documents");
+        view.setOnAction(event -> showPujaProviderDetails(provider));
+
+        Button approve = smallButton("Approve");
+        approve.getStyleClass().add("admin-success-action");
+        approve.setOnAction(event -> updatePujaProvider(provider, "approved", true, "Approve"));
+
+        Button reject = smallButton("Reject");
+        reject.getStyleClass().add("admin-danger-action");
+        reject.setOnAction(event -> updatePujaProvider(provider, "rejected", false, "Reject"));
+
+        Button suspend = smallButton("Suspend");
+        suspend.setOnAction(event -> updatePujaProvider(provider, "suspended", false, "Suspend"));
+
+        Button ban = smallButton("Ban");
+        ban.getStyleClass().add("admin-danger-action");
+        ban.setOnAction(event -> updatePujaProvider(provider, "banned", false, "Ban"));
+
+        Button enable = smallButton("Re-enable");
+        enable.getStyleClass().add("admin-success-action");
+        enable.setOnAction(event -> updatePujaProvider(provider, "approved", true, "Re-enable"));
+
+        boolean approved = "approved".equalsIgnoreCase(provider.status) || "active".equalsIgnoreCase(provider.status);
+        approve.setDisable(approved);
+        reject.setDisable("rejected".equalsIgnoreCase(provider.status));
+        suspend.setDisable("suspended".equalsIgnoreCase(provider.status) || "banned".equalsIgnoreCase(provider.status));
+        ban.setDisable("banned".equalsIgnoreCase(provider.status));
+        enable.setDisable(approved);
+
+        VBox text = new VBox(2,
+                strong(valueOr(provider.providerId, provider.fullName)),
+                muted("Status: " + provider.status + " | Approved: " + provider.approved
+                        + " | Phone: " + valueOr("Not available", provider.phone)
+                        + " | Services: " + valueOr("Not listed", provider.servicesOffered)
+                        + " | Locations: " + valueOr("Not listed", provider.serviceLocations)));
+        HBox row = new HBox(10, moduleIcon("Puja Services", "pilgrim-row-icon"),
+                text, createSpacer(), view, approve, reject, suspend, ban, enable);
+        row.getStyleClass().add("pilgrim-data-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private void showPujaProviderDetails(AppDataStore.PujaProviderRecord provider) {
+        selectedSection = "Puja Services";
+        setActiveSection("Puja Services");
+        HBox status = new HBox(8, badge(provider.status), badge(provider.approved ? "Simhastha Verified" : "Pending Review"));
+        GridPane details = twoColumnGrid(
+                adminPujaDetailCard("Provider ID", provider.providerId),
+                adminPujaDetailCard("Phone", provider.phone),
+                adminPujaDetailCard("Email", provider.email),
+                adminPujaDetailCard("Experience", provider.experience),
+                adminPujaDetailCard("Specialization", provider.specialization),
+                adminPujaDetailCard("Languages", provider.languages),
+                adminPujaDetailCard("Temple / Organization", provider.templeOrganization),
+                adminPujaDetailCard("Service Locations", provider.serviceLocations),
+                adminPujaDetailCard("Identity Document", provider.identityDocument),
+                adminPujaDetailCard("Supporting Certificates", provider.supportingCertificates));
+        VBox hero = new VBox(12,
+                sectionTitle(valueOr("Puja Provider", provider.fullName)),
+                paragraph(valueOr("No address submitted.", provider.address)),
+                status,
+                details,
+                infoPanel("Services Offered", paragraph(valueOr("Not listed", provider.servicesOffered))));
+        hero.getStyleClass().add("puja-details-panel");
+        Button back = smallButton("← Back to Puja Services");
+        back.setOnAction(event -> showSection("Puja Services"));
+        Button approve = smallButton("Approve");
+        approve.getStyleClass().add("admin-success-action");
+        approve.setOnAction(event -> updatePujaProvider(provider, "approved", true, "Approve"));
+        Button reject = smallButton("Reject");
+        reject.getStyleClass().add("admin-danger-action");
+        reject.setOnAction(event -> updatePujaProvider(provider, "rejected", false, "Reject"));
+        HBox actions = new HBox(10, back, createSpacer(), approve, reject);
+        actions.setAlignment(Pos.CENTER_LEFT);
+        root.setCenter(scroll(pageShell("Provider Verification Details",
+                "Review documents before approving a priest/provider.",
+                hero,
+                actions)));
+    }
+
+    private void updatePujaProvider(AppDataStore.PujaProviderRecord provider, String status, boolean approved,
+            String action) {
+        if (!confirm(action + " Puja Provider", action + " " + valueOr(provider.providerId, provider.fullName) + "?")) {
+            return;
+        }
+        try {
+            AppDataStore.updatePujaProviderStatus(provider.providerId, status, approved);
+            refreshAdminData();
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Provider Update Failed", exception.getMessage());
+        }
     }
 
     private VBox ghatsPage() {
@@ -1961,11 +3241,588 @@ public class AdminDashboardPage {
     }
 
     private VBox emergencyPage() {
-        VBox form = structuredForm("Name", "Type", "Phone", "Location", "Map Link", "Availability", "Verified", "Priority", "Active");
-        return pageShell("Emergency Operations Center", "Maintain verified emergency information.",
-                tabRow("Emergency Contacts", "Hospitals", "Medical Camps", "Police", "Women Safety", "Active Alerts"),
-                infoPanel("Verified Emergency Information", form, actionRow("emergency", form, "Add", "Edit", "Verify", "Publish Alert")),
-                listPanel("Published Emergency Items", "emergency", "No emergency items published yet.", form));
+        long active = emergencyReports.stream().filter(EmergencyReport::unresolved).count();
+        long critical = emergencyReports.stream().filter(report -> report.unresolved() && report.priority() == EmergencyReport.Priority.CRITICAL).count();
+        long medical = emergencyReports.stream().filter(report -> report.unresolved() && report.emergencyType() == EmergencyReport.EmergencyType.MEDICAL).count();
+        long police = emergencyReports.stream().filter(report -> report.unresolved() && report.emergencyType() == EmergencyReport.EmergencyType.POLICE_SECURITY).count();
+        long fireCrowd = emergencyReports.stream().filter(report -> report.unresolved() && (report.emergencyType() == EmergencyReport.EmergencyType.FIRE || report.emergencyType() == EmergencyReport.EmergencyType.CROWD_RISK)).count();
+        long resolved = emergencyReports.stream().filter(report -> report.status() == EmergencyReport.Status.RESOLVED).count();
+        HBox summary = new HBox(10, metric(String.valueOf(active), "Active"), metric(String.valueOf(critical), "Critical"),
+                metric(String.valueOf(medical), "Medical"), metric(String.valueOf(police), "Police/Security"),
+                metric(String.valueOf(fireCrowd), "Fire/Crowd"), metric(String.valueOf(resolved), "Resolved"));
+        VBox queue = new VBox(8);
+        if (emergencyReportsLoading) queue.getChildren().add(label("Loading emergency reports...", "description-text"));
+        List<EmergencyReport> ordered = emergencyReports.stream().sorted(java.util.Comparator
+                .comparingInt((EmergencyReport report) -> report.priority().ordinal())
+                .thenComparing(EmergencyReport::createdAt).reversed()).toList();
+        if (!emergencyReportsLoading && !emergencyReportsError.isBlank()) queue.getChildren().add(label(emergencyReportsError, "description-text"));
+        else if (!emergencyReportsLoading && ordered.isEmpty()) queue.getChildren().add(label("No emergency reports available.", "description-text"));
+        ordered.forEach(report -> queue.getChildren().add(emergencyQueueRow(report)));
+        VBox serviceRows = new VBox(7);
+        if (emergencyServicesLoading) serviceRows.getChildren().add(label("Loading emergency services...", "description-text"));
+        else if (!emergencyServicesError.isBlank() && !emergencyServicesPreviewActive) serviceRows.getChildren().add(label("Emergency service management is currently unavailable due to Firestore permissions.", "description-text"));
+        else if (emergencyServices.isEmpty()) serviceRows.getChildren().add(label("No emergency services available.", "description-text"));
+        TextField search = new TextField(); search.setPromptText("Search service name");
+        ComboBox<String> filter = combo(java.util.stream.Stream.concat(java.util.stream.Stream.of("All"), java.util.Arrays.stream(EmergencyService.Category.values()).map(Enum::name)).toArray(String[]::new));
+        Runnable renderServices = () -> {
+            serviceRows.getChildren().clear();
+            if (emergencyServicesPreviewActive) {
+                serviceRows.getChildren().add(label(emergencyServicesPreviewStatus(), "description-text"));
+            }
+            emergencyServices.stream()
+                    .filter(service -> service.name().toLowerCase().contains(search.getText().toLowerCase())
+                            && ("All".equals(filter.getValue()) || service.category().name().equals(filter.getValue())))
+                    .forEach(service -> serviceRows.getChildren().add(emergencyServiceRow(service)));
+            if (!emergencyServicesPreviewMessage.isBlank()) {
+                serviceRows.getChildren().add(label(emergencyServicesPreviewMessage, "description-text"));
+            }
+        };
+        search.textProperty().addListener((o, a, b) -> renderServices.run()); filter.setOnAction(event -> renderServices.run());
+        if (!emergencyServicesLoading && (emergencyServicesError.isBlank() || emergencyServicesPreviewActive)) renderServices.run();
+        Button refreshServices = new Button("REFRESH SERVICES"); refreshServices.getStyleClass().add("secondary-button"); refreshServices.setOnAction(event -> loadEmergencyServicesAsync());
+        Button addService = new Button("ADD SERVICE"); addService.getStyleClass().add("primary-button"); addService.setOnAction(event -> { editingEmergencyService = null; root.setCenter(scroll(emergencyServiceForm())); });
+        return pageShell("Emergency Management", "Live Firestore queue. Critical cases are prioritised first.", summary,
+                infoPanel("Emergency Response Queue", queue), infoPanel("Emergency Services", new VBox(8, new HBox(8, search, filter, addService, refreshServices), serviceRows)));
+    }
+
+    private HBox emergencyServiceRow(EmergencyService service) {
+        Label copy = label(adminEmergencyServiceValue(service.name(), "Unnamed emergency service") + " | "
+                + service.category() + " | " + adminEmergencyServiceValue(service.sector(), "Not available")
+                + " / " + adminEmergencyServiceValue(service.area(), "Not available") + " | "
+                + service.operationalStatus() + " | " + adminEmergencyServiceValue(service.contactNumber(), "Not available")
+                + " | " + (service.active() ? "Active" : "Inactive"), "admin-row-detail");
+        Button edit = new Button("EDIT"); edit.setOnAction(e -> { editingEmergencyService = service; root.setCenter(scroll(emergencyServiceForm())); });
+        Button active = new Button(service.active() ? "DEACTIVATE" : "ACTIVATE"); active.setOnAction(e -> saveEmergencyService(copyActive(service, !service.active()), active));
+        Button delete = new Button("DELETE"); delete.setOnAction(e -> deleteEmergencyService(service, delete));
+        return new HBox(8, copy, createSpacer(), edit, active, delete);
+    }
+
+    private String adminEmergencyServiceValue(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private VBox emergencyQueueRow(EmergencyReport report) {
+        Label title = label(report.trackingId() + "  |  " + report.emergencyType().name().replace('_', ' '), "admin-row-title");
+        Label detail = label("Status: " + report.status().name().replace('_', ' ') + " | Priority: " + report.priority()
+                + " | Reporter: " + valueOr("Not available", report.reporterName()) + " | Contact: " + valueOr("Not available", report.reporterPhone())
+                + " | People: " + report.peopleAffected() + " | " + valueOr("Demo Nashik Location", report.locationLabel())
+                + " | Landmark: " + valueOr("Not available", report.landmark()) + " | Coordinates: " + report.latitude() + ", " + report.longitude()
+                + " | Description: " + valueOr("Not available", report.description()), "admin-row-detail");
+        ComboBox<String> team = combo("Unassigned", "Medical Team", "Police Team", "Fire/Safety Team", "Crowd Control Team", "Volunteer Help Team");
+        if (!report.assignedTeamName().isBlank()) team.setValue(report.assignedTeamName());
+        ComboBox<String> priority = combo(report.priority().name(), "CRITICAL", "HIGH", "MEDIUM");
+        ComboBox<String> status = combo(report.status().name(), "REPORTED", "ACKNOWLEDGED", "TEAM_DISPATCHED", "HELP_ARRIVING", "RESOLVED");
+        TextField notes = new TextField(report.adminNotes()); notes.setPromptText("Internal admin notes");
+        Button save = new Button("UPDATE"); save.getStyleClass().add("primary-button");
+        save.setOnAction(event -> updateEmergencyFromAdmin(report, priority.getValue(), status.getValue(), team.getValue(), notes.getText(), save));
+        HBox controls = new HBox(8, priority, status, team, notes, save);
+        controls.setAlignment(Pos.CENTER_LEFT); HBox.setHgrow(notes, Priority.ALWAYS);
+        VBox row = new VBox(6, title, detail, controls); row.getStyleClass().add("admin-data-row");
+        if (report.emergencyId().equals(focusedEmergencyReportId)) {
+            row.getStyleClass().add("admin-emergency-sos-selected");
+            focusedEmergencyReportId = "";
+        }
+        return row;
+    }
+
+    /** Starts after a valid admin session exists. The first successful read establishes a no-popup baseline. */
+    private void startAdminSosMonitor() {
+        AppSession.User user = AppSession.currentUser();
+        if (sosMonitorTask != null && !sosMonitorTask.isCancelled()) return;
+        if (!isAdminSession() || !emergencyFirestore.isEnabled() || user == null) {
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=START_PREREQUISITE");
+            return;
+        }
+        sosMonitorExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "admin-sos-monitor");
+            thread.setDaemon(true);
+            return thread;
+        });
+        System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=START adminUid=" + user.uid());
+        sosMonitorTask = sosMonitorExecutor.scheduleWithFixedDelay(this::pollAdminSosReports, 0, 5, TimeUnit.SECONDS);
+    }
+
+    /** Stops the admin-session monitor; called on logout and available for any future page disposal path. */
+    public void dispose() {
+        if (sosMonitorTask != null) {
+            sosMonitorTask.cancel(true);
+            sosMonitorTask = null;
+        }
+        if (sosMonitorExecutor != null) {
+            sosMonitorExecutor.shutdownNow();
+            sosMonitorExecutor = null;
+        }
+        sosMonitorPollInProgress = false;
+        sosMonitorBaselined = false;
+        sosPopupVisible = false;
+        sosMonitorFailureLogged = false;
+        pendingSosReports.clear();
+        notifiedEmergencyIds.clear();
+    }
+
+    private void pollAdminSosReports() {
+        try {
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POLL");
+            if (sosMonitorPollInProgress) {
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=POLL_IN_PROGRESS");
+                return;
+            }
+            if (!isAdminSession() || !emergencyFirestore.isEnabled()) {
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=SESSION_OR_FIRESTORE");
+                return;
+            }
+            AppSession.User user = AppSession.currentUser();
+            if (user == null) {
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=NO_ADMIN_SESSION");
+                return;
+            }
+            sosMonitorPollInProgress = true;
+            List<EmergencyReport> records = emergencyFirestore.loadEmergencyReports(user.idToken());
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=LOAD count=" + records.size());
+            Platform.runLater(() -> processAdminSosPoll(records));
+        } catch (Exception exception) {
+            if (!sosMonitorFailureLogged) {
+                sosMonitorFailureLogged = true;
+                System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POLL result=failed error=" + exception.getMessage());
+            }
+            sosMonitorPollInProgress = false;
+        }
+    }
+
+    /** Runs on the JavaFX thread so the report cache, seen IDs, and popup queue stay consistent. */
+    private void processAdminSosPoll(List<EmergencyReport> records) {
+        try {
+            if (!isAdminSession()) {
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=SESSION_ENDED");
+                return;
+            }
+            emergencyReports = records == null ? List.of() : records;
+            sosMonitorFailureLogged = false;
+            if (!sosMonitorBaselined) {
+                int baselineCount = 0;
+                for (EmergencyReport report : emergencyReports) {
+                    if (isNewCriticalSosCandidate(report)) {
+                        notifiedEmergencyIds.add(report.emergencyId());
+                        baselineCount++;
+                    } else {
+                        logSosSkip(report, sosSkipReason(report));
+                    }
+                }
+                sosMonitorBaselined = true;
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=BASELINE count=" + baselineCount);
+                return;
+            }
+
+            for (EmergencyReport report : emergencyReports) {
+                if (!isNewCriticalSosCandidate(report)) {
+                    logSosSkip(report, sosSkipReason(report));
+                } else if (!notifiedEmergencyIds.add(report.emergencyId())) {
+                    logSosSkip(report, "ALREADY_SEEN");
+                } else {
+                    logSosCandidate(report);
+                    queueSosPopup(report);
+                }
+            }
+            showNextSosPopup();
+        } catch (RuntimeException exception) {
+            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POLL result=ui_failed error=" + exception.getMessage());
+        } finally {
+            // Never let a UI-side failure permanently suppress later five-second polls.
+            sosMonitorPollInProgress = false;
+        }
+    }
+
+    private void queueSosPopup(EmergencyReport report) {
+        pendingSosReports.addLast(report);
+        System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=QUEUE emergencyId=" + report.emergencyId());
+    }
+
+    private void logSosCandidate(EmergencyReport report) {
+        System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=CANDIDATE emergencyId=" + report.emergencyId()
+                + " source=" + report.source() + " status=" + report.status() + " priority=" + report.priority()
+                + " emergencyType=" + report.emergencyType() + " trackingId=" + report.trackingId()
+                + " createdAt=" + report.createdAt() + " userId=" + report.userId());
+    }
+
+    private void logSosSkip(EmergencyReport report, String reason) {
+        if (report == null) {
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=NULL_REPORT");
+            return;
+        }
+        System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=" + reason
+                + " emergencyId=" + report.emergencyId() + " source=" + report.source()
+                + " status=" + report.status() + " priority=" + report.priority());
+    }
+
+    private String sosSkipReason(EmergencyReport report) {
+        if (report == null) return "NULL_REPORT";
+        if (report.source() != EmergencyReport.Source.SOS) return "SOURCE";
+        if (report.status() != EmergencyReport.Status.REPORTED) return "STATUS";
+        if (report.priority() != EmergencyReport.Priority.CRITICAL) return "PRIORITY";
+        if (report.emergencyId().isBlank()) return "MISSING_ID";
+        return "UNKNOWN";
+    }
+
+    private boolean isNewCriticalSosCandidate(EmergencyReport report) {
+        return report != null
+                && report.source() == EmergencyReport.Source.SOS
+                && report.status() == EmergencyReport.Status.REPORTED
+                && report.priority() == EmergencyReport.Priority.CRITICAL
+                && !report.emergencyId().isBlank();
+    }
+
+    private void showNextSosPopup() {
+        if (sosPopupVisible || pendingSosReports.isEmpty()) return;
+        Stage owner = activeAdminStage();
+        if (owner == null || !isAdminSession()) {
+            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId="
+                    + pendingSosReports.peekFirst().emergencyId() + " result=failed reason=STALE_OWNER");
+            return;
+        }
+        EmergencyReport report = pendingSosReports.removeFirst();
+        sosPopupVisible = true;
+        try {
+            Dialog<ButtonType> dialog = new Dialog<>();
+            dialog.initOwner(owner);
+            dialog.setTitle("Emergency SOS Received");
+            dialog.getDialogPane().getStyleClass().add("admin-sos-popup");
+            dialog.getDialogPane().getStylesheets().addAll(owner.getScene().getStylesheets());
+
+            Label heading = label("EMERGENCY SOS RECEIVED", "admin-sos-popup-title");
+            Label tracking = label("Tracking ID: " + valueOr("Not available", report.trackingId()), "admin-sos-popup-tracking");
+            Label details = label("Type: " + report.emergencyType().name().replace('_', ' ')
+                    + "\nPriority: " + report.priority()
+                    + "\nLocation: " + valueOr("Not available", report.locationLabel())
+                    + "\nReporter: " + valueOr("Not available", report.reporterName())
+                    + "\nContact: " + valueOr("Not available", report.reporterPhone())
+                    + "\nTime: " + valueOr("Not available", report.createdAt()), "admin-sos-popup-detail");
+            Label error = label("", "admin-sos-popup-error");
+            error.setWrapText(true);
+            VBox content = new VBox(8, heading, tracking, details, error);
+            content.getStyleClass().add("admin-sos-popup-content");
+            dialog.getDialogPane().setContent(content);
+
+            ButtonType acknowledge = new ButtonType("ACKNOWLEDGE", ButtonBar.ButtonData.OK_DONE);
+            ButtonType view = new ButtonType("VIEW EMERGENCY", ButtonBar.ButtonData.OTHER);
+            ButtonType dismiss = new ButtonType("DISMISS", ButtonBar.ButtonData.CANCEL_CLOSE);
+            dialog.getDialogPane().getButtonTypes().addAll(acknowledge, view, dismiss);
+            Button acknowledgeButton = (Button) dialog.getDialogPane().lookupButton(acknowledge);
+            Button viewButton = (Button) dialog.getDialogPane().lookupButton(view);
+            acknowledgeButton.getStyleClass().add("admin-sos-popup-acknowledge");
+            viewButton.getStyleClass().add("admin-sos-popup-view");
+            acknowledgeButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
+                event.consume();
+                acknowledgeSosFromPopup(report, dialog, acknowledgeButton, error);
+            });
+            viewButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
+                event.consume();
+                focusedEmergencyReportId = report.emergencyId();
+                dialog.close();
+                showSection("Emergency");
+            });
+            dialog.setOnHidden(event -> {
+                sosPopupVisible = false;
+                Platform.runLater(this::showNextSosPopup);
+            });
+            dialog.show();
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId=" + report.emergencyId() + " result=success");
+        } catch (RuntimeException exception) {
+            sosPopupVisible = false;
+            notifiedEmergencyIds.remove(report.emergencyId());
+            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId=" + report.emergencyId()
+                    + " result=failed error=" + exception.getMessage());
+        }
+    }
+
+    /** Returns the currently visible window hosting this dashboard, not a stale navigation stage. */
+    private Stage activeAdminStage() {
+        for (Window window : Window.getWindows()) {
+            if (window instanceof Stage candidate && candidate.isShowing() && candidate.getScene() != null
+                    && candidate.getScene().getRoot() == root) {
+                return candidate;
+            }
+        }
+        return stage != null && stage.isShowing() && stage.getScene() != null && stage.getScene().getRoot() == root
+                ? stage : null;
+    }
+
+    private void acknowledgeSosFromPopup(EmergencyReport report, Dialog<ButtonType> dialog, Button acknowledgeButton, Label error) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            error.setText("Admin session is no longer available. Please sign in again.");
+            return;
+        }
+        acknowledgeButton.setDisable(true);
+        String stamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        EmergencyReport updated = new EmergencyReport(report.emergencyId(), report.trackingId(), report.userId(),
+                report.reporterName(), report.reporterPhone(), report.emergencyType(), report.description(),
+                report.peopleAffected(), report.landmark(), report.latitude(), report.longitude(), report.locationLabel(),
+                report.priority(), EmergencyReport.Status.ACKNOWLEDGED, report.assignedTeamId(), report.assignedTeamName(),
+                report.assignedTeamType(), report.adminNotes(), EmergencyReport.userStatusText(EmergencyReport.Status.ACKNOWLEDGED),
+                report.createdAt(), stamp, stamp, report.dispatchedAt(), report.helpArrivingAt(), report.resolvedAt(), report.source());
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                emergencyFirestore.updateEmergencyReport(updated, user.idToken());
+                Platform.runLater(() -> {
+                    emergencyReports = emergencyReports.stream()
+                            .map(item -> item.emergencyId().equals(updated.emergencyId()) ? updated : item).toList();
+                    dialog.close();
+                    if ("Emergency".equals(selectedSection)) root.setCenter(scroll(emergencyPage()));
+                });
+            } catch (Exception exception) {
+                System.err.println("EMERGENCY_SOS_MONITOR_DIAGNOSTIC action=ACKNOWLEDGE emergencyId="
+                        + report.emergencyId() + " result=failed error=" + exception.getMessage());
+                Platform.runLater(() -> {
+                    acknowledgeButton.setDisable(false);
+                    error.setText("Could not acknowledge this SOS. It remains reported; please retry.");
+                });
+            }
+        });
+    }
+
+    private void loadEmergencyReportsAsync() {
+        if (emergencyReportsLoading || !emergencyFirestore.isEnabled()) return;
+        AppSession.User user = AppSession.currentUser(); if (user == null) return;
+        emergencyReportsLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return emergencyFirestore.loadEmergencyReports(user.idToken()); }
+            catch (Exception exception) { System.err.println("EMERGENCY_ADMIN_UPDATE_DIAGNOSTIC action=LOAD result=failed error=" + exception.getMessage()); return null; }
+        }).thenAccept(records -> Platform.runLater(() -> {
+            emergencyReportsLoading = false;
+            if (records == null) emergencyReportsError = "Emergency reports cannot be loaded (Firestore permission denied). Deploy the scoped emergency_reports rules, then reopen this page.";
+            else { emergencyReports = records; emergencyReportsError = ""; }
+            if ("Emergency".equals(selectedSection)) root.setCenter(scroll(emergencyPage()));
+        }));
+    }
+
+    private void loadEmergencyServicesAsync() {
+        if (emergencyServicesLoading || !emergencyFirestore.isEnabled()) return;
+        AppSession.User user = AppSession.currentUser(); if (user == null) return;
+        emergencyServicesLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> { try { return emergencyFirestore.loadEmergencyServices(user.idToken()); }
+            catch (Exception exception) { System.err.println("EMERGENCY_SERVICE_READ_DIAGNOSTIC action=ADMIN_LOAD result=failed error=" + exception.getMessage()); return null; } })
+            .thenAccept(records -> Platform.runLater(() -> {
+                emergencyServicesLoading = false;
+                emergencyServicesPreviewMessage = "";
+                if (records == null) {
+                    emergencyServicesError = "permission";
+                    emergencyServicesPreviewActive = true;
+                    emergencyServicesFirestoreAvailable = false;
+                    emergencyServices = EmergencyDevelopmentServices.create();
+                } else if (records.isEmpty()) {
+                    emergencyServicesError = "";
+                    emergencyServicesPreviewActive = true;
+                    emergencyServicesFirestoreAvailable = true;
+                    emergencyServices = EmergencyDevelopmentServices.create();
+                } else {
+                    emergencyServices = records;
+                    emergencyServicesError = "";
+                    emergencyServicesPreviewActive = false;
+                    emergencyServicesFirestoreAvailable = true;
+                }
+                System.out.println("EMERGENCY_ADMIN_SERVICE_DIAGNOSTIC action=LOAD count=" + emergencyServices.size()
+                        + " source=" + (emergencyServicesPreviewActive ? "preview" : "firestore"));
+                if (!emergencyServicesPreviewActive) {
+                    emergencyServices.forEach(service -> System.out.println(
+                            "EMERGENCY_ADMIN_SERVICE_DIAGNOSTIC action=LOAD serviceId=" + service.serviceId()
+                                    + " name=" + service.name() + " category=" + service.category()
+                                    + " isActive=" + service.active()));
+                }
+                if ("Emergency".equals(selectedSection)) root.setCenter(scroll(emergencyPage()));
+            }));
+    }
+
+    private VBox emergencyServiceForm() {
+        EmergencyService s = editingEmergencyService;
+        TextField name = new TextField(s == null ? "" : s.name()), sub = new TextField(s == null ? "" : s.subType()), lat = new TextField(s == null ? "" : String.valueOf(s.latitude())), lon = new TextField(s == null ? "" : String.valueOf(s.longitude())), address = new TextField(s == null ? "" : s.address()), sector = new TextField(s == null ? "" : s.sector()), area = new TextField(s == null ? "" : s.area()), landmark = new TextField(s == null ? "" : s.landmark()), contact = new TextField(s == null ? "" : s.contactNumber()), alternate = new TextField(s == null ? "" : s.alternateContact());
+        TextArea desc = new TextArea(s == null ? "" : s.description());
+        TextArea facilities = new TextArea(s == null ? "" : String.join(", ", s.facilities()));
+        name.setPromptText("Enter service name"); sub.setPromptText("e.g. Emergency medical unit");
+        contact.setPromptText("Primary contact number"); alternate.setPromptText("Optional alternate contact");
+        sector.setPromptText("Sector or zone"); area.setPromptText("Area"); address.setPromptText("Street or access point"); landmark.setPromptText("Nearby landmark");
+        lat.setPromptText("20.00..."); lon.setPromptText("73.79...");
+        desc.setPromptText("Describe the emergency service and available support"); desc.setPrefRowCount(4);
+        facilities.setPromptText("ICU, First Aid, Ambulance, Oxygen, Wheelchair..."); facilities.setPrefRowCount(3);
+        ComboBox<String> category = combo(java.util.Arrays.stream(EmergencyService.Category.values()).map(Enum::name).toArray(String[]::new)); category.setValue(s == null ? "HOSPITAL" : s.category().name());
+        ComboBox<String> status = combo(java.util.Arrays.stream(EmergencyService.OperationalStatus.values()).map(Enum::name).toArray(String[]::new)); status.setValue(s == null ? "OPEN" : s.operationalStatus().name());
+        CheckBox active = new CheckBox("Active"); active.setSelected(s == null || s.active()); Label error = label("", "admin-emergency-form-error");
+        Button save = new Button("SAVE SERVICE"); save.getStyleClass().add("primary-button"); save.setOnAction(e -> { try {
+            double a=Double.parseDouble(lat.getText()), b=Double.parseDouble(lon.getText());
+            if(name.getText().isBlank()||Double.isNaN(a)||Double.isNaN(b)||a==0&&b==0||Math.abs(a)>90||Math.abs(b)>180) throw new IllegalArgumentException("Enter a valid name and latitude/longitude.");
+            if(a<19.4||a>20.5||b<73.4||b>74.4) { error.setText("Location appears outside the supported Nashik emergency area. Please verify."); return; }
+            if (!emergencyServicesFirestoreAvailable) { error.setText("Preview only — Firebase access unavailable."); return; }
+            String id=s==null?"svc-"+System.currentTimeMillis():s.serviceId();
+            saveEmergencyService(new EmergencyService(id,name.getText(),EmergencyService.Category.valueOf(category.getValue()),sub.getText(),desc.getText(),a,b,address.getText(),sector.getText(),area.getText(),landmark.getText(),contact.getText(),alternate.getText(),EmergencyService.OperationalStatus.valueOf(status.getValue()),java.util.Arrays.stream(facilities.getText().split(",")).map(String::trim).filter(x->!x.isBlank()).toList(),active.isSelected(),s==null?String.valueOf(System.currentTimeMillis()):s.createdAt(),"",s==null?"":"", ""),save, true);
+        } catch(Exception x){error.setText("Enter valid service values.");} });
+        Button cancel=new Button("CANCEL"); cancel.getStyleClass().add("admin-emergency-cancel"); cancel.setOnAction(e->showSection("Emergency"));
+
+        for (Node control : List.of(name, sub, lat, lon, address, sector, area, landmark, contact, alternate, desc, facilities, category, status)) {
+            control.getStyleClass().add("admin-emergency-input");
+            if (control instanceof javafx.scene.control.Control fxControl) fxControl.setMaxWidth(Double.MAX_VALUE);
+        }
+        GridPane basic = emergencyFormGrid(
+                emergencyFormField("Service Name", true, name), emergencyFormField("Category", true, category),
+                emergencyFormField("Sub Type", false, sub), emergencyFormField("Operational Status", true, status));
+        GridPane contactLocation = emergencyFormGrid(
+                emergencyFormField("Contact Number", false, contact), emergencyFormField("Alternate Contact", false, alternate),
+                emergencyFormField("Sector", false, sector), emergencyFormField("Area", false, area),
+                emergencyFormField("Address", false, address), emergencyFormField("Landmark", false, landmark));
+        GridPane coordinates = emergencyFormGrid(
+                emergencyFormField("Latitude", true, lat), emergencyFormField("Longitude", true, lon));
+        Label coordinateHint = label("Enter the exact service location used on the Emergency map.", "admin-emergency-form-hint");
+        VBox mapSelectorSlot = new VBox(8);
+        Button selectOnMap = new Button("SELECT ON MAP");
+        selectOnMap.getStyleClass().add("secondary-button");
+        selectOnMap.setOnAction(event -> openEmergencyLocationSelector(lat, lon, error, mapSelectorSlot));
+        VBox visibility = new VBox(3, label("Service Visibility", "admin-emergency-form-label"), active,
+                label("Active services are visible on the User Emergency page.", "admin-emergency-form-hint"));
+        visibility.getStyleClass().add("admin-emergency-visibility");
+        HBox actions = new HBox(10, cancel, save); actions.setAlignment(Pos.CENTER_RIGHT); actions.getStyleClass().add("admin-emergency-form-actions");
+        VBox form = new VBox(16);
+        form.getStyleClass().add("admin-emergency-service-form");
+        if (emergencyServicesPreviewActive) form.getChildren().add(label(emergencyServicesPreviewStatus(), "admin-emergency-preview-banner"));
+        form.getChildren().addAll(
+                emergencyFormSection("BASIC INFORMATION", basic),
+                emergencyFormSection("CONTACT & LOCATION", contactLocation, label("LOCATION COORDINATES", "admin-emergency-form-subheading"), coordinates, coordinateHint, selectOnMap, mapSelectorSlot),
+                emergencyFormSection("SERVICE DETAILS", emergencyFormField("Description", false, desc), emergencyFormField("Facilities", false, facilities), visibility),
+                error, actions);
+        return pageShell("Emergency Service", "Add or edit an Admin-managed emergency service.", infoPanel("SERVICE INFORMATION", form));
+    }
+
+    private GridPane emergencyFormGrid(Node... fields) {
+        GridPane grid = new GridPane(); grid.setHgap(16); grid.setVgap(12);
+        for (int i = 0; i < fields.length; i++) { grid.add(fields[i], i % 2, i / 2); GridPane.setHgrow(fields[i], Priority.ALWAYS); }
+        return grid;
+    }
+
+    private VBox emergencyFormField(String title, boolean required, Node control) {
+        Label fieldTitle = label(title + (required ? " *" : ""), "admin-emergency-form-label");
+        VBox field = new VBox(5, fieldTitle, control); field.getStyleClass().add("admin-emergency-form-field");
+        GridPane.setHgrow(field, Priority.ALWAYS); return field;
+    }
+
+    private VBox emergencyFormSection(String title, Node... content) {
+        VBox section = new VBox(10, label(title, "admin-emergency-form-section"));
+        section.getChildren().addAll(content); section.getStyleClass().add("admin-emergency-form-section-box");
+        return section;
+    }
+
+    private void openEmergencyLocationSelector(TextField latitudeField, TextField longitudeField, Label validation,
+            VBox selectorSlot) {
+        String previousLatitude = latitudeField.getText();
+        String previousLongitude = longitudeField.getText();
+        double initialLatitude = validCoordinateText(previousLatitude, true) ? Double.parseDouble(previousLatitude.trim()) : 20.0097;
+        double initialLongitude = validCoordinateText(previousLongitude, false) ? Double.parseDouble(previousLongitude.trim()) : 73.7920;
+        Label selected = label("Selected Location\nLatitude: " + formatCoordinate(initialLatitude)
+                + "\nLongitude: " + formatCoordinate(initialLongitude), "admin-emergency-form-hint");
+        EmergencyLocationSelector selector = new EmergencyLocationSelector((latitude, longitude) -> {
+            latitudeField.setText(formatCoordinate(latitude));
+            longitudeField.setText(formatCoordinate(longitude));
+            selected.setText("Selected Location\nLatitude: " + formatCoordinate(latitude)
+                    + "\nLongitude: " + formatCoordinate(longitude));
+            if (!isNashikEmergencyCoordinate(latitude, longitude)) {
+                validation.setText("Location appears outside the supported Nashik emergency area. Please verify.");
+            } else {
+                validation.setText("");
+            }
+        });
+        selector.setInitialLocation(initialLatitude, initialLongitude);
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("admin-emergency-cancel");
+        cancel.setOnAction(event -> {
+            latitudeField.setText(previousLatitude);
+            longitudeField.setText(previousLongitude);
+            selectorSlot.getChildren().clear();
+            validation.setText("");
+        });
+        Button use = new Button("USE THIS LOCATION");
+        use.getStyleClass().add("primary-button");
+        use.setOnAction(event -> selectorSlot.getChildren().clear());
+        HBox actions = new HBox(10, cancel, createSpacer(), use);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+        VBox selectorCard = new VBox(9, label("Select Emergency Service Location", "admin-emergency-form-subheading"),
+                selector.node(), selected, actions);
+        selectorCard.getStyleClass().add("admin-emergency-location-selector");
+        selectorSlot.getChildren().setAll(selectorCard);
+    }
+
+    private boolean validCoordinateText(String value, boolean latitude) {
+        try {
+            double coordinate = Double.parseDouble(value == null ? "" : value.trim());
+            return Double.isFinite(coordinate) && coordinate != 0D
+                    && (latitude ? coordinate >= -90D && coordinate <= 90D : coordinate >= -180D && coordinate <= 180D);
+        } catch (NumberFormatException exception) {
+            return false;
+        }
+    }
+
+    private boolean isNashikEmergencyCoordinate(double latitude, double longitude) {
+        return latitude >= 19.4D && latitude <= 20.5D && longitude >= 73.4D && longitude <= 74.4D;
+    }
+
+    private String formatCoordinate(double coordinate) {
+        return String.format(java.util.Locale.ROOT, "%.5f", coordinate);
+    }
+    private EmergencyService copyActive(EmergencyService s, boolean value){return new EmergencyService(s.serviceId(),s.name(),s.category(),s.subType(),s.description(),s.latitude(),s.longitude(),s.address(),s.sector(),s.area(),s.landmark(),s.contactNumber(),s.alternateContact(),s.operationalStatus(),s.facilities(),value,s.createdAt(),"",s.createdBy(),"");}
+    private void saveEmergencyService(EmergencyService s, Button b) {
+        saveEmergencyService(s, b, false);
+    }
+    /** Preview-row toggles are local; an explicit form save may create the first real record. */
+    private void saveEmergencyService(EmergencyService s, Button b, boolean explicitFormSave) {
+        if (emergencyServicesPreviewActive && !explicitFormSave) { updatePreviewService(s); return; }
+        if (!emergencyServicesFirestoreAvailable) {
+            emergencyServicesPreviewMessage = "Preview only — Firebase access unavailable.";
+            showSection("Emergency");
+            return;
+        }
+        b.setDisable(true); AppSession.User u=AppSession.currentUser();
+        java.util.concurrent.CompletableFuture.runAsync(()->{try{emergencyFirestore.saveEmergencyService(s,u.idToken());Platform.runLater(this::loadEmergencyServicesAsync);}
+            catch(Exception x){Platform.runLater(()->{b.setDisable(false);emergencyServicesError="permission";emergencyServicesPreviewMessage="Preview only — Firebase access unavailable.";showSection("Emergency");});}});
+    }
+
+    private void updatePreviewService(EmergencyService updated) {
+        emergencyServices = emergencyServices.stream().map(service -> service.serviceId().equals(updated.serviceId()) ? updated : service).toList();
+        emergencyServicesPreviewMessage = emergencyServicesFirestoreAvailable
+                ? "Preview change only — no Firestore service records found."
+                : "Preview only — Firebase access unavailable.";
+        showSection("Emergency");
+    }
+
+    private void deleteEmergencyService(EmergencyService s, Button b) {
+        if (!confirm("Delete Emergency Service", "Delete " + s.name() + "?")) return;
+        if (emergencyServicesPreviewActive) {
+            emergencyServices = emergencyServices.stream().filter(service -> !service.serviceId().equals(s.serviceId())).toList();
+            emergencyServicesPreviewMessage = emergencyServicesFirestoreAvailable
+                    ? "Preview deletion only — no Firestore service records found."
+                    : "Preview only — Firebase access unavailable.";
+            showSection("Emergency");
+            return;
+        }
+        b.setDisable(true); AppSession.User u=AppSession.currentUser();
+        java.util.concurrent.CompletableFuture.runAsync(()->{try{emergencyFirestore.deleteEmergencyService(s.serviceId(),u.idToken());Platform.runLater(this::loadEmergencyServicesAsync);}
+            catch(Exception x){Platform.runLater(()->{b.setDisable(false);emergencyServicesError="permission";emergencyServicesPreviewMessage="Preview only — Firebase access unavailable.";showSection("Emergency");});}});
+    }
+
+    private String emergencyServicesPreviewStatus() {
+        if (!emergencyServicesPreviewMessage.isBlank()) return emergencyServicesPreviewMessage;
+        return emergencyServicesFirestoreAvailable
+                ? "Local preview services — no Firestore service records found."
+                : "Local preview services — Firebase access unavailable.";
+    }
+
+    private void updateEmergencyFromAdmin(EmergencyReport report, String priorityValue, String statusValue, String teamName, String notes, Button button) {
+        EmergencyReport.Status status = EmergencyReport.Status.valueOf(statusValue);
+        if (status == EmergencyReport.Status.TEAM_DISPATCHED && (teamName == null || "Unassigned".equals(teamName))) { showInfo("Assign a response team", "Assign a team before marking it dispatched."); return; }
+        long now = System.currentTimeMillis(); String stamp = String.valueOf(now);
+        String team = "Unassigned".equals(teamName) ? "" : teamName;
+        EmergencyReport updated = new EmergencyReport(report.emergencyId(), report.trackingId(), report.userId(), report.reporterName(), report.reporterPhone(), report.emergencyType(), report.description(), report.peopleAffected(), report.landmark(), report.latitude(), report.longitude(), report.locationLabel(), EmergencyReport.Priority.valueOf(priorityValue), status, team.isBlank() ? "" : team.toLowerCase().replace(' ', '-'), team, team.isBlank() ? "" : team.split(" ")[0], notes, EmergencyReport.userStatusText(status), report.createdAt(), stamp,
+                status.ordinal() >= EmergencyReport.Status.ACKNOWLEDGED.ordinal() ? valueOr(stamp, report.acknowledgedAt()) : report.acknowledgedAt(),
+                status.ordinal() >= EmergencyReport.Status.TEAM_DISPATCHED.ordinal() ? valueOr(stamp, report.dispatchedAt()) : report.dispatchedAt(),
+                status.ordinal() >= EmergencyReport.Status.HELP_ARRIVING.ordinal() ? valueOr(stamp, report.helpArrivingAt()) : report.helpArrivingAt(),
+                status == EmergencyReport.Status.RESOLVED ? stamp : report.resolvedAt(), report.source());
+        button.setDisable(true); AppSession.User user = AppSession.currentUser();
+        java.util.concurrent.CompletableFuture.runAsync(() -> { try { emergencyFirestore.updateEmergencyReport(updated, user.idToken()); Platform.runLater(this::loadEmergencyReportsAsync); }
+            catch (Exception exception) { System.err.println("EMERGENCY_ADMIN_UPDATE_DIAGNOSTIC action=UPDATE emergencyId=" + report.emergencyId() + " result=failed error=" + exception.getMessage()); Platform.runLater(() -> button.setDisable(false)); } });
     }
 
     private VBox reportsPage() {
@@ -2071,14 +3928,17 @@ public class AdminDashboardPage {
         GridPane grid = new GridPane();
         grid.setHgap(10);
         grid.setVgap(10);
+        java.util.List<TextField> fields = new java.util.ArrayList<>();
         for (int i = 0; i < prompts.length; i++) {
             TextField field = AppUi.textField(prompts[i]);
+            fields.add(field);
             field.setMaxWidth(Double.MAX_VALUE);
             grid.add(field, i % 2, i / 2);
             GridPane.setHgrow(field, Priority.ALWAYS);
         }
         VBox box = new VBox(grid);
         box.getStyleClass().add("admin-structured-form");
+        box.getProperties().put("orderedTextFields", fields);
         return box;
     }
 
@@ -2145,10 +4005,21 @@ public class AdminDashboardPage {
     }
 
     private List<TextField> formFields(VBox form) {
+        Object ordered = form.getProperties().get("orderedTextFields");
+        if (ordered instanceof List<?> list) {
+            return list.stream()
+                    .filter(TextField.class::isInstance)
+                    .map(TextField.class::cast)
+                    .toList();
+        }
         return form.lookupAll(".input-field").stream()
                 .filter(TextField.class::isInstance)
                 .map(TextField.class::cast)
                 .toList();
+    }
+
+    private void clearPujaServiceForm(VBox form) {
+        formFields(form).forEach(TextField::clear);
     }
 
     private String valueAt(List<TextField> fields, int index) {
@@ -2434,7 +4305,8 @@ public class AdminDashboardPage {
         imageView.setFitWidth(width);
         imageView.setFitHeight(height);
         if (imageUrl != null) {
-            Image image = new Image(imageUrl.toExternalForm());
+            String key = imageUrl.toExternalForm();
+            Image image = IMAGE_CACHE.computeIfAbsent(key, Image::new);
             imageView.setImage(image);
             double scale = Math.max(width / image.getWidth(), height / image.getHeight());
             double cropWidth = Math.min(image.getWidth(), width / scale);
@@ -2458,4 +4330,65 @@ public class AdminDashboardPage {
         return AppUi.confirm(title, message, root == null || root.getScene() == null ? null : root.getScene().getWindow());
     }
 
+    /** Connection A editor: line-based repeatable configuration keeps every item data-driven without modal dialogs. */
+    private final class PackageEditor {
+        final TextField name = AppUi.textField("Package Name");
+        final ComboBox<String> category = select("Package Category", "Premium", "Standard", "Budget");
+        final TextField theme = AppUi.textField("Package Theme");
+        final TextField badge = AppUi.textField("Optional Badge (Best Value / Popular / Family Choice)");
+        final TextField origin = AppUi.textField("Origin City");
+        final TextField destination = AppUi.textField("Destination");
+        final TextField days = AppUi.textField("Days"); final TextField nights = AppUi.textField("Nights");
+        final TextArea shortDescription = area("Short Description"); final TextArea description = area("Full Description");
+        final TextArea travelOptions = area("One travel option per line — e.g. Flight | Delhi to Nashik | Included | Pickup/Drop");
+        final CheckBox selfTravelEnabled = new CheckBox("Enable Self Travel"); final CheckBox simhasthaTravelEnabled = new CheckBox("Enable Simhastha Connect Travel"); final CheckBox flightEnabled = new CheckBox("Enable Flight");
+        final TextField defaultOriginAirport = AppUi.textField("Default Origin Airport (IATA, e.g. IXU)"); final TextField destinationAirport = AppUi.textField("Destination Airport (IATA, e.g. ISK)");
+        final CheckBox economyEnabled = new CheckBox("Economy"); final CheckBox premiumEconomyEnabled = new CheckBox("Premium Economy"); final CheckBox businessEnabled = new CheckBox("Business"); final CheckBox firstClassEnabled = new CheckBox("First Class");
+        final TextField economyCharge = AppUi.textField("Economy package charge (INR)"); final TextField premiumEconomyCharge = AppUi.textField("Premium Economy package charge (INR)"); final TextField businessCharge = AppUi.textField("Business package charge (INR)"); final TextField firstClassCharge = AppUi.textField("First Class package charge (INR)");
+        final TextField preferredAirlines = AppUi.textField("Preferred airlines (optional)"); final CheckBox flightAssistance = new CheckBox("Flight assistance included"); final CheckBox airportPickup = new CheckBox("Airport pickup included"); final TextField baggageNote = AppUi.textField("Baggage note"); final TextField travelInstructions = AppUi.textField("Travel instructions");
+        final TextArea stayOptions = area("One stay option per line — e.g. Premium Hotel | 4 nights | Nashik | Included");
+        final TextArea mealOptions = area("One meal option per line — e.g. Breakfast + Dinner | Included");
+        final TextArea facilities = area("One facility per line — e.g. Ramkund Snan | Included");
+        final TextArea touristPlaces = area("One tourist place per line — e.g. Trimbakeshwar | Included");
+        final TextField itineraryDayTitle = AppUi.textField("Day Title — e.g. Day 1 — Arrival");
+        final TextArea itineraryActivities = area("One activity per line — e.g. TRAVEL: Arrival in Nashik");
+        final TextField basePrice = AppUi.textField("Base Package Price (INR)"); final TextField startingPrice = AppUi.textField("Starting Price (INR)");
+        final TextField originalPrice = AppUi.textField("Original Price, if any (INR)"); final TextField discount = AppUi.textField("Discount %, if configured");
+        final TextArea inclusions = area("One inclusion per line"); final TextArea exclusions = area("One exclusion per line"); final TextArea policies = area("One policy per line — e.g. Cancellation: Terms shared during booking");
+        final TextField availableFrom = AppUi.textField("Available From (YYYY-MM-DD)"); final TextField availableUntil = AppUi.textField("Available Until (YYYY-MM-DD)"); final TextField departureDates = AppUi.textField("Possible Departure Dates"); final TextField maximumCapacity = AppUi.textField("Maximum Capacity"); final TextField minimumTravellers = AppUi.textField("Minimum Travellers");
+        PackageMedia cover; PackageMedia hero; final List<PackageMedia> gallery = new ArrayList<>(); final VBox mediaRows = new VBox(8);
+        final String id; final String code; final String createdBy; final String createdAt;
+
+        PackageEditor(ManagedKumbhPackage p) {
+            id = p == null ? java.util.UUID.randomUUID().toString() : p.packageId(); code = p == null ? "KPKG-2027-" + java.util.UUID.randomUUID().toString().substring(0, 5).toUpperCase() : p.packageCode(); createdBy = p == null ? (AppSession.currentUser() == null ? "" : AppSession.currentUser().uid()) : p.createdBy(); createdAt = p == null ? String.valueOf(System.currentTimeMillis()) : p.createdAt();
+            destination.setText("Nashik – Simhastha 2027"); applyTravelConfig(PackageTravelConfig.defaults(""));
+            if (p != null) populate(p);
+        }
+        Node basic() { return grid(name, category, theme, badge, origin, destination, days, nights, shortDescription, description); }
+        Node travel() { return new VBox(10, travelOptions, muted("Simhastha Connect flight configuration — controls package upgrade charges, not live airline fares."), new HBox(12,selfTravelEnabled,simhasthaTravelEnabled,flightEnabled), grid(defaultOriginAirport,destinationAirport), new HBox(12,economyEnabled,premiumEconomyEnabled,businessEnabled,firstClassEnabled), grid(economyCharge,premiumEconomyCharge,businessCharge,firstClassCharge), preferredAirlines, new HBox(12,flightAssistance,airportPickup), baggageNote,travelInstructions); } Node stay() { return stayOptions; } Node meals() { return mealOptions; } Node experience() { return facilities; } Node sightseeing() { return touristPlaces; }
+        Node itinerary() { return new VBox(9, itineraryDayTitle, itineraryActivities, muted("Use activity types such as TRAVEL, PICKUP, DROP, STAY, MEAL, GHAT, SNAN, TEMPLE, PUJA, TOURIST_PLACE, EVENT, FREE_TIME, or OTHER.")); }
+        Node pricing() { return grid(basePrice, startingPrice, originalPrice, discount, muted("Currency: INR. Optional component prices are recorded in the relevant Travel, Stay, Meals, Experience and Sightseeing entries.")); }
+        Node inclusions() { return new VBox(9, inclusions, exclusions); } Node policies() { return policies; } Node availability() { return grid(availableFrom, availableUntil, departureDates, maximumCapacity, minimumTravellers); }
+        Node media() { Button coverButton = smallButton("Change Cover Image"); coverButton.setOnAction(e -> chooseMedia(PackageMediaType.COVER)); Button heroButton = smallButton("Change Hero Image"); heroButton.setOnAction(e -> chooseMedia(PackageMediaType.HERO)); Button add = smallButton("+ Add Photo"); add.setOnAction(e -> chooseMedia(PackageMediaType.GALLERY)); refreshMediaRows(); return new VBox(10, muted("Temporary local image references only (JPG, JPEG, PNG). Cloudinary upload is intentionally not enabled."), new HBox(8, coverButton, heroButton, add), mediaRows); }
+        private void chooseMedia(PackageMediaType type) { FileChooser chooser = new FileChooser(); chooser.setTitle("Select " + type + " Image"); chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Images", "*.jpg", "*.jpeg", "*.png")); File selected = chooser.showOpenDialog(stage); if (selected == null) return; PackageMedia candidate = new PackageMedia(java.util.UUID.randomUUID().toString(), selected.getAbsolutePath(), "", "", type, gallery.size(), type != PackageMediaType.GALLERY, String.valueOf(System.currentTimeMillis())); Optional<String> issue = PackageMediaService.temporary().validateReference(candidate.url()); if (issue.isPresent()) { showInfo("Image not added", issue.get()); return; } if (type == PackageMediaType.COVER) cover = candidate; else if (type == PackageMediaType.HERO) hero = candidate; else { if (gallery.size() >= 10) { showInfo("Gallery limit", "A package can have up to 10 gallery images."); return; } if (gallery.stream().anyMatch(m -> m.url().equals(candidate.url()))) { showInfo("Duplicate image", "This photo is already in the gallery."); return; } gallery.add(candidate); } refreshMediaRows(); }
+        private void refreshMediaRows() { mediaRows.getChildren().clear(); addMediaRow("Cover Image", cover, PackageMediaType.COVER); addMediaRow("Hero Image", hero, PackageMediaType.HERO); for (int i = 0; i < gallery.size(); i++) addGalleryRow(i); }
+        private void addMediaRow(String label, PackageMedia media, PackageMediaType type) { HBox row = new HBox(9, muted(label + ": " + (media == null ? "Not selected" : new File(media.url()).getName()))); if (media != null) { Button remove = smallButton("Remove"); remove.setOnAction(e -> { if (type == PackageMediaType.COVER) cover = null; else hero = null; refreshMediaRows(); }); row.getChildren().add(remove); } row.getStyleClass().add("package-media-admin-row"); mediaRows.getChildren().add(row); }
+        private void addGalleryRow(int index) { PackageMedia media = gallery.get(index); TextField caption = AppUi.textField("Caption"); caption.setText(media.caption()); caption.textProperty().addListener((o, a, value) -> gallery.set(index, new PackageMedia(media.mediaId(), media.url(), media.publicId(), value, media.mediaType(), media.sortOrder(), false, media.createdAt()))); Button up = smallButton("↑"); up.setDisable(index == 0); up.setOnAction(e -> { java.util.Collections.swap(gallery, index, index - 1); normalizeGallery(); refreshMediaRows(); }); Button down = smallButton("↓"); down.setDisable(index == gallery.size() - 1); down.setOnAction(e -> { java.util.Collections.swap(gallery, index, index + 1); normalizeGallery(); refreshMediaRows(); }); Button remove = smallButton("Remove"); remove.setOnAction(e -> { gallery.remove(index); normalizeGallery(); refreshMediaRows(); }); HBox row = new HBox(8, muted((index + 1) + ". " + new File(media.url()).getName()), caption, up, down, remove); HBox.setHgrow(caption, Priority.ALWAYS); row.getStyleClass().add("package-media-admin-row"); mediaRows.getChildren().add(row); }
+        private void normalizeGallery() { for (int i = 0; i < gallery.size(); i++) { PackageMedia m = gallery.get(i); gallery.set(i, new PackageMedia(m.mediaId(),m.url(),m.publicId(),m.caption(),PackageMediaType.GALLERY,i,false,m.createdAt())); } }
+        private void populate(ManagedKumbhPackage p) { name.setText(p.name()); category.setValue(cap(p.category().name())); theme.setText(p.theme()); badge.setText(p.badge()); origin.setText(p.origin()); destination.setText(p.destination()); days.setText(String.valueOf(p.days())); nights.setText(String.valueOf(p.nights())); shortDescription.setText(p.shortDescription()); description.setText(p.description()); travelOptions.setText(lines(p.travelOptions().stream().filter(value -> !value.startsWith(PackageTravelConfig.PREFIX)).toList())); applyTravelConfig(PackageTravelConfig.fromTravelOptions(p.travelOptions(),p.origin())); stayOptions.setText(lines(p.stayOptions())); mealOptions.setText(lines(p.mealOptions())); facilities.setText(lines(p.facilities())); touristPlaces.setText(lines(p.touristPlaces())); if (!p.itinerary().isEmpty()) { itineraryDayTitle.setText(p.itinerary().get(0).title()); itineraryActivities.setText(p.itinerary().stream().flatMap(d -> d.items().stream()).map(KumbhPackage.Item::text).collect(java.util.stream.Collectors.joining("\n"))); } basePrice.setText(String.valueOf(p.basePrice())); startingPrice.setText(String.valueOf(p.startingPrice())); originalPrice.setText(p.originalPrice() == 0 ? "" : String.valueOf(p.originalPrice())); discount.setText(p.discount() == 0 ? "" : String.valueOf(p.discount())); inclusions.setText(lines(p.inclusions())); exclusions.setText(lines(p.exclusions())); policies.setText(p.policies().entrySet().stream().map(e -> e.getKey() + ": " + e.getValue()).collect(java.util.stream.Collectors.joining("\n"))); availableFrom.setText(p.availableFrom()); availableUntil.setText(p.availableUntil()); departureDates.setText(p.departureDates()); maximumCapacity.setText(String.valueOf(p.maximumCapacity())); minimumTravellers.setText(String.valueOf(p.minimumTravellers())); cover=p.coverImage(); hero=p.heroImage(); gallery.addAll(p.gallery()); }
+        ManagedKumbhPackage toPackage(PackageStatus status) { List<KumbhPackage.Item> activities = linesList(itineraryActivities.getText()).stream().map(value -> new KumbhPackage.Item(activityType(value), value, "")).toList(); List<KumbhPackage.Day> itinerary = activities.isEmpty() ? List.of() : List.of(new KumbhPackage.Day(valueOr("Day 1 — Journey", itineraryDayTitle.getText()), activities)); Map<String,String> policyMap = new LinkedHashMap<>(); for(String value : linesList(policies.getText())) { int divider = value.indexOf(':'); policyMap.put(divider < 0 ? "Policy" : value.substring(0, divider).trim(), divider < 0 ? value : value.substring(divider + 1).trim()); } String now = String.valueOf(System.currentTimeMillis()); return new ManagedKumbhPackage(id, code, name.getText().trim(), PackageCategory.valueOf(category.getValue().toUpperCase()), theme.getText().trim(), badge.getText().trim(), origin.getText().trim(), valueOr("Nashik – Simhastha 2027", destination.getText().trim()), number(days), number(nights), shortDescription.getText().trim(), description.getText().trim(), configuredTravelOptions(), linesList(stayOptions.getText()), linesList(mealOptions.getText()), linesList(facilities.getText()), linesList(touristPlaces.getText()), itinerary, number(basePrice), number(startingPrice), number(originalPrice), number(discount), linesList(inclusions.getText()), linesList(exclusions.getText()), policyMap, availableFrom.getText().trim(), availableUntil.getText().trim(), departureDates.getText().trim(), number(maximumCapacity), number(minimumTravellers), status, createdBy, createdAt, now, status == PackageStatus.PUBLISHED ? now : "", cover, hero, List.copyOf(gallery)); }
+        private void applyTravelConfig(PackageTravelConfig config) { selfTravelEnabled.setSelected(config.selfTravelEnabled());simhasthaTravelEnabled.setSelected(config.simhasthaConnectEnabled());flightEnabled.setSelected(config.flightEnabled());defaultOriginAirport.setText(config.defaultOriginAirport());destinationAirport.setText(config.destinationAirport());economyEnabled.setSelected(config.allowedCabins().contains(CabinClass.ECONOMY));premiumEconomyEnabled.setSelected(config.allowedCabins().contains(CabinClass.PREMIUM_ECONOMY));businessEnabled.setSelected(config.allowedCabins().contains(CabinClass.BUSINESS));firstClassEnabled.setSelected(config.allowedCabins().contains(CabinClass.FIRST_CLASS));economyCharge.setText(String.valueOf(config.charge(CabinClass.ECONOMY)));premiumEconomyCharge.setText(String.valueOf(config.charge(CabinClass.PREMIUM_ECONOMY)));businessCharge.setText(String.valueOf(config.charge(CabinClass.BUSINESS)));firstClassCharge.setText(String.valueOf(config.charge(CabinClass.FIRST_CLASS)));preferredAirlines.setText(config.preferredAirlines());flightAssistance.setSelected(config.flightAssistanceIncluded());airportPickup.setSelected(config.airportPickupIncluded());baggageNote.setText(config.baggageNote());travelInstructions.setText(config.travelInstructions()); }
+        private List<String> configuredTravelOptions() { Set<CabinClass> cabins=EnumSet.noneOf(CabinClass.class);if(economyEnabled.isSelected())cabins.add(CabinClass.ECONOMY);if(premiumEconomyEnabled.isSelected())cabins.add(CabinClass.PREMIUM_ECONOMY);if(businessEnabled.isSelected())cabins.add(CabinClass.BUSINESS);if(firstClassEnabled.isSelected())cabins.add(CabinClass.FIRST_CLASS);Map<CabinClass,Integer> charges=new EnumMap<>(CabinClass.class);charges.put(CabinClass.ECONOMY,number(economyCharge));charges.put(CabinClass.PREMIUM_ECONOMY,number(premiumEconomyCharge));charges.put(CabinClass.BUSINESS,number(businessCharge));charges.put(CabinClass.FIRST_CLASS,number(firstClassCharge));PackageTravelConfig config=new PackageTravelConfig(selfTravelEnabled.isSelected(),simhasthaTravelEnabled.isSelected(),flightEnabled.isSelected(),defaultOriginAirport.getText().trim(),destinationAirport.getText().trim(),cabins,charges,preferredAirlines.getText().trim(),flightAssistance.isSelected(),airportPickup.isSelected(),baggageNote.getText().trim(),travelInstructions.getText().trim());List<String> values=new ArrayList<>(linesList(travelOptions.getText()));values.removeIf(value->value.startsWith(PackageTravelConfig.PREFIX));values.add(config.encode());return List.copyOf(values); }
+    }
+    private ComboBox<String> select(String prompt, String... values) { ComboBox<String> combo = new ComboBox<>(); combo.getItems().addAll(values); combo.setValue(values[0]); combo.setPromptText(prompt); combo.getStyleClass().add("input-combo"); return combo; }
+    private TextArea area(String prompt) { TextArea field = new TextArea(); field.setPromptText(prompt); field.setPrefRowCount(3); field.setWrapText(true); field.getStyleClass().add("input-field"); return field; }
+    private Node grid(Node... nodes) { GridPane grid = new GridPane(); grid.setHgap(10); grid.setVgap(10); for (int i = 0; i < nodes.length; i++) { grid.add(nodes[i], i % 2, i / 2); GridPane.setHgrow(nodes[i], Priority.ALWAYS); } return grid; }
+    private List<String> linesList(String value) { return java.util.Arrays.stream(value == null ? new String[0] : value.split("\\r?\\n")).map(String::trim).filter(s -> !s.isBlank()).toList(); }
+    private String lines(List<String> values) { return String.join("\n", values); }
+    private int number(TextField field) { try { return Integer.parseInt(field.getText().trim()); } catch (Exception e) { return 0; } }
+    private ItineraryItemType activityType(String value) { String key = value == null ? "" : value.trim().toUpperCase().split("[: -]", 2)[0]; try { return ItineraryItemType.valueOf(key); } catch (Exception e) { return ItineraryItemType.OTHER; } }
+    private String cap(String value) { return value.substring(0, 1) + value.substring(1).toLowerCase(); }
+
+    private record AdminNotification(String id, String title, String detail, String targetSection) {
+    }
 }

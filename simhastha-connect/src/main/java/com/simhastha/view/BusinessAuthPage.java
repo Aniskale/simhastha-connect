@@ -1,5 +1,10 @@
 package com.simhastha.view;
 
+import com.simhastha.controller.BusinessAuthController;
+import com.simhastha.service.AuthService;
+import com.simhastha.util.AppNavigator;
+import com.simhastha.util.NavigationUtil;
+
 import java.io.File;
 import java.net.URL;
 import java.util.ArrayList;
@@ -31,6 +36,7 @@ import javafx.stage.Stage;
 
 public class BusinessAuthPage {
 
+    private final BusinessAuthController controller = new BusinessAuthController();
     private static final Map<String, BusinessAccount> registeredBusinesses = new HashMap<>();
 
     private VBox formSlot;
@@ -73,6 +79,8 @@ public class BusinessAuthPage {
         Label icon = AppUi.symbolIcon("\uE719", "auth-large-icon");
         Label title = new Label("Local Business Portal");
         title.getStyleClass().add("auth-visual-title");
+        title.setWrapText(true);
+        title.setMaxWidth(300);
 
         Label subtitle = new Label("Connect your services with Simhastha pilgrims");
         subtitle.getStyleClass().add("auth-visual-subtitle");
@@ -111,8 +119,8 @@ public class BusinessAuthPage {
 
             if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Business Email and Password.");
-            } else if (AuthService.isFirebaseEnabled()) {
-                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
+            } else if (controller.isFirebaseEnabled()) {
+                runAuth(loginButton, controller.login(userId, userPassword));
             } else if (!registeredBusinesses.containsKey(userId)) {
                 showInfo("Login Failed", "Business account not found. Please create an account first.");
             } else if (!registeredBusinesses.get(userId).password.equals(userPassword)) {
@@ -226,10 +234,10 @@ public class BusinessAuthPage {
                         password.getText().trim());
                 account.logoFile = logoFile[0];
                 account.coverFile = coverFile[0];
-                if (AuthService.isFirebaseEnabled()) {
+                if (controller.isFirebaseEnabled()) {
                     registerButton.setDisable(true);
                     registerButton.setText("SUBMITTING...");
-                    AuthService.registerBusiness(account, password.getText().trim())
+                    controller.registerBusiness(account, password.getText().trim())
                             .whenComplete((result, error) -> Platform.runLater(() -> {
                                 registerButton.setDisable(false);
                                 registerButton.setText("REGISTER BUSINESS");
@@ -336,7 +344,7 @@ public class BusinessAuthPage {
             showInfo("Forgot Password", "Please enter your email first.");
             return;
         }
-        AuthService.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
+        controller.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
     }
 
     private void replaceNode(javafx.scene.Node node) {
@@ -417,6 +425,12 @@ public class BusinessAuthPage {
         public final String mobile;
         public final String email;
         public final String location;
+        public final String address;
+        public final String area;
+        public final String city;
+        public final String latitude;
+        public final String longitude;
+        public final String locationUpdatedAt;
         public final List<String> services = new ArrayList<>();
         public final List<String> bookings = new ArrayList<>();
         public File logoFile;
@@ -436,6 +450,12 @@ public class BusinessAuthPage {
             this.mobile = mobile;
             this.email = email;
             this.location = location;
+            this.address = location;
+            this.area = "";
+            this.city = "";
+            this.latitude = "";
+            this.longitude = "";
+            this.locationUpdatedAt = "";
             this.password = password;
         }
     }

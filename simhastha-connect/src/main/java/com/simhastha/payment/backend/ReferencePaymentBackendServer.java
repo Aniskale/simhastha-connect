@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import com.simhastha.payment.PaymentException;
@@ -17,6 +18,7 @@ import com.simhastha.payment.PaymentRequest;
 import com.simhastha.payment.PaymentResult;
 import com.simhastha.payment.PaymentVerificationRequest;
 import com.simhastha.payment.api.PaymentJson;
+import com.google.cloud.firestore.Firestore;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -24,9 +26,15 @@ public final class ReferencePaymentBackendServer {
 
     private static final Logger LOGGER = Logger.getLogger(ReferencePaymentBackendServer.class.getName());
     private final PaymentBackendProcessor processor;
+    private final BusinessInventoryHoldService inventoryHolds;
 
     public ReferencePaymentBackendServer(PaymentBackendProcessor processor) {
+        this(processor, new UnavailableBusinessInventoryHoldService());
+    }
+
+    public ReferencePaymentBackendServer(PaymentBackendProcessor processor, BusinessInventoryHoldService inventoryHolds) {
         this.processor = processor;
+        this.inventoryHolds = inventoryHolds;
     }
 
     public static void main(String[] args) throws IOException {
@@ -34,15 +42,22 @@ public final class ReferencePaymentBackendServer {
                 System.getenv().getOrDefault("PAYMENTS_BACKEND_PORT", "8080")));
         PaymentBackendConfig config = PaymentBackendConfig.load();
         PaymentRepository memory = new InMemoryPaymentRepository();
-        PaymentRepository repository = config.hasFirestoreConfig()
-                ? new CompositePaymentRepository(memory, new FirestorePaymentRepository(config))
-                : memory;
+        PaymentRepository repository = memory;
+        BusinessInventoryHoldService holds = new UnavailableBusinessInventoryHoldService();
+        if (config.hasFirestoreConfig()) {
+            Firestore firestore = FirebaseAdminFirestore.open(config);
+            holds = new AdminFirestoreBusinessInventoryHoldService(firestore);
+        }
         PaymentBackendProcessor processor = new PaymentBackendProcessor(
                 new RazorpayOrderCreator(config, new DefaultPaymentAmountValidator()),
                 config,
                 repository,
-                new NoOpBookingPaymentConfirmationService());
-        ReferencePaymentBackendServer backend = new ReferencePaymentBackendServer(processor);
+                new NoOpBookingPaymentConfirmationService(), holds);
+        if (!config.hasFirestoreConfig()) {
+            LOGGER.warning("Business inventory holds are disabled: set backend-only GOOGLE_APPLICATION_CREDENTIALS "+
+                    "(or PAYMENTS_FIREBASE_SERVICE_ACCOUNT_PATH) to a Firebase service-account JSON file.");
+        }
+        ReferencePaymentBackendServer backend = new ReferencePaymentBackendServer(processor, holds);
         backend.start(port);
     }
 
@@ -55,6 +70,10 @@ public final class ReferencePaymentBackendServer {
         server.createContext("/api/payments/webhook", this::handleWebhook);
         server.setExecutor(Executors.newCachedThreadPool());
         server.start();
+        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(() -> {
+            try { inventoryHolds.releaseExpiredHolds(); }
+            catch (PaymentException exception) { LOGGER.warning("Expired booking hold cleanup failed: " + exception.getMessage()); }
+        }, 1, 1, TimeUnit.MINUTES);
         System.out.println("Payment backend listening on http://localhost:" + port);
     }
 
@@ -65,16 +84,19 @@ public final class ReferencePaymentBackendServer {
         }
 
         try {
+            LOGGER.info("Payment order endpoint received from " + exchange.getRemoteAddress());
             String idempotencyKey = exchange.getRequestHeaders().getFirst("Idempotency-Key");
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             PaymentRequest request = PaymentJson.parseRequest(body);
+            LOGGER.info("Payment order request parsed: booking=" + request.bookingId() + ", amount=" + request.amount());
             PaymentOrder order = processor.createOrder(request, idempotencyKey);
             send(exchange, 200, PaymentJson.orderResponse(order));
+            LOGGER.info("Payment order response returned: booking=" + request.bookingId());
         } catch (PaymentException exception) {
             LOGGER.warning("Payment order creation failed: " + exception.getMessage());
             send(exchange, 400, PaymentJson.error(exception.getMessage()));
         } catch (RuntimeException exception) {
-            LOGGER.warning("Unexpected order creation failure.");
+            LOGGER.log(java.util.logging.Level.SEVERE, "Unexpected order creation failure.", exception);
             send(exchange, 500, PaymentJson.error("Payment order could not be created."));
         }
     }
