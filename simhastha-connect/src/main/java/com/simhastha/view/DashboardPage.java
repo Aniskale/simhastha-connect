@@ -1,10 +1,9 @@
 package com.simhastha.view;
 
-import com.simhastha.controller.BusinessMarketplaceController;
-import com.simhastha.model.PublicBusinessItem;
-import com.simhastha.model.PublicBusinessListing;
-import com.simhastha.util.AppSession;
-import com.simhastha.util.NavigationUtil;
+import java.awt.Desktop;
+import java.net.URL;
+import java.net.URI;
+import java.util.List;
 
 import com.simhastha.config.CloudinaryFolders;
 import com.simhastha.gateway.firebase.FirebaseConfig;
@@ -67,7 +66,6 @@ import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
-import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.DateCell;
@@ -77,15 +75,15 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ScrollPane;
-import javafx.scene.control.Slider;
-import javafx.scene.control.TextArea;
+import javafx.scene.control.Spinner;
 import javafx.scene.control.TextField;
-import javafx.scene.control.Tooltip;
+import javafx.scene.control.TextArea;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelWriter;
+import javafx.scene.image.WritableImage;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.ColumnConstraints;
-import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
@@ -96,10 +94,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.shape.Arc;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
-import javafx.scene.shape.Rectangle;
-import javafx.scene.web.WebEngine;
-import javafx.scene.web.WebView;
-import javafx.stage.FileChooser;
+import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
@@ -113,8 +108,12 @@ public class DashboardPage {
     private final AppPaymentCoordinator paymentCoordinator = new AppPaymentCoordinator();
     private final BusinessMarketplaceController businessMarketplaceController = new BusinessMarketplaceController();
     private final java.util.Map<String, Button> navButtons = new java.util.LinkedHashMap<>();
+    private String activeModule = "home";
+    private boolean pujaRefreshInProgress;
+    private Timeline pujaLiveRefresh;
     private LocationOption selectedFromLocation;
     private LocationOption selectedToLocation;
+    private static final java.util.Map<String, Image> IMAGE_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.Map<String, Place> TRANSPORT_PLACES = createTransportPlaces();
     private List<PublicBusinessListing> marketplaceBusinesses = List.of();
     private FlowPane marketplaceGrid;
@@ -389,10 +388,49 @@ public class DashboardPage {
             default -> genericModulePage(module);
         };
         root.setCenter(scroll(page));
+        if ("puja".equals(module) || "bookings".equals(module)) {
+            refreshPujaDataAsync(module);
+        }
     }
 
     private void setActiveModule(String module) {
+        activeModule = module;
         navButtons.keySet().forEach(key -> setNavSelected(key, key.equals(module)));
+        if ("puja".equals(module) || "bookings".equals(module)) {
+            startPujaLiveRefresh();
+        } else {
+            stopPujaLiveRefresh();
+        }
+    }
+
+    private void refreshPujaDataAsync(String module) {
+        if (pujaRefreshInProgress || !AppDataStore.isFirebaseEnabled()) {
+            return;
+        }
+        pujaRefreshInProgress = true;
+        String token = AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken();
+        java.util.concurrent.CompletableFuture.runAsync(() -> AppDataStore.refreshPujaFirebaseData(token))
+                .whenComplete((ignored, error) -> javafx.application.Platform.runLater(() -> {
+                    pujaRefreshInProgress = false;
+                    if (module.equals(activeModule)) {
+                        Node focusOwner = root == null || root.getScene() == null ? null : root.getScene().getFocusOwner();
+                        if (focusOwner instanceof javafx.scene.control.TextInputControl) {
+                            return;
+                        }
+                        Node refreshed = "bookings".equals(module) ? myBookingsPage() : pujaPage();
+                        root.setCenter(scroll(refreshed));
+                    }
+                }));
+    }
+
+    private void startPujaLiveRefresh() {
+        stopPujaLiveRefresh();
+    }
+
+    private void stopPujaLiveRefresh() {
+        if (pujaLiveRefresh != null) {
+            pujaLiveRefresh.stop();
+        }
     }
 
     private void setNavSelected(String module, boolean selected) {
@@ -2480,6 +2518,17 @@ public class DashboardPage {
         }
     }
 
+    private record PujaService(String serviceId, String name, String type, String description, String duration,
+            String availableSlots, int price, String location, String mode, String languages, boolean availableToday, String image,
+            String providerId, String providerName, String bookingStatus) {
+        private PujaService(String name, String type, String description, String duration, int price, String location,
+                String mode, String languages, boolean availableToday, String image) {
+            this("mock-" + name.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "-"),
+                    name, type, description, duration, "Varies", price, location, mode, languages, availableToday, image,
+                    "", "Simhastha Verified Desk", "OPEN");
+        }
+    }
+
     private static String[] baseIndianCities() {
         return new String[] {
                 "Agartala", "Agra", "Ahmedabad", "Ahmednagar", "Aizawl", "Ajmer", "Akola", "Alappuzha", "Aligarh", "Alwar", "Amaravati", "Ambala", "Amravati", "Amritsar", "Anand", "Anantapur", "Asansol", "Aurangabad", "Ayodhya",
@@ -3033,15 +3082,1108 @@ public class DashboardPage {
     }
 
     private VBox pujaPage() {
-        if (!AppDataStore.items("puja").isEmpty()) {
-            return pageShell("Puja Services", "Traditional puja support, verified counters and darshan guidance.",
-                    adminControlledGrid("puja", "View Details"));
+        java.util.List<PujaService> services = visiblePujaServices();
+        TextField search = AppUi.textField("Search Puja, Temple, Priest or Location...");
+        search.getStyleClass().add("puja-search-field");
+
+        ComboBox<String> type = pujaFilter("Puja Type", pujaFilterOptions("All Types",
+                services.stream().map(PujaService::type).toList()));
+        ComboBox<String> location = pujaFilter("Location", pujaFilterOptions("All Locations",
+                services.stream().map(PujaService::location).toList()));
+        ComboBox<String> language = pujaFilter("Language", pujaLanguageFilterOptions(services));
+        ComboBox<String> mode = pujaFilter("Mode", pujaFilterOptions("Any Mode",
+                services.stream().map(PujaService::mode).toList()));
+        ComboBox<String> price = pujaFilter("Price", pujaPriceFilterOptions(services));
+        CheckBox today = new CheckBox("Available Today");
+        today.getStyleClass().add("puja-today-filter");
+
+        javafx.scene.layout.FlowPane serviceCards = new javafx.scene.layout.FlowPane(14, 14);
+        serviceCards.getStyleClass().add("puja-service-grid");
+
+        Runnable render = () -> renderPujaCards(serviceCards, services, search.getText(), type.getValue(),
+                location.getValue(), language.getValue(), mode.getValue(), price.getValue(), today.isSelected());
+        Runnable resetFilters = () -> {
+            search.clear();
+            type.setValue("All Types");
+            location.setValue("All Locations");
+            language.setValue("All Languages");
+            mode.setValue("Any Mode");
+            price.setValue("Any Price");
+            today.setSelected(false);
+            render.run();
+        };
+        search.textProperty().addListener((observable, oldValue, newValue) -> render.run());
+        search.setOnAction(event -> render.run());
+        type.setOnAction(event -> render.run());
+        location.setOnAction(event -> render.run());
+        language.setOnAction(event -> render.run());
+        mode.setOnAction(event -> render.run());
+        price.setOnAction(event -> render.run());
+        today.setOnAction(event -> render.run());
+        render.run();
+
+        return pageShell("Puja Services", "Safe & Trusted Spiritual Booking",
+                pujaTrustBanner(),
+                pujaFilterPanel(search, type, location, language, mode, price, today, render, resetFilters),
+                pujaProviderRegistrationBanner(),
+                pujaSection("Available / Popular Puja Services", serviceCards),
+                pujaUserSupportSections(services));
+    }
+
+    private HBox pujaUserSupportSections(java.util.List<PujaService> services) {
+        VBox priests = pujaMiniInfoSection("Verified Priests", "\uE77B",
+                AppDataStore.approvedPujaProviders().isEmpty()
+                        ? "Approved priest/provider profiles will appear here after admin verification."
+                        : AppDataStore.approvedPujaProviders().stream()
+                                .limit(3)
+                                .map(provider -> valueOr(provider.providerId, provider.fullName))
+                                .reduce((left, right) -> left + "\n" + right)
+                                .orElse(""));
+        VBox darshan = pujaMiniInfoSection("Official Darshan Services", "\uE8D7",
+                services.stream().anyMatch(service -> service.type().toLowerCase(java.util.Locale.ROOT).contains("darshan"))
+                        ? "Admin-approved darshan services are listed in the Puja cards above."
+                        : "Only admin-created or admin-approved special darshan services will be shown.");
+        VBox locations = pujaMiniInfoSection("Authorized Puja Locations", "\uE707",
+                services.stream().map(PujaService::location).distinct().limit(3)
+                        .reduce((left, right) -> left + "\n" + right)
+                        .orElse("Ramkund\nTrimbakeshwar\nPanchavati"));
+        VBox safety = pujaMiniInfoSection("Puja Safety Center", "\uE72E",
+                "Book only verified services. Do not pay unknown agents. Report suspicious activity from the official support flow.");
+        HBox row = new HBox(12, priests, darshan, locations, safety);
+        row.getStyleClass().add("puja-user-support-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().forEach(node -> HBox.setHgrow(node, Priority.ALWAYS));
+        return row;
+    }
+
+    private VBox pujaMiniInfoSection(String title, String icon, String text) {
+        VBox card = new VBox(8,
+                AppUi.symbolIcon(icon, "puja-trust-icon"),
+                strong(title),
+                muted(text));
+        card.getStyleClass().add("puja-mini-info-card");
+        card.setMaxWidth(Double.MAX_VALUE);
+        return card;
+    }
+
+    private HBox pujaProviderRegistrationBanner() {
+        VBox copy = new VBox(5,
+                strong("Are you a priest or verified spiritual service provider?"),
+                muted("Submit your documents for admin verification. Only approved providers appear to pilgrims."));
+        Button register = new Button("Register Provider");
+        register.getStyleClass().add("transport-primary-button");
+        register.setOnAction(event -> showPujaProviderRegistrationPage());
+        HBox banner = new HBox(14, AppUi.symbolIcon("\uE73E", "puja-trust-icon"), copy, createSpacer(), register);
+        banner.getStyleClass().add("puja-provider-register-banner");
+        banner.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return banner;
+    }
+
+    private void showPujaProviderRegistrationPage() {
+        TextField fullName = AppUi.textField("Name");
+        TextField profilePhoto = AppUi.textField("Profile photo path / URL");
+        TextField phone = AppUi.textField("Phone");
+        TextField email = AppUi.textField("Email");
+        TextField address = AppUi.textField("Address");
+        TextField experience = AppUi.textField("Experience");
+        TextField specialization = AppUi.textField("Specialization");
+        TextField languages = AppUi.textField("Languages");
+        TextField temple = AppUi.textField("Temple / Organization");
+        TextField identity = AppUi.textField("Identity document path / reference");
+        TextField certificates = AppUi.textField("Supporting certificates path / reference");
+        TextField services = AppUi.textField("Services offered");
+        TextField locations = AppUi.textField("Service locations");
+
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("puja"));
+
+        Button submit = new Button("Submit for Admin Verification");
+        submit.getStyleClass().add("transport-primary-button");
+        submit.setOnAction(event -> submitPujaProviderRegistration(fullName, profilePhoto, phone, email, address,
+                experience, specialization, languages, temple, identity, certificates, services, locations));
+
+        VBox basic = pujaRegistrationGroup("Basic Details", fullName, phone, email, address);
+        VBox expertise = pujaRegistrationGroup("Experience & Specialization", experience, specialization, languages, temple);
+        VBox documents = pujaRegistrationGroup("Documents & Services", profilePhoto, identity, certificates, services, locations);
+        VBox note = infoPanel("Verification Flow",
+                "Provider Registration → Document Submission → Admin Review → Admin Approval → Provider Visible to Users\n\n"
+                        + "Important: Providers cannot create unauthorized VIP Darshan. Official Special Darshan is shown only when admin-created or admin-approved.");
+        HBox top = new HBox(10, back, createSpacer(), badge("Status: PENDING after submit"));
+        top.setAlignment(Pos.CENTER_LEFT);
+        VBox content = pageShell("Provider Registration", "Submit documents for Simhastha verified priest/provider approval.",
+                top,
+                pujaTrustBanner(),
+                infoPanel("Provider Details", basic, expertise, documents, new HBox(10, createSpacer(), submit)),
+                note);
+        root.setCenter(scroll(content));
+    }
+
+    private VBox pujaRegistrationGroup(String title, TextField... fields) {
+        GridPane grid = new GridPane();
+        grid.setHgap(12);
+        grid.setVgap(12);
+        for (int i = 0; i < fields.length; i++) {
+            fields[i].setMaxWidth(Double.MAX_VALUE);
+            grid.add(fields[i], i % 2, i / 2);
+            GridPane.setHgrow(fields[i], Priority.ALWAYS);
         }
-        return pageShell("Puja Services", "Traditional puja support, verified counters and darshan guidance.",
-                twoColumnGrid(
-                        paidCard("puja", "Ramkund Rudrabhishek Help Desk", "Pandit Booking\nReceipt Guidance\nPuja Slot Assistance", "Pay Securely", "puja-rudrabhishek", 1, 1),
-                        paidCard("puja", "Trimbakeshwar Darshan Support", "Temple Direction\nPuja Counter Guidance\nElderly Assistance", "Pay Securely", "puja-trimbakeshwar-darshan", 1, 1),
-                        richCard("puja", "Pind Daan Information Counter", "Ritual Requirements\nTiming Windows\nVerified Contact Support", "Timings")));
+        VBox group = new VBox(10, strong(title), grid);
+        group.getStyleClass().add("admin-puja-editor-group");
+        return group;
+    }
+
+    private void submitPujaProviderRegistration(TextField fullName, TextField profilePhoto, TextField phone,
+            TextField email, TextField address, TextField experience, TextField specialization, TextField languages,
+            TextField temple, TextField identity, TextField certificates, TextField services, TextField locations) {
+        if (fullName.getText().isBlank() || phone.getText().isBlank() || email.getText().isBlank()
+                || identity.getText().isBlank() || services.getText().isBlank() || locations.getText().isBlank()) {
+            showInfo("Missing Details", "Please enter full name, phone, email, identity document, services offered and service locations.");
+            return;
+        }
+        String offered = services.getText().trim();
+        if (offered.toLowerCase(java.util.Locale.ROOT).contains("vip darshan")) {
+            showInfo("Unauthorized Service Blocked",
+                    "Providers cannot create or publish unauthorized VIP Darshan. Official Special Darshan must be admin-created or admin-approved.");
+            return;
+        }
+        try {
+            AppDataStore.registerPujaProvider(new AppDataStore.PujaProviderRecord(
+                    "", fullName.getText(), profilePhoto.getText(), phone.getText(), email.getText(), address.getText(),
+                    experience.getText(), specialization.getText(), languages.getText(), temple.getText(),
+                    identity.getText(), certificates.getText(), offered, locations.getText(),
+                    "pending", false, "", ""));
+            showInfo("Registration Submitted",
+                    "Your provider registration is pending admin review. It will appear to pilgrims only after approval.");
+            showModulePage("puja");
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Registration Failed", exception.getMessage());
+        }
+    }
+
+    private HBox pujaTrustBanner() {
+        HBox banner = new HBox(12,
+                pujaTrustItem("\uE73E", "Verified Providers", "Priests and service counters are checked before listing."),
+                pujaTrustItem("\uE8C7", "Transparent Pricing", "Starting prices are shown clearly before booking."),
+                pujaTrustItem("\uE72E", "Secure Booking", "Booking details stay inside the official flow."),
+                pujaTrustItem("\uE8D7", "No Agent Payments", "Do not pay unofficial middlemen or unknown agents."));
+        banner.getStyleClass().add("puja-trust-banner");
+        return banner;
+    }
+
+    private VBox pujaTrustItem(String icon, String title, String detail) {
+        VBox item = new VBox(7, AppUi.symbolIcon(icon, "puja-trust-icon"), strong(title), muted(detail));
+        item.getStyleClass().add("puja-trust-item");
+        HBox.setHgrow(item, Priority.ALWAYS);
+        return item;
+    }
+
+    private java.util.List<String> pujaFilterOptions(String defaultValue, java.util.List<String> rawValues) {
+        java.util.LinkedHashSet<String> values = new java.util.LinkedHashSet<>();
+        values.add(defaultValue);
+        rawValues.stream()
+                .filter(value -> value != null && !value.isBlank())
+                .map(String::trim)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .forEach(values::add);
+        return new java.util.ArrayList<>(values);
+    }
+
+    private java.util.List<String> pujaLanguageFilterOptions(java.util.List<PujaService> services) {
+        java.util.LinkedHashSet<String> values = new java.util.LinkedHashSet<>();
+        values.add("All Languages");
+        services.stream()
+                .map(PujaService::languages)
+                .filter(value -> value != null && !value.isBlank())
+                .flatMap(value -> java.util.Arrays.stream(value.split(",")))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .forEach(values::add);
+        return new java.util.ArrayList<>(values);
+    }
+
+    private java.util.List<String> pujaPriceFilterOptions(java.util.List<PujaService> services) {
+        java.util.List<String> values = new java.util.ArrayList<>();
+        values.add("Any Price");
+        boolean hasUnder500 = services.stream().anyMatch(service -> service.price() > 0 && service.price() < 500);
+        boolean hasMid = services.stream().anyMatch(service -> service.price() >= 500 && service.price() <= 1500);
+        boolean hasHigh = services.stream().anyMatch(service -> service.price() > 1500);
+        if (hasUnder500) {
+            values.add("Under Rs. 500");
+        }
+        if (hasMid) {
+            values.add("Rs. 500 - Rs. 1500");
+        }
+        if (hasHigh) {
+            values.add("Above Rs. 1500");
+        }
+        return values;
+    }
+
+    private ComboBox<String> pujaFilter(String prompt, java.util.List<String> values) {
+        ComboBox<String> combo = new ComboBox<>();
+        combo.getItems().addAll(values);
+        combo.setValue(values.isEmpty() ? prompt : values.get(0));
+        combo.setPromptText(prompt);
+        combo.getStyleClass().add("puja-filter-combo");
+        combo.setMaxWidth(Double.MAX_VALUE);
+        return combo;
+    }
+
+    private VBox pujaFilterPanel(TextField search, ComboBox<String> type, ComboBox<String> location,
+            ComboBox<String> language, ComboBox<String> mode, ComboBox<String> price, CheckBox today,
+            Runnable render, Runnable resetFilters) {
+        Button clearSearch = new Button("×");
+        clearSearch.getStyleClass().add("puja-search-clear-button");
+        clearSearch.setOnAction(event -> {
+            search.clear();
+            render.run();
+        });
+
+        Label searchIcon = AppUi.symbolIcon("\uE721", "puja-search-box-icon");
+        StackPane searchIconBlock = new StackPane(searchIcon);
+        searchIconBlock.getStyleClass().add("puja-search-icon-block");
+
+        HBox searchBox = new HBox(0,
+                searchIconBlock,
+                search,
+                label("ॐ  मंदिर  ⌁", "puja-search-decoration"),
+                clearSearch);
+        searchBox.getStyleClass().add("puja-search-box");
+        searchBox.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(search, Priority.ALWAYS);
+
+        Button searchButton = new Button("Search");
+        searchButton.setGraphic(AppUi.symbolIcon("\uE721", "puja-search-button-icon"));
+        searchButton.getStyleClass().add("puja-main-search-button");
+        searchButton.setOnAction(event -> render.run());
+
+        HBox todayBox = new HBox(8, AppUi.symbolIcon("\uE787", "puja-filter-icon"), today);
+        todayBox.getStyleClass().add("puja-today-toggle-box");
+        todayBox.setAlignment(Pos.CENTER);
+
+        HBox topRow = new HBox(12, searchBox, todayBox, searchButton);
+        topRow.getStyleClass().add("puja-filter-top-row");
+        topRow.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(searchBox, Priority.ALWAYS);
+
+        decoratePujaFilter(type, "\uEC29", "Puja Type", "All Types");
+        decoratePujaFilter(location, "\uE707", "Location", "All Locations");
+        decoratePujaFilter(language, "\uE8D4", "Language", "All Languages");
+        decoratePujaFilter(mode, "\uE8A5", "Mode", "Any Mode");
+        decoratePujaFilter(price, "\uE8C7", "Price", "Any Price");
+
+        Button reset = new Button("Reset All");
+        reset.setGraphic(AppUi.symbolIcon("\uE72C", "puja-filter-icon"));
+        reset.getStyleClass().add("puja-reset-filter-button");
+        reset.setOnAction(event -> resetFilters.run());
+
+        javafx.scene.layout.FlowPane filters = new javafx.scene.layout.FlowPane(10, 10,
+                type, location, language, mode, price, reset);
+        filters.getStyleClass().add("puja-filter-second-row");
+        filters.setAlignment(Pos.CENTER_LEFT);
+
+        VBox panel = new VBox(13, topRow, filters);
+        panel.getStyleClass().add("puja-filter-panel");
+        return panel;
+    }
+
+    private void decoratePujaFilter(ComboBox<String> combo, String icon, String label, String defaultValue) {
+        combo.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(label);
+                    setGraphic(AppUi.symbolIcon(icon, "puja-filter-icon"));
+                } else {
+                    setText(item.equals(defaultValue) ? label : item);
+                    setGraphic(AppUi.symbolIcon(icon, "puja-filter-icon"));
+                }
+            }
+        });
+    }
+
+    private VBox pujaSection(String title, Node body) {
+        VBox section = new VBox(12, sectionTitle(title), body);
+        section.getStyleClass().add("puja-section");
+        return section;
+    }
+
+    private void renderPujaCards(javafx.scene.layout.FlowPane container, java.util.List<PujaService> services, String query,
+            String type, String location, String language, String mode, String price, boolean availableToday) {
+        java.util.List<Node> cards = services.stream()
+                .filter(service -> pujaMatches(service, query, type, location, language, mode, price, availableToday))
+                .map(service -> (Node) pujaServiceCard(service))
+                .toList();
+        if (cards.isEmpty()) {
+            Button clear = new Button("Clear Filters");
+            clear.getStyleClass().add("transport-primary-button");
+            VBox empty = new VBox(10,
+                    sectionTitle("No Puja Services Found"),
+                    muted("Try changing your search or filters."),
+                    clear);
+            empty.getStyleClass().add("puja-empty-state");
+            clear.setOnAction(event -> {
+                Node parent = container.getParent();
+                while (parent != null && !(parent instanceof VBox)) {
+                    parent = parent.getParent();
+                }
+                showModulePage("puja");
+            });
+            container.getChildren().setAll(empty);
+        } else {
+            container.getChildren().setAll(cards);
+        }
+    }
+
+    private boolean pujaMatches(PujaService service, String query, String type, String location, String language,
+            String mode, String price, boolean availableToday) {
+        String search = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
+        String searchable = String.join(" ",
+                valueOr("", service.name()),
+                valueOr("", service.description()),
+                valueOr("", service.type()),
+                valueOr("", service.location()),
+                valueOr("", service.providerName()),
+                valueOr("", service.languages()),
+                valueOr("", service.mode())).toLowerCase(java.util.Locale.ROOT);
+        boolean queryOk = search.isBlank() || searchable.contains(search);
+        String serviceType = valueOr("", service.type());
+        String serviceLocation = valueOr("", service.location());
+        String serviceLanguages = valueOr("", service.languages());
+        String serviceMode = valueOr("", service.mode());
+        boolean typeOk = type == null || "All Types".equals(type) || serviceType.equalsIgnoreCase(type);
+        boolean locationOk = location == null || "All Locations".equals(location)
+                || serviceLocation.toLowerCase(java.util.Locale.ROOT).contains(location.toLowerCase(java.util.Locale.ROOT));
+        boolean languageOk = language == null || "All Languages".equals(language)
+                || serviceLanguages.toLowerCase(java.util.Locale.ROOT).contains(language.toLowerCase(java.util.Locale.ROOT));
+        boolean modeOk = mode == null || "Any Mode".equals(mode)
+                || serviceMode.equalsIgnoreCase(mode)
+                || serviceMode.toLowerCase(java.util.Locale.ROOT).contains(mode.toLowerCase(java.util.Locale.ROOT))
+                || "Both".equalsIgnoreCase(serviceMode);
+        boolean todayOk = !availableToday || service.availableToday();
+        boolean priceOk = switch (price == null ? "Any Price" : price) {
+            case "Under Rs. 500" -> service.price() < 500;
+            case "Rs. 500 - Rs. 1500" -> service.price() >= 500 && service.price() <= 1500;
+            case "Above Rs. 1500" -> service.price() > 1500;
+            default -> true;
+        };
+        return queryOk && typeOk && locationOk && languageOk && modeOk && todayOk && priceOk;
+    }
+
+    private VBox pujaServiceCard(PujaService service) {
+        ImageView image = createImage(service.image(), 260, 118, 0.5, 0.5);
+        image.getStyleClass().add("puja-card-image");
+        HBox meta = new HBox(7, badge(service.mode()), badge(service.availableToday() ? "Today" : "Scheduled"), badge("Verified"));
+        meta.setAlignment(Pos.CENTER_LEFT);
+
+        VBox details = new VBox(5,
+                muted("Temple / Ghat: " + service.location()),
+                muted("Puja Type: " + service.type()),
+                muted("Location: " + service.location()),
+                muted("Duration: " + service.duration()),
+                muted("Provider: " + valueOr("Simhastha Verified Desk", service.providerName())),
+                muted("Languages: " + service.languages()),
+                muted("Mode: " + service.mode()),
+                label("Starting Rs. " + service.price(), "puja-price"));
+
+        Button view = new Button("View Details");
+        view.getStyleClass().add("puja-secondary-button");
+        view.setOnAction(event -> openPujaServiceDetailsPage(service.serviceId()));
+
+        Button book = new Button("Book Now");
+        book.getStyleClass().add("transport-primary-button");
+        book.setDisable("CLOSED".equalsIgnoreCase(service.bookingStatus()) || "DISABLED".equalsIgnoreCase(service.bookingStatus()));
+        book.setOnAction(event -> openPujaServiceDetailsPage(service.serviceId()));
+
+        HBox actions = new HBox(8, view, book);
+        VBox card = new VBox(10, image, meta, strong(service.name()), paragraph(service.description()), details, actions);
+        card.getStyleClass().add("puja-service-card");
+        return card;
+    }
+
+    private PujaService findPujaService(String serviceId) {
+        return visiblePujaServices().stream()
+                .filter(service -> service.serviceId().equals(serviceId))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private void openPujaServiceDetailsPage(String serviceId) {
+        PujaService service = findPujaService(serviceId);
+        if (service == null) {
+            showInfo("Puja Service Not Found", "This Puja service is not available now.");
+            showModulePage("puja");
+            return;
+        }
+        setActiveModule("puja");
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("puja"));
+
+        ImageView image = createImage(service.image(), 300, 175, 0.5, 0.5);
+        image.getStyleClass().add("puja-details-image");
+
+        HBox imageBadges = new HBox(7,
+                badge("Verified"),
+                badge(service.availableToday() ? "Available" : "Scheduled"),
+                badge(service.mode()));
+        imageBadges.setAlignment(Pos.CENTER_LEFT);
+        VBox imagePane = new VBox(8, image, imageBadges);
+        imagePane.getStyleClass().add("puja-details-image-card");
+        imagePane.setPrefWidth(320);
+
+        VBox details = new VBox(8,
+                sectionTitle(service.name()),
+                badge("✓ Simhastha Verified"),
+                compactPujaInfoGrid(
+                        pujaDetailCard("Temple / Ghat", service.location()),
+                        pujaDetailCard("Location", service.location()),
+                        pujaDetailCard("Puja Type", service.type()),
+                        pujaDetailCard("Starting Price", "Rs. " + service.price()),
+                        pujaDetailCard("Duration", service.duration()),
+                        pujaDetailCard("Available Slots", service.availableSlots()),
+                        pujaDetailCard("Provider / Pandit", valueOr("Best available verified priest", service.providerName())),
+                        pujaDetailCard("Languages", service.languages()),
+                        pujaDetailCard("Mode", service.mode())));
+        details.getStyleClass().add("puja-details-center-column");
+
+        Button bookFromSummary = new Button("Book This Puja");
+        bookFromSummary.getStyleClass().add("transport-primary-button");
+        bookFromSummary.setMaxWidth(Double.MAX_VALUE);
+        bookFromSummary.setOnAction(event -> openPujaBookingPage(service.serviceId()));
+
+        VBox booking = new VBox(8,
+                sectionTitle("Booking Summary"),
+                pujaSummaryRow("Starting Price", "Rs. " + service.price()),
+                pujaSummaryRow("Availability", service.availableToday() ? "Available" : "Scheduled"),
+                pujaSummaryRow("Provider Status", "Verified"),
+                bookFromSummary);
+        booking.getStyleClass().add("puja-booking-summary-card");
+        booking.setPrefWidth(285);
+        booking.setMaxWidth(310);
+
+        HBox hero = new HBox(14, imagePane, details, booking);
+        hero.getStyleClass().addAll("puja-details-panel", "puja-details-hero-compact");
+        HBox.setHgrow(details, Priority.ALWAYS);
+
+        HBox lower = new HBox(12,
+                infoPanel("About This Puja", paragraph(service.description())),
+                infoPanel("What's Included", pujaIncludedList(service)));
+        lower.getStyleClass().add("puja-details-lower-compact");
+        HBox.setHgrow(lower.getChildren().get(0), Priority.ALWAYS);
+        HBox.setHgrow(lower.getChildren().get(1), Priority.ALWAYS);
+
+        HBox trust = new HBox(10,
+                badge("✓ Verified Provider"),
+                badge("✓ Transparent Pricing"),
+                badge("✓ Secure Booking"),
+                badge("✓ No Agent Payments"));
+        trust.getStyleClass().add("puja-details-trust-card");
+
+        Button slots = new Button("View Available Slots");
+        slots.getStyleClass().add("puja-secondary-button");
+        slots.setOnAction(event -> showInfo("Available Slots",
+                valueOr("Slots are configured by the verified provider.", service.availableSlots())));
+        Button book = new Button("Proceed to Book Puja");
+        book.getStyleClass().add("transport-primary-button");
+        book.setOnAction(event -> openPujaBookingPage(service.serviceId()));
+        HBox bottomActions = new HBox(10, trust, createSpacer(), slots, book);
+        bottomActions.getStyleClass().add("puja-details-bottom-actions");
+        bottomActions.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(trust, Priority.ALWAYS);
+
+        VBox shell = pageShell("Puja Service Details", "Review verified Puja details before booking.",
+                back, hero, lower, bottomActions);
+        shell.getStyleClass().add("puja-details-compact-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private VBox pujaDetailCard(String title, String value) {
+        VBox card = new VBox(5, muted(title), strong(valueOr("Not available", value)));
+        card.getStyleClass().add("puja-mini-panel");
+        return card;
+    }
+
+    private GridPane compactPujaInfoGrid(Node... nodes) {
+        GridPane grid = twoColumnGrid(nodes);
+        grid.getStyleClass().add("puja-compact-info-grid");
+        return grid;
+    }
+
+    private GridPane compactPujaInfoGridColumns(int columns, Node... nodes) {
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        for (int index = 0; index < nodes.length; index++) {
+            grid.add(nodes[index], index % columns, index / columns);
+            GridPane.setHgrow(nodes[index], Priority.ALWAYS);
+            if (nodes[index] instanceof Region region) {
+                region.setMaxWidth(Double.MAX_VALUE);
+            }
+        }
+        for (int index = 0; index < columns; index++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(100.0 / columns);
+            column.setHgrow(Priority.ALWAYS);
+            grid.getColumnConstraints().add(column);
+        }
+        grid.getStyleClass().add("puja-compact-info-grid");
+        return grid;
+    }
+
+    private VBox pujaIncludedList(PujaService service) {
+        VBox list = new VBox(8,
+                muted("✓ Verified Pandit / Provider"),
+                muted("✓ Temple / Ghat Service: " + service.location()),
+                muted("✓ Mode: " + service.mode()));
+        if (!service.languages().isBlank()) {
+            list.getChildren().add(muted("✓ Languages: " + service.languages()));
+        }
+        return list;
+    }
+
+    private Button pujaBackButton(String text) {
+        Button button = new Button(text);
+        button.getStyleClass().addAll("puja-secondary-button", "puja-back-button");
+        return button;
+    }
+
+    private void showPujaServiceDetails(PujaService service) {
+        openPujaServiceDetailsPage(service.serviceId());
+    }
+
+    private void createPujaBooking(Button button, PujaService service) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            showInfo("Login required", "Please login before creating a puja booking.");
+            return;
+        }
+        if ("CLOSED".equalsIgnoreCase(service.bookingStatus()) || "DISABLED".equalsIgnoreCase(service.bookingStatus())) {
+            showInfo("Booking unavailable", "This Puja service is currently not available for booking.");
+            return;
+        }
+        openPujaBookingPage(service.serviceId());
+    }
+
+    private void openPujaBookingPage(String serviceId) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            showInfo("Login required", "Please login before creating a puja booking.");
+            return;
+        }
+        PujaService service = findPujaService(serviceId);
+        if (service == null || "CLOSED".equalsIgnoreCase(service.bookingStatus())
+                || "DISABLED".equalsIgnoreCase(service.bookingStatus())) {
+            showInfo("Booking unavailable", "This Puja service is currently not available for booking.");
+            showModulePage("puja");
+            return;
+        }
+        setActiveModule("puja");
+
+        DatePicker date = new DatePicker(java.time.LocalDate.now().plusDays(1));
+        date.getStyleClass().add("puja-booking-input");
+        date.setDayCellFactory(picker -> new DateCell() {
+            @Override
+            public void updateItem(java.time.LocalDate item, boolean empty) {
+                super.updateItem(item, empty);
+                setDisable(empty || item.isBefore(java.time.LocalDate.now()));
+            }
+        });
+
+        ComboBox<String> time = new ComboBox<>();
+        time.getItems().addAll(slotOptions(service));
+        time.getSelectionModel().selectFirst();
+        time.getStyleClass().add("puja-booking-input");
+
+        Spinner<Integer> devotees = new Spinner<>(1, 20, 1);
+        devotees.setEditable(true);
+        devotees.getStyleClass().add("puja-booking-spinner");
+
+        ComboBox<String> language = new ComboBox<>();
+        language.getItems().addAll(languageOptions(service));
+        language.getSelectionModel().selectFirst();
+        language.getStyleClass().add("puja-booking-input");
+
+        ComboBox<String> mode = new ComboBox<>();
+        mode.getItems().addAll("Offline", "Online / Remote");
+        mode.getSelectionModel().select(service.mode().toLowerCase(java.util.Locale.ROOT).contains("online")
+                ? "Online / Remote" : "Offline");
+        mode.getStyleClass().add("puja-booking-input");
+
+        ComboBox<String> location = new ComboBox<>();
+        location.getItems().addAll(valueOr("Approved Puja Zone", service.location()), "Temple", "Ghat",
+                "Authorized Puja Zone", "Camp");
+        location.getSelectionModel().selectFirst();
+        location.getStyleClass().add("puja-booking-input");
+
+        ComboBox<AppDataStore.PujaProviderRecord> provider = pujaProviderCombo();
+        TextField name = new TextField(displayName(user));
+        name.getStyleClass().add("puja-booking-input");
+        TextField email = new TextField(valueOr("", user.email()));
+        email.getStyleClass().add("puja-booking-input");
+        TextField phone = new TextField(currentUserPhone(user.uid()));
+        phone.getStyleClass().add("puja-booking-input");
+
+        CheckBox samagri = new CheckBox("Include Puja Samagri - Not configured");
+        samagri.getStyleClass().add("puja-booking-check");
+        samagri.setDisable(true);
+        CheckBox prasad = new CheckBox("Include Prasad - Not configured");
+        prasad.getStyleClass().add("puja-booking-check");
+        prasad.setDisable(true);
+
+        TextArea special = new TextArea();
+        special.setPromptText("Write any special requirements...");
+        special.setPrefRowCount(3);
+        special.getStyleClass().add("puja-booking-notes");
+
+        VBox summaryRows = new VBox(8);
+        Runnable updateSummary = () -> renderPujaBookingSummary(summaryRows, service, date.getValue(), time.getValue(),
+                location.getValue(), provider.getValue(), devotees.getValue(), language.getValue(), mode.getValue());
+        date.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        time.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        devotees.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        language.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        mode.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        location.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        provider.valueProperty().addListener((obs, old, value) -> updateSummary.run());
+        updateSummary.run();
+
+        GridPane bookingGrid = new GridPane();
+        bookingGrid.setHgap(12);
+        bookingGrid.setVgap(12);
+        addBookingField(bookingGrid, 0, "Selected Puja *", strong(service.name()));
+        addBookingField(bookingGrid, 1, "Booking Date *", date);
+        addBookingField(bookingGrid, 2, "Preferred Time *", time);
+        addBookingField(bookingGrid, 3, "No. of Devotees *", devotees);
+        addBookingField(bookingGrid, 4, "Language *", language);
+        addBookingField(bookingGrid, 5, "Puja Mode *", mode);
+        addBookingField(bookingGrid, 6, "Location *", location);
+        addBookingField(bookingGrid, 7, "Priest / Provider *", provider);
+        bookingGrid.getStyleClass().add("puja-booking-form-grid");
+
+        GridPane userGrid = new GridPane();
+        userGrid.setHgap(12);
+        userGrid.setVgap(12);
+        addBookingField(userGrid, 0, "Full Name", name);
+        addBookingField(userGrid, 1, "Email", email);
+        addBookingField(userGrid, 2, "Mobile Number", phone);
+
+        VBox left = new VBox(14, sectionTitle("Booking Details"), bookingGrid,
+                sectionTitle("User Details"), userGrid,
+                new VBox(8, sectionTitle("Additional Options"), samagri, prasad),
+                new VBox(8, sectionTitle("Special Requirements"), special));
+        left.getStyleClass().add("puja-booking-left-panel");
+
+        VBox secure = new VBox(5, strong("🔒 Secure Payment"), muted("Temporary demo payment flow"),
+                muted("Real Razorpay integration will be connected later."));
+        secure.getStyleClass().add("puja-secure-payment-card");
+        Button cancel = new Button("Cancel");
+        cancel.getStyleClass().add("puja-secondary-button");
+        cancel.setOnAction(event -> openPujaServiceDetailsPage(service.serviceId()));
+        Button pay = new Button("Proceed to Payment →");
+        pay.getStyleClass().add("transport-primary-button");
+        pay.setOnAction(event -> confirmPujaBookingFromPage(pay, user, service, date, time, devotees, language,
+                mode, location, provider, samagri, prasad, special, name, email, phone));
+        HBox actions = new HBox(10, cancel, createSpacer(), pay);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox right = new VBox(14, sectionTitle("Booking Summary"), summaryRows, secure, actions);
+        right.getStyleClass().add("puja-booking-summary-card");
+        right.setPrefWidth(390);
+        HBox layout = new HBox(16, left, right);
+        HBox.setHgrow(left, Priority.ALWAYS);
+
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> openPujaServiceDetailsPage(service.serviceId()));
+        HBox top = new HBox(12,
+                new VBox(4, sectionTitle("Book Puja"), muted("Complete your verified Simhastha Puja booking request.")),
+                createSpacer(), back);
+        top.setAlignment(Pos.CENTER_LEFT);
+
+        HBox footer = new HBox(12,
+                pujaMiniInfoSection("Verified Priests", "\uE73E", "All priests are verified by Simhastha Connect"),
+                pujaMiniInfoSection("Trusted & Secure", "\uE72E", "Booking and payment flow stays safe"),
+                pujaMiniInfoSection("Official Counters", "\uE80F", "Puja at authorized counters only"),
+                pujaMiniInfoSection("24/7 Support", "\uE717", "We are here to help anytime"));
+        footer.getStyleClass().add("puja-user-support-row");
+        footer.getChildren().forEach(node -> HBox.setHgrow(node, Priority.ALWAYS));
+
+        VBox shell = pageShell("Book Puja", "Proceed with a safe and verified spiritual booking.", top, layout, footer);
+        shell.getStyleClass().add("puja-booking-compact-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private ComboBox<AppDataStore.PujaProviderRecord> pujaProviderCombo() {
+        ComboBox<AppDataStore.PujaProviderRecord> provider = new ComboBox<>();
+        provider.getItems().add(null);
+        provider.getItems().addAll(AppDataStore.approvedPujaProviders());
+        provider.setConverter(new javafx.util.StringConverter<>() {
+            @Override
+            public String toString(AppDataStore.PujaProviderRecord item) {
+                return item == null ? "Assign Best Available Verified Priest" : item.fullName + " • " + item.specialization;
+            }
+
+            @Override
+            public AppDataStore.PujaProviderRecord fromString(String value) {
+                return null;
+            }
+        });
+        provider.getSelectionModel().selectFirst();
+        provider.getStyleClass().add("puja-booking-input");
+        return provider;
+    }
+
+    private String currentUserPhone(String uid) {
+        return AppDataStore.users().stream()
+                .filter(record -> record.uid.equals(uid))
+                .map(record -> record.mobile)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse("");
+    }
+
+    private void renderPujaBookingSummary(VBox rows, PujaService service, java.time.LocalDate date, String time,
+            String location, AppDataStore.PujaProviderRecord provider, int devotees, String language, String mode) {
+        long base = Math.max(0, service.price());
+        long total = base;
+        rows.getChildren().setAll(
+                pujaSummaryRow("Puja", service.name()),
+                pujaSummaryRow("Date", date == null ? "Select date" : date.toString()),
+                pujaSummaryRow("Time", valueOr("Select time", time)),
+                pujaSummaryRow("Location", valueOr("Select location", location)),
+                pujaSummaryRow("Priest / Provider", provider == null ? "Best available verified priest" : provider.fullName),
+                pujaSummaryRow("Devotees", String.valueOf(devotees)),
+                pujaSummaryRow("Language", valueOr("Select language", language)),
+                pujaSummaryRow("Mode", valueOr("Offline", mode)),
+                pujaSummaryDivider(),
+                pujaSummaryRow("Base Puja Price", "Rs. " + base),
+                pujaSummaryRow("Puja Samagri", "Not configured"),
+                pujaSummaryRow("Prasad", "Not configured"),
+                pujaSummaryRow("Service Fee", "Rs. 0"),
+                label("TOTAL AMOUNT: Rs. " + total, "puja-total-amount"));
+    }
+
+    private HBox pujaSummaryRow(String labelText, String value) {
+        HBox row = new HBox(8, muted(labelText), createSpacer(), strong(valueOr("Not available", value)));
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private Region pujaSummaryDivider() {
+        Region divider = new Region();
+        divider.setPrefHeight(1);
+        divider.getStyleClass().add("puja-summary-divider");
+        return divider;
+    }
+
+    private void confirmPujaBookingFromPage(Button pay, AppSession.User user, PujaService service,
+            DatePicker date, ComboBox<String> time, Spinner<Integer> devotees, ComboBox<String> language,
+            ComboBox<String> mode, ComboBox<String> location, ComboBox<AppDataStore.PujaProviderRecord> provider,
+            CheckBox samagri, CheckBox prasad, TextArea special, TextField name, TextField email, TextField phone) {
+        PujaService freshService = findPujaService(service.serviceId());
+        if (freshService == null) {
+            showInfo("Service Unavailable", "This Puja service is no longer available.");
+            return;
+        }
+        if (date.getValue() == null || date.getValue().isBefore(java.time.LocalDate.now())) {
+            showInfo("Invalid Date", "Select today or a future booking date.");
+            return;
+        }
+        if (time.getValue() == null || time.getValue().isBlank() || location.getValue() == null
+                || location.getValue().isBlank() || devotees.getValue() == null || devotees.getValue() < 1) {
+            showInfo("Missing Details", "Select time, location and devotees before proceeding.");
+            return;
+        }
+        if (name.getText() == null || name.getText().isBlank()) {
+            showInfo("Missing User Name", "Enter devotee name before proceeding.");
+            return;
+        }
+        int slotCapacity = parseCapacity(freshService.availableSlots());
+        if (slotCapacity > 0 && devotees.getValue() > slotCapacity) {
+            showInfo("Slot Full", "This service has only " + slotCapacity + " configured slots.");
+            return;
+        }
+        long base = Math.max(0, freshService.price());
+        long total = base;
+        if (total <= 0) {
+            showInfo("Payment Amount Required",
+                    "This Puja service has Rs. 0 as total amount. Please ask admin to set a valid price before booking.");
+            return;
+        }
+        pay.setDisable(true);
+        try {
+            AppDataStore.PujaProviderRecord selectedProvider = provider.getValue();
+            String bookingId = "PUJA-" + java.time.LocalDate.now().getYear() + "-"
+                    + java.util.UUID.randomUUID().toString().substring(0, 6).toUpperCase(java.util.Locale.ROOT);
+            AppDataStore.PujaBookingRecord booking = new AppDataStore.PujaBookingRecord(bookingId, user.uid(),
+                    name.getText(), phone.getText(), email.getText(), freshService.serviceId(), freshService.name(),
+                    freshService.type(), selectedProvider == null ? freshService.providerId() : selectedProvider.providerId,
+                    selectedProvider == null ? valueOr("Best Available Verified Priest", freshService.providerName()) : selectedProvider.fullName,
+                    freshService.location(), date.getValue().toString(), time.getValue(), location.getValue(),
+                    devotees.getValue(), language.getValue(), mode.getValue(), total, "PAYMENT_PENDING", "PENDING",
+                    "", "", "", location.getValue(), samagri.isSelected(), 0, prasad.isSelected(),
+                    0, base, 0, total, special.getText(), "", "", "", "", "", "", "", "", "");
+            AppDataStore.savePujaBooking(booking);
+            startPujaRazorpayPayment(booking, user);
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Booking Failed", exception.getMessage());
+        } finally {
+            pay.setDisable(false);
+        }
+    }
+
+    private void addBookingField(GridPane form, int row, String labelText, Node control) {
+        Label label = label(labelText, "puja-booking-field-label");
+        VBox cell = new VBox(6, label, control);
+        cell.getStyleClass().add("puja-booking-field");
+        form.add(cell, row % 2, row / 2);
+        GridPane.setHgrow(control, Priority.ALWAYS);
+    }
+
+    private java.util.List<String> slotOptions(PujaService service) {
+        String slots = service.duration();
+        java.util.List<String> defaults = java.util.List.of("Morning Slot", "Afternoon Slot", "Evening Slot");
+        return defaults;
+    }
+
+    private java.util.List<String> languageOptions(PujaService service) {
+        java.util.List<String> options = java.util.Arrays.stream(service.languages().split(",|/"))
+                .map(String::trim)
+                .filter(text -> !text.isBlank())
+                .distinct()
+                .toList();
+        return options.isEmpty() ? java.util.List.of("Marathi", "Hindi", "Sanskrit") : options;
+    }
+
+    private void startPujaRazorpayPayment(AppDataStore.PujaBookingRecord booking, AppSession.User user) {
+        if ("PAID".equalsIgnoreCase(booking.paymentStatus)) {
+            showInfo("Already Paid", "This Puja booking is already paid.");
+            return;
+        }
+        if (booking.totalAmount <= 0) {
+            showInfo("Payment Amount Required", "This Puja booking cannot be paid because the total amount is Rs. 0.");
+            return;
+        }
+        showPujaPaymentProcessingPage(booking, user);
+    }
+
+    private void showPujaPaymentProcessingPage(AppDataStore.PujaBookingRecord booking, AppSession.User user) {
+        setActiveModule("puja");
+        final boolean[] cancelled = { false };
+        final Timeline[] successRef = new Timeline[1];
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> {
+            cancelled[0] = true;
+            if (successRef[0] != null) {
+                successRef[0].stop();
+            }
+            openPujaBookingPage(booking.serviceId);
+        });
+
+        VBox summary = new VBox(9,
+                sectionTitle("Booking Summary"),
+                pujaSummaryRow("Puja", booking.serviceName),
+                pujaSummaryRow("Booking ID", booking.bookingId),
+                pujaSummaryRow("Date", booking.date),
+                pujaSummaryRow("Time", booking.time),
+                pujaSummaryRow("Location", valueOr(booking.location, booking.locationName)),
+                pujaSummaryRow("Provider", valueOr("Best available verified priest", booking.providerName)),
+                pujaSummaryDivider(),
+                pujaSummaryRow("Amount", "Rs. " + booking.totalAmount));
+        summary.getStyleClass().add("puja-booking-summary-card");
+
+        Label status = label("Preparing secure temporary payment confirmation...", "puja-success-title");
+        VBox process = new VBox(12,
+                AppUi.symbolIcon("\uE8C7", "puja-trust-icon"),
+                sectionTitle("Secure Payment Processing"),
+                paragraph("This is a temporary development/demo payment step. No card, CVV, UPI PIN or banking details are collected in Simhastha Connect."),
+                status,
+                muted("Integration point ready: real Razorpay can replace this processing step later without changing booking records."));
+        process.getStyleClass().add("puja-details-panel");
+
+        HBox layout = new HBox(16, process, summary);
+        HBox.setHgrow(process, Priority.ALWAYS);
+        summary.setPrefWidth(380);
+        root.setCenter(scroll(pageShell("Secure Payment Processing",
+                "Confirming your Puja booking payment safely inside the dashboard.",
+                back, layout)));
+
+        Timeline success = new Timeline(new KeyFrame(Duration.seconds(1.4), event -> {
+            if (!cancelled[0]) {
+                completeTemporaryPujaPayment(booking);
+            }
+        }));
+        successRef[0] = success;
+        success.setCycleCount(1);
+        success.play();
+    }
+
+    private void completeTemporaryPujaPayment(AppDataStore.PujaBookingRecord booking) {
+        String now = String.valueOf(System.currentTimeMillis());
+        String internalPaymentId = "TEMP-PUJA-" + java.util.UUID.randomUUID().toString()
+                .substring(0, 8).toUpperCase(java.util.Locale.ROOT);
+        String qrTicketId = "PUJA-TICKET-" + booking.bookingId;
+        String verificationToken = java.util.UUID.randomUUID().toString().replace("-", "")
+                .substring(0, 16).toUpperCase(java.util.Locale.ROOT);
+        try {
+            AppDataStore.updatePujaBookingPayment(booking.bookingId, "CONFIRMED", "PAID",
+                    internalPaymentId, "", "", "TEMPORARY_DEMO",
+                    booking.paymentCreatedAt.isBlank() ? now : booking.paymentCreatedAt,
+                    now, "");
+            AppDataStore.PujaBookingRecord ticketBooking =
+                    AppDataStore.updatePujaBookingQrTicket(booking.bookingId, qrTicketId, verificationToken);
+            showPujaPaymentSuccessPage(ticketBooking);
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Payment Update Failed", exception.getMessage());
+            showModulePage("bookings");
+        }
+    }
+
+    private void showPujaPaymentSuccessPage(AppDataStore.PujaBookingRecord booking) {
+        setActiveModule("bookings");
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("bookings"));
+
+        PujaService service = findPujaService(booking.serviceId);
+        ImageView image = createImage(service == null ? "/images/trimbakeshwar.jpg" : service.image(), 190, 112, 0.5, 0.5);
+        image.getStyleClass().add("puja-details-image");
+
+        GridPane details = compactPujaInfoGridColumns(3,
+                pujaDetailCard("Booking ID", booking.bookingId),
+                pujaDetailCard("Puja", booking.serviceName),
+                pujaDetailCard("Date", booking.date),
+                pujaDetailCard("Time", booking.time),
+                pujaDetailCard("Location", valueOr(booking.location, booking.locationName)),
+                pujaDetailCard("Devotees", String.valueOf(booking.devoteesCount)),
+                pujaDetailCard("Total Amount", "Rs. " + booking.totalAmount),
+                pujaDetailCard("Payment Status", "Payment Success"),
+                pujaDetailCard("Booking Status", "Booking Confirmed"));
+
+        VBox ticket = pujaTicketCard(booking, "SIMHASTHA-PUJA|" + booking.bookingId + "|" + booking.qrVerificationToken);
+        ticket.getStyleClass().add("puja-ticket-compact");
+        Button bookings = new Button("View My Bookings");
+        bookings.getStyleClass().add("puja-secondary-button");
+        bookings.setOnAction(event -> showModulePage("bookings"));
+        Button viewTicket = new Button("View Ticket");
+        viewTicket.getStyleClass().add("transport-primary-button");
+        viewTicket.setOnAction(event -> showPujaTicketVerificationPage(booking.bookingId, booking.qrVerificationToken));
+        HBox actions = new HBox(10, createSpacer(), bookings, viewTicket);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox headline = new VBox(6,
+                label("✓ Booking Confirmed", "puja-success-title"),
+                strong(booking.serviceName),
+                muted("Your Puja booking is confirmed. Keep the QR ticket ready at the service counter."),
+                new HBox(7, badge("Payment Success"), badge("QR Ready")));
+        headline.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(headline, Priority.ALWAYS);
+
+        HBox hero = new HBox(16, image, headline, ticket);
+        hero.setAlignment(Pos.CENTER_LEFT);
+        hero.getStyleClass().add("puja-success-hero");
+
+        VBox success = new VBox(10,
+                hero,
+                details,
+                actions);
+        success.getStyleClass().add("puja-success-card");
+
+        VBox shell = pageShell("Payment Success",
+                "Your Puja booking is confirmed and QR ticket is ready.",
+                back, success);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private int parseCapacity(String text) {
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d+)").matcher(text == null ? "" : text);
+        if (!matcher.find()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(matcher.group(1));
+        } catch (Exception exception) {
+            return 0;
+        }
+    }
+
+    private java.util.List<PujaService> visiblePujaServices() {
+        if (!AppDataStore.pujaServices().isEmpty()) {
+            return AppDataStore.publicPujaServices().stream()
+                    .map(this::pujaServiceFromRecord)
+                    .toList();
+        }
+        java.util.List<PujaService> services = new java.util.ArrayList<>();
+        for (AppDataStore.ServiceItem item : AppDataStore.items("puja")) {
+            boolean exists = services.stream().anyMatch(service -> service.name().equalsIgnoreCase(item.title));
+            if (!exists) {
+                services.add(pujaServiceFromAdminItem(item));
+            }
+        }
+        return services;
+    }
+
+    private PujaService pujaServiceFromRecord(AppDataStore.PujaServiceRecord service) {
+        return new PujaService(service.serviceId, service.name, service.pujaType,
+                valueOr("Admin-approved puja service.", service.description), service.duration,
+                service.availableSlots, parsePujaPrice(service.price), service.templeOrGhat, service.mode, service.languages,
+                true, service.imageUrl, service.providerId, service.providerName, service.bookingStatus);
+    }
+
+    private PujaService pujaServiceFromAdminItem(AppDataStore.ServiceItem item) {
+        String detail = item.detail == null ? "" : item.detail;
+        return new PujaService(item.id, item.title,
+                pujaDetailValue(detail, "Puja Type", "Darshan"),
+                valueOr("Admin-approved puja service published by Simhastha admin.", detail),
+                pujaDetailValue(detail, "Duration", "Varies"),
+                pujaDetailValue(detail, "Available Slots", "Varies"),
+                parsePujaPrice(pujaDetailValue(detail, "Price", "0")),
+                pujaDetailValue(detail, "Temple / Ghat", "Approved Location"),
+                pujaDetailValue(detail, "Mode", "Offline"),
+                pujaDetailValue(detail, "Languages", "Marathi, Hindi, Sanskrit"),
+                true,
+                "/images/trimbakeshwar.jpg", "", pujaDetailValue(detail, "Pandit / Provider", "Admin"),
+                pujaDetailValue(detail, "Booking Status", "OPEN"));
+    }
+
+    private String pujaDetailValue(String detail, String label, String fallback) {
+        String prefix = label + ":";
+        for (String part : (detail == null ? "" : detail).split("\\|")) {
+            String clean = part.trim();
+            if (clean.toLowerCase(java.util.Locale.ROOT).startsWith(prefix.toLowerCase(java.util.Locale.ROOT))) {
+                String value = clean.substring(prefix.length()).trim();
+                return value.isBlank() ? fallback : value;
+            }
+        }
+        return fallback;
+    }
+
+    private int parsePujaPrice(String priceText) {
+        try {
+            String digits = priceText == null ? "" : priceText.replaceAll("[^0-9]", "");
+            return digits.isBlank() ? 0 : Integer.parseInt(digits);
+        } catch (Exception exception) {
+            return 0;
+        }
+    }
+
+    private java.util.List<PujaService> pujaServices() {
+        return java.util.List.of(
+                new PujaService("Rudrabhishek", "Abhishek", "Traditional Shiva abhishek with verified priest support.", "45 min", 751, "Trimbakeshwar", "Offline", "Marathi, Hindi, Sanskrit", true, "/images/trimbakeshwar.jpg"),
+                new PujaService("Mahamrityunjaya Jaap", "Jaap", "Jaap sankalp for health, protection and family well-being.", "60 min", 1100, "Panchavati", "Both", "Marathi, Hindi, Sanskrit", true, "/images/ramkund_sunrise.jpg"),
+                new PujaService("Hawan", "Hawan", "Sacred fire ritual with guided samagri checklist.", "75 min", 1500, "Ramkund", "Offline", "Hindi, Sanskrit", false, "/images/godavari_kumbh.jpg"),
+                new PujaService("Sankalp Puja", "Abhishek", "Quick sankalp puja assistance for Simhastha pilgrims.", "30 min", 501, "Ramkund", "Offline", "Marathi, Hindi", true, "/images/ramkund_sunrise.jpg"),
+                new PujaService("Satyanarayan Puja", "Custom", "Family puja service with verified priest coordination.", "90 min", 2100, "Nashik City", "Offline", "Marathi, Hindi", false, "/images/godavari_kumbh.jpg"),
+                new PujaService("Graha Shanti", "Jaap", "Ritual guidance for graha shanti and family sankalp.", "80 min", 1800, "Panchavati", "Offline", "Marathi, Hindi, Sanskrit", true, "/images/trimbakeshwar.jpg"),
+                new PujaService("Abhishek", "Abhishek", "Temple abhishek guidance with verified counter information.", "40 min", 651, "Trimbakeshwar", "Offline", "Marathi, Hindi", true, "/images/trimbakeshwar.jpg"),
+                new PujaService("Aarti Participation", "Darshan", "Participate in scheduled aarti with official timing guidance.", "25 min", 301, "Ramkund", "Offline", "Marathi, Hindi", true, "/images/ramkund_sunrise.jpg"),
+                new PujaService("Pind Daan", "Custom", "Pind daan information and verified priest support.", "60 min", 1200, "Godavari Ghat", "Offline", "Hindi, Sanskrit", false, "/images/godavari_kumbh.jpg"),
+                new PujaService("Online / Remote Puja", "Remote", "Remote sankalp puja for pilgrims unable to attend physically.", "45 min", 901, "Online", "Online", "Marathi, Hindi, English", true, "/images/welcome-light.png"),
+                new PujaService("Prasad Service", "Prasad", "Prasad request and pickup guidance through approved counters.", "20 min", 251, "Panchavati", "Both", "Marathi, Hindi", true, "/images/ramkund_sunrise.jpg"),
+                new PujaService("Temple Darshan", "Darshan", "Temple darshan support with timing and queue guidance.", "30 min", 0, "Kalaram Mandir", "Offline", "Marathi, Hindi, English", true, "/images/trimbakeshwar.jpg"),
+                new PujaService("Custom Puja", "Custom", "Custom ritual request placeholder for later Firebase-backed booking.", "Varies", 0, "Multiple Locations", "Both", "Marathi, Hindi, English, Sanskrit", true, "/images/godavari_kumbh.jpg"));
     }
 
     private VBox ghatsPage() {
@@ -6219,44 +7361,87 @@ public class DashboardPage {
 
     private VBox myBookingsPage() {
         AppSession.User user = AppSession.currentUser();
-        java.util.List<AppDataStore.BookingRecord> bookings = user == null ? java.util.List.of()
-                : AppDataStore.bookingsForUser(user.uid()).stream()
-                        .sorted(java.util.Comparator.comparing((AppDataStore.BookingRecord booking) -> booking.createdAt).reversed())
-                        .toList();
-        long upcoming = bookings.stream().filter(booking -> bookingBucket(booking).equals("Upcoming")).count();
-        long completed = bookings.stream().filter(booking -> bookingBucket(booking).equals("Completed")).count();
-        long cancelled = bookings.stream().filter(booking -> bookingBucket(booking).equals("Cancelled")).count();
-
-        HBox summary = new HBox(12,
-                bookingMetric("All Bookings", bookings.size(), "All recorded services"),
-                bookingMetric("Upcoming", upcoming, "Confirmed or in progress"),
-                bookingMetric("Completed", completed, "Completed services"),
-                bookingMetric("Cancelled", cancelled, "Cancelled bookings"));
-        summary.getStyleClass().add("booking-summary-grid");
-        summary.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
-
-        TextField search = AppUi.textField("Search booking ID or service");
-        String[] categories = {"All", "Kumbh Packages", "Stay", "Puja Services", "Business Services"};
-        VBox results = new VBox(10);
-        java.util.Map<String, Button> filters = new java.util.LinkedHashMap<>();
-        final String[] selectedCategory = {"All"};
-        Runnable refresh = () -> renderBookingResults(results, bookings, selectedCategory[0], search.getText());
-        HBox filterBar = new HBox(8);
-        for (String category : categories) {
-            Button filter = new Button(category);
-            filter.getStyleClass().add("booking-filter-button");
-            filter.setOnAction(event -> {
-                selectedCategory[0] = category;
-                filters.values().forEach(button -> button.getStyleClass().remove("booking-filter-active"));
-                filter.getStyleClass().add("booking-filter-active");
-                refresh.run();
-            });
-            filters.put(category, filter);
-            filterBar.getChildren().add(filter);
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("puja"));
+        VBox rows = new VBox(12);
+        if (user == null) {
+            rows.getChildren().add(pujaBookingsEmptyState("Login Required",
+                    "Login to view your Puja bookings and QR tickets."));
+        } else {
+            java.util.List<AppDataStore.PujaBookingRecord> pujaBookings = AppDataStore.pujaBookingsForUser(user.uid());
+            if (pujaBookings.isEmpty()) {
+                rows.getChildren().add(pujaBookingsEmptyState("No Puja Bookings Yet",
+                        "Browse Puja Services and book a verified spiritual service."));
+            } else {
+                rows.getChildren().add(pujaBookingSummaryCards(pujaBookings));
+                pujaBookings.forEach(booking -> rows.getChildren().add(pujaBookingRow(booking)));
+            }
+            java.util.List<AppDataStore.BookingRecord> otherBookings = AppDataStore.bookingsForUser(user.uid());
+            if (!otherBookings.isEmpty()) {
+                VBox otherRows = new VBox(10);
+                otherBookings.forEach(booking -> otherRows.getChildren().add(bookingRow(booking)));
+                rows.getChildren().add(infoPanel("Other Bookings", otherRows));
+            }
         }
-        rows.getChildren().add(new PackageBookingMyBookingsPane(page -> root.setCenter(scroll(page)),
-                () -> showModulePage("bookings")).create());
-        return pageShell("My Bookings & Payments", "Your real booking records, payment status and tickets.", rows);
+        return pageShell("My Bookings", "View and manage your Puja bookings.", back, rows);
+    }
+
+    private VBox pujaBookingsEmptyState(String title, String detail) {
+        Button browse = new Button("Browse Puja Services");
+        browse.getStyleClass().add("transport-primary-button");
+        browse.setOnAction(event -> showModulePage("puja"));
+        VBox empty = new VBox(12,
+                AppUi.symbolIcon("\uE8F9", "puja-trust-icon"),
+                sectionTitle(title),
+                muted(detail),
+                browse);
+        empty.getStyleClass().add("puja-empty-state");
+        empty.setAlignment(Pos.CENTER_LEFT);
+        return empty;
+    }
+
+    private HBox pujaBookingSummaryCards(java.util.List<AppDataStore.PujaBookingRecord> bookings) {
+        long confirmed = bookings.stream().filter(item -> "CONFIRMED".equalsIgnoreCase(item.bookingStatus)
+                || "PRIEST_ASSIGNED".equalsIgnoreCase(item.bookingStatus)
+                || "READY".equalsIgnoreCase(item.bookingStatus)).count();
+        long pending = bookings.stream().filter(item -> "PENDING".equalsIgnoreCase(item.bookingStatus)
+                || "PAYMENT_PENDING".equalsIgnoreCase(item.bookingStatus)).count();
+        long completed = bookings.stream().filter(item -> "COMPLETED".equalsIgnoreCase(item.bookingStatus)).count();
+        HBox row = new HBox(12,
+                pujaBookingMetric("Total Bookings", String.valueOf(bookings.size())),
+                pujaBookingMetric("Confirmed", String.valueOf(confirmed)),
+                pujaBookingMetric("Pending", String.valueOf(pending)),
+                pujaBookingMetric("Completed", String.valueOf(completed)));
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private VBox pujaBookingMetric(String title, String value) {
+        VBox card = new VBox(4, label(value, "puja-total-amount"), muted(title));
+        card.getStyleClass().add("puja-booking-summary-metric");
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private String pujaBookingImage(String serviceId) {
+        return AppDataStore.pujaServices().stream()
+                .filter(service -> service.serviceId.equals(serviceId))
+                .map(service -> service.imageUrl)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElseGet(() -> visiblePujaServices().stream()
+                        .filter(service -> service.serviceId().equals(serviceId))
+                        .map(PujaService::image)
+                        .findFirst()
+                        .orElse("/images/trimbakeshwar.jpg"));
+    }
+
+    private String pujaBookingTemple(String serviceId, String fallback) {
+        return AppDataStore.pujaServices().stream()
+                .filter(service -> service.serviceId.equals(serviceId))
+                .map(service -> valueOr(fallback, service.templeOrGhat))
+                .findFirst()
+                .orElse(fallback);
     }
 
     private VBox bookingMetric(String title, long count, String detail) {
@@ -7063,6 +8248,481 @@ public class DashboardPage {
         return row;
     }
 
+    private HBox pujaBookingRow(AppDataStore.PujaBookingRecord booking) {
+        ImageView image = createImage(pujaBookingImage(booking.serviceId), 142, 92, 0.5, 0.5);
+        image.getStyleClass().add("puja-card-image");
+
+        Button details = new Button("View Details");
+        details.getStyleClass().add("puja-secondary-button");
+        details.setOnAction(event -> showPujaBookingDetailsPage(booking));
+
+        Button ticket = new Button("View QR / Ticket");
+        ticket.getStyleClass().add("transport-primary-button");
+        ticket.setDisable(booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank());
+        ticket.setOnAction(event -> showPujaTicketVerificationPage(booking.bookingId, booking.qrVerificationToken));
+
+        HBox badges = new HBox(7, badge(booking.bookingStatus), badge(booking.paymentStatus));
+        VBox text = new VBox(5,
+                strong(booking.serviceName),
+                muted("Booking ID: " + booking.bookingId),
+                muted("Date: " + booking.date + "  •  Time: " + booking.time),
+                muted("Temple/Ghat: " + pujaBookingTemple(booking.serviceId, valueOr(booking.location, booking.templeOrGhat))),
+                muted("Location: " + valueOr(booking.location, booking.locationName)),
+                muted("Provider: " + valueOr("Best available verified priest", booking.providerName)),
+                label("Amount: Rs. " + booking.totalAmount, "puja-price"),
+                badges);
+        HBox actions = new HBox(8, details, ticket);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        HBox row = new HBox(14, image, text, createSpacer(), actions);
+        row.getStyleClass().add("puja-booking-card");
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(text, Priority.ALWAYS);
+        return row;
+    }
+
+    private void showPujaBookingDetailsPage(AppDataStore.PujaBookingRecord booking) {
+        setActiveModule("bookings");
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showModulePage("bookings"));
+
+        ImageView image = createImage(pujaBookingImage(booking.serviceId), 190, 112, 0.5, 0.5);
+        image.getStyleClass().add("puja-details-image");
+
+        VBox qr = booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank()
+                ? new VBox(8, sectionTitle("QR Ticket"), muted("QR ticket will be available after payment confirmation."))
+                : pujaTicketCard(booking, "SIMHASTHA-PUJA|" + booking.bookingId + "|" + booking.qrVerificationToken);
+        qr.getStyleClass().add("puja-ticket-compact");
+
+        GridPane bookingInfo = compactPujaInfoGridColumns(4,
+                pujaDetailCard("Date", booking.date),
+                pujaDetailCard("Time", booking.time),
+                pujaDetailCard("Location", valueOr(booking.location, booking.locationName)),
+                pujaDetailCard("Devotees", String.valueOf(booking.devoteesCount)),
+                pujaDetailCard("Language", booking.language),
+                pujaDetailCard("Mode", booking.mode),
+                pujaDetailCard("Amount", "Rs. " + booking.totalAmount),
+                pujaDetailCard("Payment Status", booking.paymentStatus),
+                pujaDetailCard("Booking Status", booking.bookingStatus));
+
+        Button ticket = new Button("View QR / Ticket");
+        ticket.getStyleClass().add("transport-primary-button");
+        ticket.setDisable(booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank());
+        ticket.setOnAction(event -> showPujaTicketVerificationPage(booking.bookingId, booking.qrVerificationToken));
+        Button retry = new Button("Retry Payment");
+        retry.getStyleClass().add("puja-secondary-button");
+        retry.setDisable("PAID".equalsIgnoreCase(booking.paymentStatus) || booking.totalAmount <= 0);
+        retry.setOnAction(event -> {
+            AppSession.User user = AppSession.currentUser();
+            if (user != null) {
+                startPujaRazorpayPayment(booking, user);
+            }
+        });
+        HBox actions = new HBox(10, createSpacer(), retry, ticket);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+
+        VBox right = new VBox(8,
+                sectionTitle(booking.serviceName),
+                muted("Booking ID: " + booking.bookingId),
+                new HBox(7, badge(booking.bookingStatus), badge(booking.paymentStatus)),
+                muted("Temple/Ghat: " + pujaBookingTemple(booking.serviceId, booking.templeOrGhat)),
+                muted("Provider: " + valueOr("Best available verified priest", booking.providerName)),
+                qr);
+        right.getStyleClass().add("puja-details-panel");
+        HBox hero = new HBox(16, image, right);
+        hero.getStyleClass().add("puja-success-hero");
+        HBox.setHgrow(right, Priority.ALWAYS);
+
+        VBox panel = new VBox(10,
+                hero,
+                bookingInfo,
+                actions);
+        panel.getStyleClass().add("puja-details-panel");
+        VBox shell = pageShell("Puja Booking Details", "Review your booking and QR ticket.",
+                back, panel);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private void showPujaTicketVerificationPage(String bookingId, String token) {
+        AppDataStore.PujaBookingRecord booking = AppDataStore.pujaBookings().stream()
+                .filter(item -> item.bookingId.equals(bookingId))
+                .findFirst()
+                .orElse(null);
+        if (booking == null || token == null || token.isBlank()
+                || booking.qrVerificationToken == null
+                || !booking.qrVerificationToken.equals(token)) {
+            showInfo("Ticket Not Available", "This Puja ticket is not available or the verification token is invalid.");
+            return;
+        }
+
+        setActiveModule("bookings");
+        Button back = pujaBackButton("← Back");
+        back.setOnAction(event -> showPujaBookingDetailsPage(booking));
+
+        String payload = "SIMHASTHA-PUJA|" + booking.bookingId + "|" + token;
+        VBox ticketCard = pujaTicketCard(booking, payload);
+        ticketCard.getStyleClass().add("puja-ticket-compact");
+        GridPane details = compactPujaInfoGridColumns(4,
+                pujaDetailCard("Booking ID", booking.bookingId),
+                pujaDetailCard("Puja", booking.serviceName),
+                pujaDetailCard("Date", booking.date),
+                pujaDetailCard("Time", booking.time),
+                pujaDetailCard("Location", valueOr(booking.location, booking.locationName)),
+                pujaDetailCard("Devotees", String.valueOf(booking.devoteesCount)),
+                pujaDetailCard("Payment", booking.paymentStatus),
+                pujaDetailCard("Status", booking.bookingStatus));
+
+        VBox trust = new VBox(6,
+                sectionTitle("Verification Instructions"),
+                muted("Show this ticket at the Puja service counter. QR token is generated from your confirmed booking."));
+        trust.getStyleClass().add("puja-details-trust-card");
+
+        HBox hero = new HBox(16, ticketCard, trust);
+        hero.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(trust, Priority.ALWAYS);
+        VBox panel = new VBox(10, hero, details);
+        panel.getStyleClass().add("puja-details-panel");
+        VBox shell = pageShell("Puja QR Ticket", "Use this safe ticket for verification at the service counter.",
+                back, panel);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
+    }
+
+    private VBox pujaTicketCard(AppDataStore.PujaBookingRecord booking, String payload) {
+        ImageView qr = new ImageView(createQrImage(payload, 178));
+        qr.setFitWidth(178);
+        qr.setFitHeight(178);
+        qr.setPreserveRatio(true);
+        qr.getStyleClass().add("ticket-qr-image");
+
+        VBox copy = new VBox(5,
+                strong("SIMHASTHA CONNECT PUJA TICKET"),
+                muted(booking.serviceName),
+                muted("Booking: " + booking.bookingId),
+                muted("Token: " + booking.qrVerificationToken));
+        copy.setAlignment(Pos.CENTER_LEFT);
+        HBox body = new HBox(18, qr, copy);
+        body.setAlignment(Pos.CENTER_LEFT);
+
+        VBox card = new VBox(12, body);
+        card.getStyleClass().add("ticket-card");
+        card.setPadding(new Insets(18));
+        return card;
+    }
+
+    private WritableImage createQrImage(String payload, int pixelSize) {
+        boolean[][] modules = createQrMatrix(payload == null ? "" : payload);
+        int quiet = 4;
+        int moduleCount = modules.length + quiet * 2;
+        int scale = Math.max(3, pixelSize / moduleCount);
+        int imageSize = moduleCount * scale;
+        WritableImage image = new WritableImage(imageSize, imageSize);
+        PixelWriter writer = image.getPixelWriter();
+        for (int y = 0; y < imageSize; y++) {
+            for (int x = 0; x < imageSize; x++) {
+                int moduleX = x / scale - quiet;
+                int moduleY = y / scale - quiet;
+                boolean dark = moduleX >= 0 && moduleY >= 0
+                        && moduleX < modules.length && moduleY < modules.length
+                        && modules[moduleY][moduleX];
+                writer.setColor(x, y, dark ? Color.BLACK : Color.WHITE);
+            }
+        }
+        return image;
+    }
+
+    private boolean[][] createQrMatrix(String text) {
+        final int version = 4;
+        final int size = version * 4 + 17;
+        boolean[][] modules = new boolean[size][size];
+        boolean[][] reserved = new boolean[size][size];
+        addQrFinder(modules, reserved, 0, 0);
+        addQrFinder(modules, reserved, size - 7, 0);
+        addQrFinder(modules, reserved, 0, size - 7);
+        addQrTiming(modules, reserved);
+        addQrAlignment(modules, reserved, 26, 26);
+        setQrModule(modules, reserved, 8, size - 8, true, true);
+        reserveQrFormat(reserved, size);
+
+        java.util.List<Integer> data = qrDataCodewords(text);
+        data.addAll(qrReedSolomonRemainder(data, 20));
+        placeQrData(modules, reserved, data, 0);
+        addQrFormatBits(modules, 0);
+        return modules;
+    }
+
+    private java.util.List<Integer> qrDataCodewords(String text) {
+        byte[] bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int length = Math.min(bytes.length, 78);
+        java.util.List<Integer> bits = new java.util.ArrayList<>();
+        appendQrBits(bits, 0b0100, 4);
+        appendQrBits(bits, length, 8);
+        for (int index = 0; index < length; index++) {
+            appendQrBits(bits, bytes[index] & 0xff, 8);
+        }
+        int maxBits = 80 * 8;
+        appendQrBits(bits, 0, Math.min(4, maxBits - bits.size()));
+        while (bits.size() % 8 != 0) {
+            bits.add(0);
+        }
+        java.util.List<Integer> codewords = new java.util.ArrayList<>();
+        for (int i = 0; i < bits.size(); i += 8) {
+            int value = 0;
+            for (int bit = 0; bit < 8; bit++) {
+                value = (value << 1) | bits.get(i + bit);
+            }
+            codewords.add(value);
+        }
+        for (int pad = 0; codewords.size() < 80; pad++) {
+            codewords.add((pad % 2 == 0) ? 0xec : 0x11);
+        }
+        return codewords;
+    }
+
+    private void appendQrBits(java.util.List<Integer> bits, int value, int count) {
+        for (int i = count - 1; i >= 0; i--) {
+            bits.add((value >>> i) & 1);
+        }
+    }
+
+    private void addQrFinder(boolean[][] modules, boolean[][] reserved, int x, int y) {
+        for (int dy = -1; dy <= 7; dy++) {
+            for (int dx = -1; dx <= 7; dx++) {
+                int xx = x + dx;
+                int yy = y + dy;
+                if (xx < 0 || yy < 0 || yy >= modules.length || xx >= modules.length) {
+                    continue;
+                }
+                boolean dark = dx >= 0 && dx <= 6 && dy >= 0 && dy <= 6
+                        && (dx == 0 || dx == 6 || dy == 0 || dy == 6
+                                || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4));
+                setQrModule(modules, reserved, xx, yy, dark, true);
+            }
+        }
+    }
+
+    private void addQrTiming(boolean[][] modules, boolean[][] reserved) {
+        for (int i = 8; i < modules.length - 8; i++) {
+            setQrModule(modules, reserved, i, 6, i % 2 == 0, true);
+            setQrModule(modules, reserved, 6, i, i % 2 == 0, true);
+        }
+    }
+
+    private void addQrAlignment(boolean[][] modules, boolean[][] reserved, int centerX, int centerY) {
+        for (int dy = -2; dy <= 2; dy++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                boolean dark = Math.max(Math.abs(dx), Math.abs(dy)) != 1;
+                setQrModule(modules, reserved, centerX + dx, centerY + dy, dark, true);
+            }
+        }
+    }
+
+    private void reserveQrFormat(boolean[][] reserved, int size) {
+        for (int i = 0; i < 9; i++) {
+            if (i != 6) {
+                reserved[8][i] = true;
+                reserved[i][8] = true;
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            reserved[8][size - 1 - i] = true;
+            reserved[size - 1 - i][8] = true;
+        }
+    }
+
+    private void setQrModule(boolean[][] modules, boolean[][] reserved, int x, int y, boolean dark, boolean reserve) {
+        modules[y][x] = dark;
+        if (reserve) {
+            reserved[y][x] = true;
+        }
+    }
+
+    private void placeQrData(boolean[][] modules, boolean[][] reserved, java.util.List<Integer> codewords, int mask) {
+        java.util.List<Integer> bits = new java.util.ArrayList<>();
+        for (int codeword : codewords) {
+            appendQrBits(bits, codeword, 8);
+        }
+        int bitIndex = 0;
+        int direction = -1;
+        for (int right = modules.length - 1; right >= 1; right -= 2) {
+            if (right == 6) {
+                right--;
+            }
+            for (int i = 0; i < modules.length; i++) {
+                int y = direction == -1 ? modules.length - 1 - i : i;
+                for (int dx = 0; dx < 2; dx++) {
+                    int x = right - dx;
+                    if (reserved[y][x]) {
+                        continue;
+                    }
+                    boolean bit = bitIndex < bits.size() && bits.get(bitIndex++) == 1;
+                    if (qrMask(mask, x, y)) {
+                        bit = !bit;
+                    }
+                    modules[y][x] = bit;
+                }
+            }
+            direction = -direction;
+        }
+    }
+
+    private boolean qrMask(int mask, int x, int y) {
+        return switch (mask) {
+            case 0 -> (x + y) % 2 == 0;
+            default -> false;
+        };
+    }
+
+    private void addQrFormatBits(boolean[][] modules, int mask) {
+        int size = modules.length;
+        int format = qrFormatBits(1, mask);
+        for (int i = 0; i <= 5; i++) {
+            modules[i][8] = ((format >>> i) & 1) != 0;
+        }
+        modules[7][8] = ((format >>> 6) & 1) != 0;
+        modules[8][8] = ((format >>> 7) & 1) != 0;
+        modules[8][7] = ((format >>> 8) & 1) != 0;
+        for (int i = 9; i < 15; i++) {
+            modules[14 - i][8] = ((format >>> i) & 1) != 0;
+        }
+        for (int i = 0; i < 8; i++) {
+            modules[8][size - 1 - i] = ((format >>> i) & 1) != 0;
+        }
+        for (int i = 8; i < 15; i++) {
+            modules[size - 15 + i][8] = ((format >>> i) & 1) != 0;
+        }
+    }
+
+    private int qrFormatBits(int errorLevelBits, int mask) {
+        int data = (errorLevelBits << 3) | mask;
+        int value = data << 10;
+        int generator = 0x537;
+        for (int i = 14; i >= 10; i--) {
+            if (((value >>> i) & 1) != 0) {
+                value ^= generator << (i - 10);
+            }
+        }
+        return ((data << 10) | value) ^ 0x5412;
+    }
+
+    private java.util.List<Integer> qrReedSolomonRemainder(java.util.List<Integer> data, int degree) {
+        int[] generator = qrRsGenerator(degree);
+        int[] remainder = new int[degree];
+        for (int value : data) {
+            int factor = value ^ remainder[0];
+            System.arraycopy(remainder, 1, remainder, 0, degree - 1);
+            remainder[degree - 1] = 0;
+            for (int i = 0; i < degree; i++) {
+                remainder[i] ^= qrGfMultiply(generator[i], factor);
+            }
+        }
+        java.util.List<Integer> result = new java.util.ArrayList<>();
+        for (int value : remainder) {
+            result.add(value);
+        }
+        return result;
+    }
+
+    private int[] qrRsGenerator(int degree) {
+        int[] generator = { 1 };
+        for (int i = 0; i < degree; i++) {
+            int[] next = new int[generator.length + 1];
+            for (int j = 0; j < generator.length; j++) {
+                next[j] ^= qrGfMultiply(generator[j], 1);
+                next[j + 1] ^= qrGfMultiply(generator[j], qrGfPow(2, i));
+            }
+            generator = next;
+        }
+        return java.util.Arrays.copyOfRange(generator, 1, generator.length);
+    }
+
+    private int qrGfPow(int value, int power) {
+        int result = 1;
+        for (int i = 0; i < power; i++) {
+            result = qrGfMultiply(result, value);
+        }
+        return result;
+    }
+
+    private int qrGfMultiply(int a, int b) {
+        int result = 0;
+        for (int i = 0; i < 8; i++) {
+            if ((b & 1) != 0) {
+                result ^= a;
+            }
+            boolean carry = (a & 0x80) != 0;
+            a = (a << 1) & 0xff;
+            if (carry) {
+                a ^= 0x1d;
+            }
+            b >>>= 1;
+        }
+        return result;
+    }
+
+    private String pujaBookingDetails(AppDataStore.PujaBookingRecord booking) {
+        return "Booking ID: " + booking.bookingId
+                + "\nPuja: " + booking.serviceName
+                + "\nProvider: " + valueOr("Best available verified priest", booking.providerName)
+                + "\nDate: " + booking.date
+                + "\nTime: " + booking.time
+                + "\nLocation: " + valueOr(booking.location, booking.locationName)
+                + "\nDevotees: " + booking.devoteesCount
+                + "\nLanguage: " + booking.language
+                + "\nMode: " + booking.mode
+                + "\nSamagri: " + (booking.samagriSelected ? "Included - Rs. " + booking.samagriAmount : "Not included")
+                + "\nPrasad: " + (booking.prasadSelected ? "Included - Rs. " + booking.prasadAmount : "Not included")
+                + "\nBase Price: Rs. " + booking.basePrice
+                + "\nService Fee: Rs. " + booking.serviceFee
+                + "\nTotal Amount: Rs. " + booking.totalAmount
+                + "\nSpecial Requirements: " + valueOr("None", booking.specialRequirements)
+                + "\nBooking Status: " + booking.bookingStatus
+                + "\nPayment Status: " + booking.paymentStatus
+                + "\nPayment Method: " + valueOr("Not started", booking.paymentMethod)
+                + "\nRazorpay Order ID: " + valueOr("Not available", booking.razorpayOrderId)
+                + "\nRazorpay Payment ID: " + valueOr("Not available", booking.razorpayPaymentId)
+                + "\nPayment Failure Reason: " + valueOr("None", booking.paymentFailureReason)
+                + "\n\nQR Code: Coming in a later part.";
+    }
+
+    private void updateOwnPujaBooking(AppDataStore.PujaBookingRecord booking, String status) {
+        if (("CANCELLED".equals(status))
+                && !("PENDING".equalsIgnoreCase(booking.bookingStatus)
+                        || "CONFIRMED".equalsIgnoreCase(booking.bookingStatus))) {
+            showInfo("Cannot Cancel", "Only Pending or Confirmed Puja bookings can be cancelled from user side.");
+            return;
+        }
+        try {
+            AppDataStore.updatePujaBookingStatus(booking.bookingId, status);
+            showInfo("Puja Booking Updated", "Booking status updated to " + status + ".");
+            showModulePage("bookings");
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Booking Update Failed", exception.getMessage());
+        }
+    }
+
+    private void submitPujaFraudReport(AppDataStore.PujaBookingRecord booking) {
+        AppSession.User user = AppSession.currentUser();
+        try {
+            AppDataStore.submitFraudReport(new AppDataStore.FraudReportRecord("",
+                    user == null ? "" : user.uid(),
+                    user == null ? "" : displayName(user),
+                    booking.bookingId,
+                    booking.serviceId,
+                    booking.serviceName,
+                    booking.providerId,
+                    booking.providerName,
+                    "User reported possible fraud from My Puja Bookings.",
+                    "OPEN",
+                    "",
+                    ""));
+            showInfo("Fraud Report Submitted", "Your report was saved and is visible to admin for review.");
+        } catch (AppDataStore.ApprovalUpdateException exception) {
+            showInfo("Fraud Report Failed", exception.getMessage());
+        }
+    }
+
     private VBox emergencyCard(String title, String number, String detail) {
         VBox card = new VBox(7, new HBox(10, moduleIcon("emergency", "pilgrim-card-icon"), badge("Call Info")),
                 strong(title), label(number, "pilgrim-emergency-number"), muted(detail), arrowAction("Call Info"));
@@ -7085,6 +8745,13 @@ public class DashboardPage {
 
     private VBox infoPanel(String title, String body) {
         VBox panel = new VBox(7, sectionTitle(title), paragraph(body));
+        panel.getStyleClass().add("pilgrim-panel");
+        return panel;
+    }
+
+    private VBox infoPanel(String title, Node... body) {
+        VBox panel = new VBox(7, sectionTitle(title));
+        panel.getChildren().addAll(body);
         panel.getStyleClass().add("pilgrim-panel");
         return panel;
     }
@@ -7242,20 +8909,36 @@ public class DashboardPage {
     }
 
     private ImageView createImage(String path, double width, double height, double xBias, double yBias) {
-        URL imageUrl = getClass().getResource(path);
         ImageView imageView = new ImageView();
         imageView.setPreserveRatio(false);
         imageView.setFitWidth(width);
         imageView.setFitHeight(height);
-        if (imageUrl != null) {
-            Image image = localImageCache.computeIfAbsent(path, key -> new Image(imageUrl.toExternalForm()));
+        try {
+            String source = path == null || path.isBlank() ? "/images/trimbakeshwar.jpg" : path;
+            Image image = null;
+            if (source.startsWith("http") || source.startsWith("file:")) {
+                image = new Image(source, true);
+            } else {
+                URL imageUrl = getClass().getResource(source);
+                if (imageUrl != null) {
+                    String key = imageUrl.toExternalForm();
+                    image = IMAGE_CACHE.computeIfAbsent(key, Image::new);
+                }
+            }
+            if (image == null) {
+                return imageView;
+            }
             imageView.setImage(image);
-            double scale = Math.max(width / image.getWidth(), height / image.getHeight());
-            double cropWidth = Math.min(image.getWidth(), width / scale);
-            double cropHeight = Math.min(image.getHeight(), height / scale);
-            double x = Math.max(0, (image.getWidth() - cropWidth) * xBias);
-            double y = Math.max(0, (image.getHeight() - cropHeight) * yBias);
-            imageView.setViewport(new Rectangle2D(x, y, cropWidth, cropHeight));
+            if (image.getWidth() > 0 && image.getHeight() > 0) {
+                double scale = Math.max(width / image.getWidth(), height / image.getHeight());
+                double cropWidth = Math.min(image.getWidth(), width / scale);
+                double cropHeight = Math.min(image.getHeight(), height / scale);
+                double x = Math.max(0, (image.getWidth() - cropWidth) * xBias);
+                double y = Math.max(0, (image.getHeight() - cropHeight) * yBias);
+                imageView.setViewport(new Rectangle2D(x, y, cropWidth, cropHeight));
+            }
+        } catch (Exception ignored) {
+            // Decorative images should never break the dashboard.
         }
         return imageView;
     }

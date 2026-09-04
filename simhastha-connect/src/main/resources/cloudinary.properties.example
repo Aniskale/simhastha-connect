@@ -1,0 +1,5 @@
+# Optional Cloudinary image upload configuration.
+# Do not commit real secrets to public repositories.
+cloudinary.cloudName=your_cloud_name
+cloudinary.apiKey=your_api_key
+cloudinary.apiSecret=your_api_secret

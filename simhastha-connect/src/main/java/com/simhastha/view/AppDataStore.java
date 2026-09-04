@@ -50,6 +50,10 @@ public final class AppDataStore {
     private static final Map<String, String> businessItemPhotos = new LinkedHashMap<>();
     private static final Map<String, List<PublicBusinessItem>> businessItems = new LinkedHashMap<>();
     private static final List<TransportOperatorRecord> transportOperators = new ArrayList<>();
+    private static final List<PujaServiceRecord> pujaServices = new ArrayList<>();
+    private static final List<PujaProviderRecord> pujaProviders = new ArrayList<>();
+    private static final List<PujaBookingRecord> pujaBookings = new ArrayList<>();
+    private static final List<FraudReportRecord> fraudReports = new ArrayList<>();
     private static final List<LostFoundCaseRecord> lostFoundCases = new ArrayList<>();
     private static final List<RouteRecord> transportRoutes = new ArrayList<>();
     private static final List<FaqRecord> faqs = new ArrayList<>();
@@ -287,6 +291,42 @@ public final class AppDataStore {
         return transportOperators;
     }
 
+    public static List<PujaProviderRecord> pujaProviders() {
+        return pujaProviders;
+    }
+
+    public static List<PujaServiceRecord> pujaServices() {
+        return pujaServices;
+    }
+
+    public static List<PujaServiceRecord> publicPujaServices() {
+        return pujaServices.stream()
+                .filter(PujaServiceRecord::isPubliclyVisible)
+                .toList();
+    }
+
+    public static List<PujaBookingRecord> pujaBookings() {
+        return pujaBookings;
+    }
+
+    public static List<FraudReportRecord> fraudReports() {
+        return fraudReports;
+    }
+
+    public static List<PujaBookingRecord> pujaBookingsForUser(String userId) {
+        return pujaBookings.stream()
+                .filter(booking -> booking.userId.equals(userId))
+                .toList();
+    }
+
+    public static List<PujaProviderRecord> approvedPujaProviders() {
+        return pujaProviders.stream()
+                .filter(provider -> provider.approved
+                        && ("approved".equalsIgnoreCase(provider.status)
+                                || "active".equalsIgnoreCase(provider.status)))
+                .toList();
+    }
+
     public static List<LostFoundCaseRecord> lostFoundCases() {
         return lostFoundCases;
     }
@@ -468,6 +508,185 @@ public final class AppDataStore {
         }
     }
 
+    public static void registerPujaProvider(PujaProviderRecord provider) throws ApprovalUpdateException {
+        if (provider == null) {
+            throw new ApprovalUpdateException("Provider details are missing.");
+        }
+        if (provider.containsUnauthorizedVipDarshan()) {
+            throw new ApprovalUpdateException("Providers cannot create or publish unauthorized VIP Darshan services. Official Special Darshan must be admin-created or admin-approved.");
+        }
+        pujaProviders.removeIf(existing -> existing.providerId.equals(provider.providerId));
+        pujaProviders.add(provider.withStatus("pending", false));
+        try {
+            firestore.savePujaProvider(provider.withStatus("pending", false), currentToken());
+        } catch (Exception exception) {
+            if (firestore.isEnabled()) {
+                throw new ApprovalUpdateException("Provider registration could not be saved to Firestore.", exception);
+            }
+        }
+    }
+
+    public static void updatePujaProviderStatus(String providerId, String status, boolean approved)
+            throws ApprovalUpdateException {
+        if (!firestore.isEnabled()) {
+            pujaProviders.replaceAll(provider -> provider.providerId.equals(providerId)
+                    ? provider.withStatus(status, approved)
+                    : provider);
+            return;
+        }
+        try {
+            firestore.updateDocumentStatus("pujaProviders", providerId, status, approved, currentToken());
+            pujaProviders.replaceAll(provider -> provider.providerId.equals(providerId)
+                    ? provider.withStatus(status, approved)
+                    : provider);
+        } catch (Exception exception) {
+            throw new ApprovalUpdateException("Puja provider status could not be updated in Firestore.", exception);
+        }
+    }
+
+    public static void savePujaService(PujaServiceRecord service) throws ApprovalUpdateException {
+        if (service == null || service.name.isBlank()) {
+            throw new ApprovalUpdateException("Puja service details are missing.");
+        }
+        if (service.name.toLowerCase(Locale.ROOT).contains("vip darshan")) {
+            throw new ApprovalUpdateException("Unauthorized VIP Darshan cannot be published.");
+        }
+        if (firestore.isEnabled()) {
+            try {
+                firestore.savePujaService(service, currentToken());
+            } catch (Exception exception) {
+                throw new ApprovalUpdateException("Puja service could not be saved to Firestore: "
+                        + safeMessage(exception), exception);
+            }
+        }
+        addUniqueItem(service.toServiceItem());
+        pujaServices.removeIf(existing -> existing.serviceId.equals(service.serviceId));
+        pujaServices.add(service);
+    }
+
+    public static void deletePujaService(String serviceId) throws ApprovalUpdateException {
+        if (clean(serviceId).isBlank()) {
+            throw new ApprovalUpdateException("Select a Puja service before deleting.");
+        }
+        if (firestore.isEnabled()) {
+            try {
+                firestore.deletePujaService(serviceId, currentToken());
+            } catch (Exception exception) {
+                throw new ApprovalUpdateException("Puja service could not be deleted from Firestore: "
+                        + safeMessage(exception), exception);
+            }
+        }
+        pujaServices.removeIf(existing -> existing.serviceId.equals(serviceId));
+        items("puja").removeIf(existing -> existing.id.equals(serviceId));
+    }
+
+    public static void updatePujaServiceFlags(String serviceId, boolean published, boolean enabled,
+            boolean adminApproved, String verificationStatus) throws ApprovalUpdateException {
+        PujaServiceRecord current = pujaServices.stream()
+                .filter(service -> service.serviceId.equals(serviceId))
+                .findFirst()
+                .orElse(null);
+        if (current == null) {
+            throw new ApprovalUpdateException("Puja service was not found.");
+        }
+        savePujaService(current.withControl(published, enabled, adminApproved, verificationStatus));
+    }
+
+    public static void savePujaBooking(PujaBookingRecord booking) throws ApprovalUpdateException {
+        pujaBookings.removeIf(existing -> existing.bookingId.equals(booking.bookingId));
+        pujaBookings.add(booking);
+        if (firestore.isEnabled()) {
+            try {
+                firestore.savePujaBooking(booking, currentToken());
+            } catch (Exception exception) {
+                System.err.println("Puja booking saved locally; Firestore sync failed: "
+                        + safeMessage(exception));
+            }
+        }
+    }
+
+    public static void updatePujaBookingStatus(String bookingId, String bookingStatus) throws ApprovalUpdateException {
+        PujaBookingRecord current = pujaBookings.stream()
+                .filter(booking -> booking.bookingId.equals(bookingId))
+                .findFirst()
+                .orElse(null);
+        if (current == null) {
+            throw new ApprovalUpdateException("Puja booking was not found.");
+        }
+        PujaBookingRecord updated = current.withBookingStatus(bookingStatus);
+        pujaBookings.replaceAll(booking -> booking.bookingId.equals(bookingId) ? updated : booking);
+        try {
+            firestore.updatePujaBookingStatus(bookingId, bookingStatus, currentToken());
+        } catch (Exception exception) {
+            if (firestore.isEnabled()) {
+                throw new ApprovalUpdateException("Puja booking status could not be updated in Firestore.", exception);
+            }
+        }
+    }
+
+    public static void updatePujaBookingPayment(String bookingId, String bookingStatus, String paymentStatus,
+            String internalPaymentId, String razorpayOrderId, String razorpayPaymentId, String paymentMethod,
+            String paymentCreatedAt, String paymentCompletedAt, String paymentFailureReason)
+            throws ApprovalUpdateException {
+        PujaBookingRecord current = pujaBookings.stream()
+                .filter(booking -> booking.bookingId.equals(bookingId))
+                .findFirst()
+                .orElse(null);
+        if (current == null) {
+            throw new ApprovalUpdateException("Puja booking was not found.");
+        }
+        PujaBookingRecord updated = current.withPayment(bookingStatus, paymentStatus, internalPaymentId,
+                razorpayOrderId, razorpayPaymentId, paymentMethod, paymentCreatedAt, paymentCompletedAt,
+                paymentFailureReason);
+        pujaBookings.replaceAll(booking -> booking.bookingId.equals(bookingId) ? updated : booking);
+        if (firestore.isEnabled()) {
+            try {
+                firestore.updatePujaBookingPayment(bookingId, updated.bookingStatus, updated.paymentStatus,
+                        updated.internalPaymentId, updated.razorpayOrderId, updated.razorpayPaymentId,
+                        updated.paymentMethod, updated.paymentCreatedAt, updated.paymentCompletedAt,
+                        updated.paymentFailureReason, currentToken());
+            } catch (Exception exception) {
+                System.err.println("Puja booking payment updated locally; Firestore sync failed: "
+                        + safeMessage(exception));
+            }
+        }
+    }
+
+    public static PujaBookingRecord updatePujaBookingQrTicket(String bookingId, String qrTicketId,
+            String qrVerificationToken) throws ApprovalUpdateException {
+        PujaBookingRecord current = pujaBookings.stream()
+                .filter(booking -> booking.bookingId.equals(bookingId))
+                .findFirst()
+                .orElse(null);
+        if (current == null) {
+            throw new ApprovalUpdateException("Puja booking was not found.");
+        }
+        PujaBookingRecord updated = current.withQrTicket(qrTicketId, qrVerificationToken);
+        pujaBookings.replaceAll(booking -> booking.bookingId.equals(bookingId) ? updated : booking);
+        if (firestore.isEnabled()) {
+            try {
+                firestore.updatePujaBookingQrTicket(bookingId, updated.qrTicketId, updated.qrVerificationToken,
+                        currentToken());
+            } catch (Exception exception) {
+                System.err.println("Puja ticket saved locally; Firestore sync failed: "
+                        + safeMessage(exception));
+            }
+        }
+        return updated;
+    }
+
+    public static void submitFraudReport(FraudReportRecord report) throws ApprovalUpdateException {
+        fraudReports.removeIf(existing -> existing.reportId.equals(report.reportId));
+        fraudReports.add(report);
+        try {
+            firestore.saveFraudReport(report, currentToken());
+        } catch (Exception exception) {
+            if (firestore.isEnabled()) {
+                throw new ApprovalUpdateException("Fraud report could not be saved to Firestore.", exception);
+            }
+        }
+    }
+
     public static void saveRoute(RouteRecord route) throws ApprovalUpdateException {
         try {
             operationalDataDao.saveRoute(route, currentToken());
@@ -522,6 +741,10 @@ public final class AppDataStore {
 
     public static void refreshFirebaseData(String idToken) {
         loadFirebaseDataIfAvailable(idToken);
+    }
+
+    public static void refreshPujaFirebaseData(String idToken) {
+        loadPujaFirebaseDataIfAvailable(idToken);
     }
 
     public static AdminOverview refreshAdminOverview(String idToken) {
@@ -819,6 +1042,409 @@ public final class AppDataStore {
         }
     }
 
+    public static final class PujaProviderRecord {
+        public final String providerId;
+        public final String fullName;
+        public final String profilePhoto;
+        public final String phone;
+        public final String email;
+        public final String address;
+        public final String experience;
+        public final String specialization;
+        public final String languages;
+        public final String templeOrganization;
+        public final String identityDocument;
+        public final String supportingCertificates;
+        public final String servicesOffered;
+        public final String serviceLocations;
+        public final String status;
+        public final boolean approved;
+        public final String createdAt;
+        public final String updatedAt;
+
+        public PujaProviderRecord(String providerId, String fullName, String profilePhoto, String phone, String email,
+                String address, String experience, String specialization, String languages, String templeOrganization,
+                String identityDocument, String supportingCertificates, String servicesOffered, String serviceLocations,
+                String status, boolean approved, String createdAt, String updatedAt) {
+            this.providerId = clean(providerId).isBlank() ? randomId("puja-provider") : clean(providerId);
+            this.fullName = clean(fullName);
+            this.profilePhoto = clean(profilePhoto);
+            this.phone = clean(phone);
+            this.email = clean(email);
+            this.address = clean(address);
+            this.experience = clean(experience);
+            this.specialization = clean(specialization);
+            this.languages = clean(languages);
+            this.templeOrganization = clean(templeOrganization);
+            this.identityDocument = clean(identityDocument);
+            this.supportingCertificates = clean(supportingCertificates);
+            this.servicesOffered = clean(servicesOffered);
+            this.serviceLocations = clean(serviceLocations);
+            this.status = clean(status).isBlank() ? "pending" : clean(status).toLowerCase(Locale.ROOT);
+            this.approved = approved;
+            this.createdAt = clean(createdAt).isBlank() ? String.valueOf(System.currentTimeMillis()) : clean(createdAt);
+            this.updatedAt = clean(updatedAt).isBlank() ? this.createdAt : clean(updatedAt);
+        }
+
+        public PujaProviderRecord withStatus(String status, boolean approved) {
+            return new PujaProviderRecord(providerId, fullName, profilePhoto, phone, email, address, experience,
+                    specialization, languages, templeOrganization, identityDocument, supportingCertificates,
+                    servicesOffered, serviceLocations, status, approved, createdAt,
+                    String.valueOf(System.currentTimeMillis()));
+        }
+
+        public boolean containsUnauthorizedVipDarshan() {
+            String services = servicesOffered.toLowerCase(Locale.ROOT);
+            return services.contains("vip darshan");
+        }
+    }
+
+    public static final class PujaServiceRecord {
+        public final String serviceId;
+        public final String name;
+        public final String description;
+        public final String pujaType;
+        public final String templeOrGhat;
+        public final String price;
+        public final String duration;
+        public final String providerId;
+        public final String providerName;
+        public final String verificationStatus;
+        public final String availableSlots;
+        public final String mode;
+        public final String languages;
+        public final String imageUrl;
+        public final String imagePublicId;
+        public final String bookingStatus;
+        public final String status;
+        public final boolean published;
+        public final boolean enabled;
+        public final boolean adminApproved;
+        public final String createdAt;
+        public final String updatedAt;
+        public final String createdBy;
+        public final String updatedBy;
+        public final String verifiedAt;
+        public final String verifiedBy;
+
+        public PujaServiceRecord(String serviceId, String name, String description, String pujaType,
+                String templeOrGhat, String price, String duration, String providerId, String providerName,
+                String verificationStatus, String availableSlots, String mode, String languages, String imageUrl,
+                String bookingStatus, String status, boolean published, boolean enabled, boolean adminApproved,
+                String createdAt, String updatedAt) {
+            this(serviceId, name, description, pujaType, templeOrGhat, price, duration, providerId, providerName,
+                    verificationStatus, availableSlots, mode, languages, imageUrl, "", bookingStatus, status, published,
+                    enabled, adminApproved, createdAt, updatedAt, "", "", "", "");
+        }
+
+        public PujaServiceRecord(String serviceId, String name, String description, String pujaType,
+                String templeOrGhat, String price, String duration, String providerId, String providerName,
+                String verificationStatus, String availableSlots, String mode, String languages, String imageUrl,
+                String bookingStatus, String status, boolean published, boolean enabled, boolean adminApproved,
+                String createdAt, String updatedAt, String createdBy, String updatedBy, String verifiedAt,
+                String verifiedBy) {
+            this(serviceId, name, description, pujaType, templeOrGhat, price, duration, providerId, providerName,
+                    verificationStatus, availableSlots, mode, languages, imageUrl, "", bookingStatus, status,
+                    published, enabled, adminApproved, createdAt, updatedAt, createdBy, updatedBy, verifiedAt,
+                    verifiedBy);
+        }
+
+        public PujaServiceRecord(String serviceId, String name, String description, String pujaType,
+                String templeOrGhat, String price, String duration, String providerId, String providerName,
+                String verificationStatus, String availableSlots, String mode, String languages, String imageUrl,
+                String imagePublicId, String bookingStatus, String status, boolean published, boolean enabled,
+                boolean adminApproved, String createdAt, String updatedAt, String createdBy, String updatedBy,
+                String verifiedAt, String verifiedBy) {
+            this.serviceId = clean(serviceId).isBlank() ? randomId("puja-service") : clean(serviceId);
+            this.name = clean(name);
+            this.description = clean(description);
+            this.pujaType = clean(pujaType).isBlank() ? "Custom" : clean(pujaType);
+            this.templeOrGhat = clean(templeOrGhat).isBlank() ? "Approved Location" : clean(templeOrGhat);
+            this.price = clean(price).isBlank() ? "0" : clean(price);
+            this.duration = clean(duration).isBlank() ? "Varies" : clean(duration);
+            this.providerId = clean(providerId);
+            this.providerName = clean(providerName);
+            this.verificationStatus = clean(verificationStatus).isBlank() ? "PENDING" : clean(verificationStatus).toUpperCase(Locale.ROOT);
+            this.availableSlots = clean(availableSlots).isBlank() ? "Varies" : clean(availableSlots);
+            this.mode = clean(mode).isBlank() ? "Offline" : clean(mode);
+            this.languages = clean(languages).isBlank() ? "Marathi, Hindi, Sanskrit" : clean(languages);
+            this.imageUrl = clean(imageUrl).isBlank() ? "/images/trimbakeshwar.jpg" : clean(imageUrl);
+            this.bookingStatus = clean(bookingStatus).isBlank() ? "OPEN" : clean(bookingStatus).toUpperCase(Locale.ROOT);
+            this.status = clean(status).isBlank() ? "draft" : clean(status).toLowerCase(Locale.ROOT);
+            this.published = published;
+            this.enabled = enabled;
+            this.adminApproved = adminApproved;
+            this.createdAt = clean(createdAt).isBlank() ? String.valueOf(System.currentTimeMillis()) : clean(createdAt);
+            this.updatedAt = clean(updatedAt).isBlank() ? this.createdAt : clean(updatedAt);
+            this.createdBy = clean(createdBy);
+            this.updatedBy = clean(updatedBy);
+            this.verifiedAt = clean(verifiedAt);
+            this.verifiedBy = clean(verifiedBy);
+            this.imagePublicId = clean(imagePublicId);
+        }
+
+        public PujaServiceRecord withImage(String imageUrl, String imagePublicId) {
+            return new PujaServiceRecord(serviceId, name, description, pujaType, templeOrGhat, price, duration,
+                    providerId, providerName, verificationStatus, availableSlots, mode, languages,
+                    clean(imageUrl).isBlank() ? this.imageUrl : imageUrl,
+                    clean(imagePublicId).isBlank() ? this.imagePublicId : imagePublicId,
+                    bookingStatus, status, published, enabled, adminApproved, createdAt, updatedAt, createdBy,
+                    updatedBy, verifiedAt, verifiedBy);
+        }
+
+        public PujaServiceRecord withControl(boolean published, boolean enabled, boolean adminApproved,
+                String verificationStatus) {
+            String nextVerificationStatus = clean(verificationStatus).isBlank()
+                    ? this.verificationStatus
+                    : clean(verificationStatus).toUpperCase(Locale.ROOT);
+            String now = String.valueOf(System.currentTimeMillis());
+            String actor = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
+            boolean verified = "VERIFIED".equalsIgnoreCase(nextVerificationStatus);
+            return new PujaServiceRecord(serviceId, name, description, pujaType, templeOrGhat, price, duration,
+                    providerId, providerName, nextVerificationStatus, availableSlots, mode, languages, imageUrl,
+                    imagePublicId, bookingStatus, enabled ? "active" : "disabled", published, enabled, adminApproved,
+                    createdAt, now, createdBy, actor, verified && verifiedAt.isBlank() ? now : verifiedAt,
+                    verified && verifiedBy.isBlank() ? actor : verifiedBy);
+        }
+
+        public boolean isPubliclyVisible() {
+            return enabled
+                    && published
+                    && adminApproved
+                    && "active".equalsIgnoreCase(status)
+                    && "verified".equalsIgnoreCase(verificationStatus);
+        }
+
+        public ServiceItem toServiceItem() {
+            String detail = "Temple / Ghat: " + templeOrGhat
+                    + " | Puja Type: " + pujaType
+                    + " | Price: " + price
+                    + " | Duration: " + duration
+                    + " | Available Slots: " + availableSlots
+                    + " | Pandit / Provider: " + providerName
+                    + " | Languages: " + languages
+                    + " | Mode: " + mode
+                    + " | Verification Status: " + verificationStatus
+                    + " | Booking Status: " + bookingStatus;
+            return new ServiceItem(serviceId, "puja", name, detail, "Puja");
+        }
+    }
+
+    public static final class PujaBookingRecord {
+        public final String bookingId;
+        public final String userId;
+        public final String userName;
+        public final String userPhone;
+        public final String userEmail;
+        public final String serviceId;
+        public final String serviceName;
+        public final String serviceType;
+        public final String providerId;
+        public final String providerName;
+        public final String templeOrGhat;
+        public final String date;
+        public final String time;
+        public final String location;
+        public final int devoteesCount;
+        public final String language;
+        public final String mode;
+        public final long amount;
+        public final String bookingStatus;
+        public final String paymentStatus;
+        public final String createdAt;
+        public final String updatedAt;
+        public final String locationId;
+        public final String locationName;
+        public final boolean samagriSelected;
+        public final long samagriAmount;
+        public final boolean prasadSelected;
+        public final long prasadAmount;
+        public final long basePrice;
+        public final long serviceFee;
+        public final long totalAmount;
+        public final String specialRequirements;
+        public final String internalPaymentId;
+        public final String razorpayOrderId;
+        public final String razorpayPaymentId;
+        public final String paymentMethod;
+        public final String paymentCreatedAt;
+        public final String paymentCompletedAt;
+        public final String paymentFailureReason;
+        public final String qrTicketId;
+        public final String qrVerificationToken;
+
+        public PujaBookingRecord(String bookingId, String userId, String userName, String serviceId,
+                String serviceName, String providerId, String providerName, String date, String time, String location,
+                int devoteesCount, String language, String mode, long amount, String bookingStatus,
+                String paymentStatus, String createdAt, String updatedAt) {
+            this(bookingId, userId, userName, serviceId, serviceName, providerId, providerName, date, time, location,
+                    devoteesCount, language, mode, amount, bookingStatus, paymentStatus, createdAt, updatedAt,
+                    "", location, false, 0, false, 0, amount, 0, amount, "",
+                    "", "", "", "", "", "", "");
+        }
+
+        public PujaBookingRecord(String bookingId, String userId, String userName, String serviceId,
+                String serviceName, String providerId, String providerName, String date, String time, String location,
+                int devoteesCount, String language, String mode, long amount, String bookingStatus,
+                String paymentStatus, String createdAt, String updatedAt, String locationId, String locationName,
+                boolean samagriSelected, long samagriAmount, boolean prasadSelected, long prasadAmount,
+                long basePrice, long serviceFee, long totalAmount, String specialRequirements) {
+            this(bookingId, userId, userName, serviceId, serviceName, providerId, providerName, date, time, location,
+                    devoteesCount, language, mode, amount, bookingStatus, paymentStatus, createdAt, updatedAt,
+                    locationId, locationName, samagriSelected, samagriAmount, prasadSelected, prasadAmount,
+                    basePrice, serviceFee, totalAmount, specialRequirements, "", "", "", "", "", "", "");
+        }
+
+        public PujaBookingRecord(String bookingId, String userId, String userName, String serviceId,
+                String serviceName, String providerId, String providerName, String date, String time, String location,
+                int devoteesCount, String language, String mode, long amount, String bookingStatus,
+                String paymentStatus, String createdAt, String updatedAt, String locationId, String locationName,
+                boolean samagriSelected, long samagriAmount, boolean prasadSelected, long prasadAmount,
+                long basePrice, long serviceFee, long totalAmount, String specialRequirements,
+                String internalPaymentId, String razorpayOrderId, String razorpayPaymentId, String paymentMethod,
+                String paymentCreatedAt, String paymentCompletedAt, String paymentFailureReason) {
+            this(bookingId, userId, userName, "", "", serviceId, serviceName, "", providerId, providerName, "",
+                    date, time, location, devoteesCount, language, mode, amount, bookingStatus, paymentStatus,
+                    createdAt, updatedAt, locationId, locationName, samagriSelected, samagriAmount, prasadSelected,
+                    prasadAmount, basePrice, serviceFee, totalAmount, specialRequirements, internalPaymentId,
+                    razorpayOrderId, razorpayPaymentId, paymentMethod, paymentCreatedAt, paymentCompletedAt,
+                    paymentFailureReason, "", "");
+        }
+
+        public PujaBookingRecord(String bookingId, String userId, String userName, String userPhone, String userEmail,
+                String serviceId, String serviceName, String serviceType, String providerId, String providerName,
+                String templeOrGhat, String date, String time, String location, int devoteesCount, String language,
+                String mode, long amount, String bookingStatus, String paymentStatus, String createdAt,
+                String updatedAt, String locationId, String locationName, boolean samagriSelected, long samagriAmount,
+                boolean prasadSelected, long prasadAmount, long basePrice, long serviceFee, long totalAmount,
+                String specialRequirements, String internalPaymentId, String razorpayOrderId,
+                String razorpayPaymentId, String paymentMethod, String paymentCreatedAt, String paymentCompletedAt,
+                String paymentFailureReason, String qrTicketId, String qrVerificationToken) {
+            this.bookingId = clean(bookingId).isBlank() ? randomId("puja-booking") : clean(bookingId);
+            this.userId = clean(userId);
+            this.userName = clean(userName);
+            this.userPhone = clean(userPhone);
+            this.userEmail = clean(userEmail);
+            this.serviceId = clean(serviceId);
+            this.serviceName = clean(serviceName);
+            this.serviceType = clean(serviceType).isBlank() ? "Puja" : clean(serviceType);
+            this.providerId = clean(providerId);
+            this.providerName = clean(providerName);
+            this.templeOrGhat = clean(templeOrGhat);
+            this.date = clean(date);
+            this.time = clean(time);
+            this.location = clean(location);
+            this.devoteesCount = Math.max(1, devoteesCount);
+            this.language = clean(language).isBlank() ? "Marathi/Hindi" : clean(language);
+            this.mode = clean(mode).isBlank() ? "Offline" : clean(mode);
+            this.amount = amount;
+            this.bookingStatus = clean(bookingStatus).isBlank() ? "PENDING" : clean(bookingStatus).toUpperCase(Locale.ROOT);
+            this.paymentStatus = clean(paymentStatus).isBlank() ? "UNPAID" : clean(paymentStatus).toUpperCase(Locale.ROOT);
+            this.createdAt = clean(createdAt).isBlank() ? String.valueOf(System.currentTimeMillis()) : clean(createdAt);
+            this.updatedAt = clean(updatedAt).isBlank() ? this.createdAt : clean(updatedAt);
+            this.locationId = clean(locationId);
+            this.locationName = clean(locationName).isBlank() ? this.location : clean(locationName);
+            this.samagriSelected = samagriSelected;
+            this.samagriAmount = Math.max(0, samagriAmount);
+            this.prasadSelected = prasadSelected;
+            this.prasadAmount = Math.max(0, prasadAmount);
+            this.basePrice = Math.max(0, basePrice);
+            this.serviceFee = Math.max(0, serviceFee);
+            this.totalAmount = Math.max(0, totalAmount);
+            this.specialRequirements = clean(specialRequirements);
+            this.internalPaymentId = clean(internalPaymentId);
+            this.razorpayOrderId = clean(razorpayOrderId);
+            this.razorpayPaymentId = clean(razorpayPaymentId);
+            this.paymentMethod = clean(paymentMethod);
+            this.paymentCreatedAt = clean(paymentCreatedAt);
+            this.paymentCompletedAt = clean(paymentCompletedAt);
+            this.paymentFailureReason = clean(paymentFailureReason);
+            this.qrTicketId = clean(qrTicketId);
+            this.qrVerificationToken = clean(qrVerificationToken);
+        }
+
+        public PujaBookingRecord withBookingStatus(String status) {
+            return new PujaBookingRecord(bookingId, userId, userName, serviceId, serviceName, providerId, providerName,
+                    date, time, location, devoteesCount, language, mode, amount, status, paymentStatus,
+                    createdAt, String.valueOf(System.currentTimeMillis()), locationId, locationName,
+                    samagriSelected, samagriAmount, prasadSelected, prasadAmount, basePrice, serviceFee,
+                    totalAmount, specialRequirements, internalPaymentId, razorpayOrderId, razorpayPaymentId,
+                    paymentMethod, paymentCreatedAt, paymentCompletedAt, paymentFailureReason)
+                    .withContactAndTicket(userPhone, userEmail, serviceType, templeOrGhat, qrTicketId, qrVerificationToken);
+        }
+
+        public PujaBookingRecord withPayment(String bookingStatus, String paymentStatus, String internalPaymentId,
+                String razorpayOrderId, String razorpayPaymentId, String paymentMethod, String paymentCreatedAt,
+                String paymentCompletedAt, String paymentFailureReason) {
+            return new PujaBookingRecord(bookingId, userId, userName, userPhone, userEmail, serviceId, serviceName,
+                    serviceType, providerId, providerName, templeOrGhat, date, time, location, devoteesCount,
+                    language, mode, amount, bookingStatus, paymentStatus, createdAt,
+                    String.valueOf(System.currentTimeMillis()), locationId, locationName, samagriSelected,
+                    samagriAmount, prasadSelected, prasadAmount, basePrice, serviceFee, totalAmount,
+                    specialRequirements,
+                    clean(internalPaymentId).isBlank() ? this.internalPaymentId : internalPaymentId,
+                    clean(razorpayOrderId).isBlank() ? this.razorpayOrderId : razorpayOrderId,
+                    clean(razorpayPaymentId).isBlank() ? this.razorpayPaymentId : razorpayPaymentId,
+                    clean(paymentMethod).isBlank() ? this.paymentMethod : paymentMethod,
+                    clean(paymentCreatedAt).isBlank() ? this.paymentCreatedAt : paymentCreatedAt,
+                    clean(paymentCompletedAt).isBlank() ? this.paymentCompletedAt : paymentCompletedAt,
+                    clean(paymentFailureReason), qrTicketId, qrVerificationToken);
+        }
+
+        public PujaBookingRecord withQrTicket(String qrTicketId, String qrVerificationToken) {
+            return new PujaBookingRecord(bookingId, userId, userName, userPhone, userEmail, serviceId, serviceName,
+                    serviceType, providerId, providerName, templeOrGhat, date, time, location, devoteesCount,
+                    language, mode, amount, bookingStatus, paymentStatus, createdAt,
+                    String.valueOf(System.currentTimeMillis()), locationId, locationName, samagriSelected,
+                    samagriAmount, prasadSelected, prasadAmount, basePrice, serviceFee, totalAmount,
+                    specialRequirements, internalPaymentId, razorpayOrderId, razorpayPaymentId, paymentMethod,
+                    paymentCreatedAt, paymentCompletedAt, paymentFailureReason, qrTicketId, qrVerificationToken);
+        }
+
+        private PujaBookingRecord withContactAndTicket(String userPhone, String userEmail, String serviceType,
+                String templeOrGhat, String qrTicketId, String qrVerificationToken) {
+            return new PujaBookingRecord(bookingId, userId, userName, userPhone, userEmail, serviceId, serviceName,
+                    serviceType, providerId, providerName, templeOrGhat, date, time, location, devoteesCount,
+                    language, mode, amount, bookingStatus, paymentStatus, createdAt, updatedAt, locationId,
+                    locationName, samagriSelected, samagriAmount, prasadSelected, prasadAmount, basePrice,
+                    serviceFee, totalAmount, specialRequirements, internalPaymentId, razorpayOrderId,
+                    razorpayPaymentId, paymentMethod, paymentCreatedAt, paymentCompletedAt, paymentFailureReason,
+                    qrTicketId, qrVerificationToken);
+        }
+    }
+
+    public static final class FraudReportRecord {
+        public final String reportId;
+        public final String userId;
+        public final String userName;
+        public final String bookingId;
+        public final String serviceId;
+        public final String serviceName;
+        public final String providerId;
+        public final String providerName;
+        public final String issue;
+        public final String status;
+        public final String createdAt;
+        public final String updatedAt;
+
+        public FraudReportRecord(String reportId, String userId, String userName, String bookingId,
+                String serviceId, String serviceName, String providerId, String providerName, String issue,
+                String status, String createdAt, String updatedAt) {
+            this.reportId = clean(reportId).isBlank() ? randomId("fraud-report") : clean(reportId);
+            this.userId = clean(userId);
+            this.userName = clean(userName);
+            this.bookingId = clean(bookingId);
+            this.serviceId = clean(serviceId);
+            this.serviceName = clean(serviceName);
+            this.providerId = clean(providerId);
+            this.providerName = clean(providerName);
+            this.issue = clean(issue);
+            this.status = clean(status).isBlank() ? "OPEN" : clean(status).toUpperCase(Locale.ROOT);
+            this.createdAt = clean(createdAt).isBlank() ? String.valueOf(System.currentTimeMillis()) : clean(createdAt);
+            this.updatedAt = clean(updatedAt).isBlank() ? this.createdAt : clean(updatedAt);
+        }
+    }
+
     public static final class LostFoundCaseRecord {
         public final String caseId;
         public final String type;
@@ -1026,116 +1652,60 @@ public final class AppDataStore {
         loadFirebaseDataIfAvailable("");
     }
 
-    private static void seedFaqs() {
-        if (!faqs.isEmpty()) {
+    private static void loadPujaFirebaseDataIfAvailable(String idToken) {
+        if (!firestore.isEnabled()) {
             return;
         }
-        seedFaq("faq-general-simhastha", "General", "What is Simhastha and why is it celebrated in Nashik?",
-                "Simhastha is a major Hindu religious gathering held every 12 years in Nashik and Trimbakeshwar. Devotees take holy snan at sacred ghats and use Simhastha Connect for trusted travel, stay, puja and safety support.", 1);
-        seedFaq("faq-general-app", "General", "What can I do inside Simhastha Connect?",
-                "You can view packages, transport, stays, puja services, ghats, emergency help, announcements, schedules and booking status from one dashboard.", 2);
-        seedFaq("faq-general-language", "General", "Can pilgrims use the app for quick guidance?",
-                "Yes. The dashboard keeps important services, alerts and support options in simple sections so pilgrims can find help quickly.", 3);
-        seedFaq("faq-general-notifications", "General", "How do notifications work?",
-                "Notifications show booking updates, admin announcements, safety alerts and route guidance relevant to your account.", 4);
-        seedFaq("faq-general-profile", "General", "Why should I keep my profile updated?",
-                "Updated name, mobile number, email and address help support teams identify your booking, contact you and provide faster assistance.", 5);
-
-        seedFaq("faq-2027-dates", "Simhastha 2027", "When will Simhastha 2027 take place?",
-                "Official dates and daily schedules will appear in the All Day Schedule and Announcement sections as administrators publish them.", 6);
-        seedFaq("faq-2027-official", "Simhastha 2027", "Where will official updates appear?",
-                "Use Announcements & Live Updates for venue changes, crowd advisories, traffic changes, important instructions and emergency notices.", 7);
-        seedFaq("faq-2027-planning", "Simhastha 2027", "How should I plan my visit?",
-                "Check the schedule, stay options, travel route, ghat guidance and live announcements before finalizing your journey.", 8);
-        seedFaq("faq-2027-crowd", "Simhastha 2027", "Will crowd updates be available?",
-                "Important crowd and route advisories can be shared through announcements, notifications and emergency guidance pages.", 9);
-        seedFaq("faq-2027-family", "Simhastha 2027", "What should families prepare before arriving?",
-                "Save emergency contacts, keep identity details ready, update profile information and follow official route and ghat instructions.", 10);
-
-        seedFaq("faq-ghats-main", "Ghats & Snan", "Which are the main ghats for holy snan in Nashik?",
-                "Ramkund, Godavari ghats, Panchavati area and other approved snan points will appear with live safety, crowd and route guidance.", 11);
-        seedFaq("faq-ghats-timing", "Ghats & Snan", "How do I know the best snan timing?",
-                "Open Ghats & Snan and All Day Schedule to check available timing, important rituals and updated guidance from the team.", 12);
-        seedFaq("faq-ghats-safety", "Ghats & Snan", "What precautions should I follow at ghats?",
-                "Follow barricades, avoid overcrowded steps, keep children close and contact emergency support if medical or safety help is needed.", 13);
-        seedFaq("faq-ghats-elderly", "Ghats & Snan", "Is there guidance for elderly pilgrims?",
-                "Use ghat information, route guidance and emergency support to identify safer movement areas and assistance options.", 14);
-        seedFaq("faq-ghats-route", "Ghats & Snan", "Can ghat entry routes change?",
-                "Yes. Routes may change for crowd control. Check announcements and transport guidance before moving toward a ghat.", 15);
-
-        seedFaq("faq-travel-reach", "Travel & Transport", "How can I reach Nashik during Simhastha?",
-                "Use the Transport section for routes, timings, operator details, pickup points, parking and crowd-aware travel guidance.", 16);
-        seedFaq("faq-travel-parking", "Travel & Transport", "Where can I check parking information?",
-                "Transport and announcements can show parking updates, pickup zones and route changes shared by administrators.", 17);
-        seedFaq("faq-travel-route-change", "Travel & Transport", "Can transport routes change during crowd control?",
-                "Yes. Check live announcements and transport notifications before starting your journey.", 18);
-        seedFaq("faq-travel-bus", "Travel & Transport", "Will bus and operator details be available?",
-                "Approved transport operator details and available travel information can be listed in the Transport section.", 19);
-        seedFaq("faq-travel-last-mile", "Travel & Transport", "How do I manage last-mile travel near ghats?",
-                "Check official route instructions, avoid restricted areas and use transport updates for walking paths, pickup points and parking guidance.", 20);
-
-        seedFaq("faq-stay-find", "Stay & Accommodation", "Where can I find accommodation during Simhastha?",
-                "The Stay section lists approved stays and other hotels, lodges, dharamshalas and guest houses around Nashik.", 21);
-        seedFaq("faq-stay-verified", "Stay & Accommodation", "Are all stays verified by Simhastha Connect?",
-                "Approved stays are marked as trusted. Other stays are shown for discovery and should be checked before booking.", 22);
-        seedFaq("faq-stay-location", "Stay & Accommodation", "Can I check stay location before booking?",
-                "Yes. Use the stay details and map/location information where available before planning travel.", 23);
-        seedFaq("faq-stay-family", "Stay & Accommodation", "Are family stay options available?",
-                "Stay listings may include hotels, lodges, dharamshalas, guest houses and homestays suitable for different pilgrim needs.", 24);
-        seedFaq("faq-stay-contact", "Stay & Accommodation", "How do I confirm stay availability?",
-                "Open the stay details, review booking instructions and contact the listed provider or support flow when available.", 25);
-
-        seedFaq("faq-puja-book", "Puja & Rituals", "How can I book Puja services through Simhastha Connect?",
-                "Open Puja Services, choose an available service, review the details and follow the booking or payment flow shown in the app.", 26);
-        seedFaq("faq-puja-documents", "Puja & Rituals", "What details are needed for puja booking?",
-                "Keep your name, contact number, selected puja type, preferred timing and any required devotee details ready.", 27);
-        seedFaq("faq-puja-location", "Puja & Rituals", "Where will puja location details appear?",
-                "The selected puja service can show location, timing, provider notes and booking instructions.", 28);
-        seedFaq("faq-puja-change", "Puja & Rituals", "Can puja timing or venue change?",
-                "Important changes can appear through announcements, notifications or the booking details page.", 29);
-        seedFaq("faq-puja-support", "Puja & Rituals", "Who can help with puja booking confusion?",
-                "Use Puja Services details first. For urgent help, contact support or emergency guidance from the dashboard.", 30);
-
-        seedFaq("faq-emergency-safety", "Emergency & Safety", "What safety measures are in place for devotees?",
-                "Emergency contacts, medical help, police assistance, crowd advisories and location-change alerts are available from Emergency and Announcement pages.", 31);
-        seedFaq("faq-emergency-lost", "Emergency & Safety", "What should I do if I lose an item or get separated?",
-                "Use Lost & Found for item or person reports and call emergency support if immediate safety help is needed.", 32);
-        seedFaq("faq-emergency-medical", "Emergency & Safety", "How do I get medical help?",
-                "Open Emergency & Medical to find important help options and follow official instructions shown in the app.", 33);
-        seedFaq("faq-emergency-alerts", "Emergency & Safety", "How will critical alerts reach me?",
-                "Critical alerts can appear in notifications, announcements and emergency guidance based on administrator updates.", 34);
-        seedFaq("faq-emergency-family", "Emergency & Safety", "What should I do if a family member is missing?",
-                "Use Lost & Found, stay near a safe official point and contact emergency support with the person's latest known location and details.", 35);
-
-        seedFaq("faq-booking-status", "Bookings & Payments", "Where can I see my booking status?",
-                "Open My Bookings to review upcoming, completed and pending service bookings along with payment status.", 36);
-        seedFaq("faq-booking-payment", "Bookings & Payments", "How do I know if payment is successful?",
-                "Successful payment or booking status will appear in My Bookings and related confirmation details.", 37);
-        seedFaq("faq-booking-cancel", "Bookings & Payments", "Can I cancel a booking?",
-                "Cancellation options depend on the selected service. Check booking details or contact support for help.", 38);
-        seedFaq("faq-booking-receipt", "Bookings & Payments", "Where can I find receipt or booking reference?",
-                "Open My Bookings and select the booking to view reference, status and available verification details.", 39);
-        seedFaq("faq-booking-support", "Bookings & Payments", "Who can help if my booking is not visible?",
-                "Update your profile, check the correct account and contact support with your mobile number, email and payment reference if available.", 40);
-    }
-
-    private static void seedFaq(String id, String category, String question, String answer, int sortOrder) {
-        faqs.add(new FaqRecord(id, category, question, answer, true, String.valueOf(sortOrder)));
-    }
-
-    private static void mergeFaqs(List<FaqRecord> remoteFaqs) {
-        for (FaqRecord remoteFaq : remoteFaqs) {
-            boolean updated = false;
-            for (int i = 0; i < faqs.size(); i++) {
-                if (faqs.get(i).id.equals(remoteFaq.id)) {
-                    faqs.set(i, remoteFaq);
-                    updated = true;
-                    break;
+        AppSession.User current = AppSession.currentUser();
+        try {
+            List<PujaProviderRecord> loadedProviders = firestore.loadPujaProviders(idToken);
+            pujaProviders.clear();
+            pujaProviders.addAll(loadedProviders);
+        } catch (Exception ignored) {
+            // Provider verification can be role-protected.
+        }
+        try {
+            List<PujaServiceRecord> loadedServices;
+            if (current != null && "admin".equals(current.role())) {
+                loadedServices = firestore.loadPujaServices(idToken);
+            } else {
+                try {
+                    loadedServices = firestore.loadPublicPujaServices(idToken);
+                } catch (Exception publicQueryException) {
+                    loadedServices = firestore.loadPujaServices(idToken).stream()
+                            .filter(PujaServiceRecord::isPubliclyVisible)
+                            .toList();
                 }
             }
-            if (!updated) {
-                faqs.add(remoteFaq);
+            pujaServices.clear();
+            pujaServices.addAll(loadedServices);
+            for (PujaServiceRecord service : pujaServices) {
+                addUniqueItem(service.toServiceItem());
             }
+        } catch (Exception ignored) {
+            // Keep the last known Puja services if Firestore is temporarily unavailable.
+        }
+        try {
+            List<PujaBookingRecord> loadedBookings;
+            if (current != null && "admin".equals(current.role())) {
+                loadedBookings = firestore.loadPujaBookings(idToken);
+            } else if (current != null) {
+                loadedBookings = firestore.loadPujaBookingsForUser(current.uid(), idToken);
+            } else {
+                loadedBookings = List.of();
+            }
+            mergePujaBookingsFromFirestore(loadedBookings);
+        } catch (Exception ignored) {
+            // Booking access is role-protected.
+        }
+        try {
+            if (current != null && "admin".equals(current.role())) {
+                List<FraudReportRecord> loadedReports = firestore.loadFraudReports(idToken);
+                fraudReports.clear();
+                fraudReports.addAll(loadedReports);
+            }
+        } catch (Exception ignored) {
+            // Fraud reports are admin-only.
         }
     }
 
@@ -1144,22 +1714,33 @@ public final class AppDataStore {
             return;
         }
         try {
-            List<ServiceItem> remoteItems = operationalDataDao.loadItems(idToken);
-            List<ServiceItem> publicItems = operationalDataDao.loadPublicModuleItems(idToken);
-            if (!remoteItems.isEmpty()) {
-                clearModuleItems();
-                for (ServiceItem item : remoteItems) {
-                    items(item.module).add(item);
+            try {
+                List<ServiceItem> remoteItems = firestore.loadItems(idToken);
+                if (!remoteItems.isEmpty()) {
+                    clearModuleItems();
+                    for (ServiceItem item : remoteItems) {
+                        items(item.module).add(item);
+                        remoteModules.add(item.module);
+                    }
+                }
+            } catch (Exception ignored) {
+                // Generic item access can be unavailable for some roles; do not block module-specific data.
+            }
+            try {
+                for (ServiceItem item : firestore.loadPublicModuleItems(idToken)) {
+                    addUniqueItem(item);
                     remoteModules.add(item.module);
                 }
+            } catch (Exception ignored) {
+                // Public operational items are optional for pages backed by dedicated collections.
             }
-            for (ServiceItem item : publicItems) {
-                addUniqueItem(item);
-                remoteModules.add(item.module);
-            }
-            for (ServiceItem item : operationalDataDao.loadAdminOperationalItems(idToken)) {
-                addUniqueItem(item);
-                remoteModules.add(item.module);
+            try {
+                for (ServiceItem item : firestore.loadAdminOperationalItems(idToken)) {
+                    addUniqueItem(item);
+                    remoteModules.add(item.module);
+                }
+            } catch (Exception ignored) {
+                // Admin operational item access must not prevent Puja Firestore sync.
             }
 
             try {
@@ -1202,6 +1783,56 @@ public final class AppDataStore {
                 transportOperators.addAll(operatorDao.findAll(idToken));
             } catch (Exception ignored) {
                 // Operators are loaded when permitted; startup should continue without them.
+            }
+            try {
+                List<PujaProviderRecord> loadedProviders = firestore.loadPujaProviders(idToken);
+                pujaProviders.clear();
+                pujaProviders.addAll(loadedProviders);
+            } catch (Exception ignored) {
+                // Puja provider verification data is optional until Firestore rules are ready.
+            }
+            try {
+                List<PujaServiceRecord> loadedServices;
+                AppSession.User current = AppSession.currentUser();
+                if (current != null && "admin".equals(current.role())) {
+                    loadedServices = firestore.loadPujaServices(idToken);
+                } else {
+                    try {
+                        loadedServices = firestore.loadPublicPujaServices(idToken);
+                    } catch (Exception publicQueryException) {
+                        loadedServices = firestore.loadPujaServices(idToken).stream()
+                                .filter(PujaServiceRecord::isPubliclyVisible)
+                                .toList();
+                    }
+                }
+                pujaServices.clear();
+                pujaServices.addAll(loadedServices);
+                for (PujaServiceRecord service : pujaServices) {
+                    addUniqueItem(service.toServiceItem());
+                }
+            } catch (Exception ignored) {
+                // Puja service records are loaded when permitted.
+            }
+            try {
+                AppSession.User current = AppSession.currentUser();
+                List<PujaBookingRecord> loadedBookings;
+                if (current != null && "admin".equals(current.role())) {
+                    loadedBookings = firestore.loadPujaBookings(idToken);
+                } else if (current != null) {
+                    loadedBookings = firestore.loadPujaBookingsForUser(current.uid(), idToken);
+                } else {
+                    loadedBookings = List.of();
+                }
+                mergePujaBookingsFromFirestore(loadedBookings);
+            } catch (Exception ignored) {
+                // Puja bookings are role-protected and optional during startup.
+            }
+            try {
+                List<FraudReportRecord> loadedReports = firestore.loadFraudReports(idToken);
+                fraudReports.clear();
+                fraudReports.addAll(loadedReports);
+            } catch (Exception ignored) {
+                // Fraud reports are admin-protected and optional during startup.
             }
             try {
                 bookings.clear();
@@ -1330,6 +1961,21 @@ public final class AppDataStore {
     private static String currentToken() {
         AppSession.User user = AppSession.currentUser();
         return user == null ? "" : user.idToken();
+    }
+
+    private static String safeMessage(Exception exception) {
+        String message = exception == null ? "" : exception.getMessage();
+        return message == null || message.isBlank() ? exception.getClass().getSimpleName() : message;
+    }
+
+    private static void mergePujaBookingsFromFirestore(List<PujaBookingRecord> loadedBookings) {
+        List<PujaBookingRecord> localOnlyBookings = pujaBookings.stream()
+                .filter(existing -> loadedBookings.stream()
+                        .noneMatch(remote -> remote.bookingId.equals(existing.bookingId)))
+                .toList();
+        pujaBookings.clear();
+        pujaBookings.addAll(loadedBookings);
+        pujaBookings.addAll(localOnlyBookings);
     }
 
     private static String clean(String value) {
