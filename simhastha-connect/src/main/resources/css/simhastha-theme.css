@@ -4779,37 +4779,67 @@
 }
 
 .admin-puja-service-row {
-    -fx-background-color: linear-gradient(to right, rgba(255, 250, 242, 0.98), rgba(255, 253, 248, 0.98));
-    -fx-background-radius: 14px;
-    -fx-border-color: rgba(216, 124, 18, 0.24);
-    -fx-border-radius: 14px;
-    -fx-padding: 12px;
-    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.10), 12, 0.12, 0, 3);
+    -fx-background-color:
+        linear-gradient(to right, rgba(255, 248, 235, 0.99), rgba(255, 253, 248, 0.99));
+    -fx-background-radius: 16px;
+    -fx-border-color: rgba(216, 124, 18, 0.28);
+    -fx-border-radius: 16px;
+    -fx-padding: 13px;
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.12), 15, 0.14, 0, 4);
 }
 
 .admin-puja-service-row:hover {
     -fx-border-color: rgba(228, 122, 11, 0.68);
-    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.16), 18, 0.16, 0, 5);
+    -fx-background-color: linear-gradient(to right, #fffdf8, #fff3df);
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.18), 20, 0.18, 0, 6);
 }
 
 .puja-service-card {
-    -fx-background-color: rgba(255, 250, 242, 0.98);
-    -fx-background-radius: 13px;
-    -fx-border-color: rgba(216, 124, 18, 0.24);
-    -fx-border-radius: 13px;
-    -fx-padding: 12px;
-    -fx-pref-width: 282px;
-    -fx-min-height: 340px;
-    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.10), 14, 0.12, 0, 4);
+    -fx-background-color:
+        radial-gradient(center 18% 8%, radius 65%, rgba(255, 189, 74, 0.16), transparent),
+        linear-gradient(to bottom, rgba(255, 253, 248, 0.99), rgba(255, 246, 230, 0.99));
+    -fx-background-radius: 16px;
+    -fx-border-color: rgba(216, 124, 18, 0.26);
+    -fx-border-radius: 16px;
+    -fx-padding: 13px;
+    -fx-pref-width: 286px;
+    -fx-min-height: 348px;
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.12), 16, 0.14, 0, 5);
 }
 
 .puja-service-card:hover {
     -fx-border-color: rgba(228, 122, 11, 0.68);
-    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.16), 18, 0.16, 0, 5);
+    -fx-background-color:
+        radial-gradient(center 18% 8%, radius 65%, rgba(255, 189, 74, 0.22), transparent),
+        linear-gradient(to bottom, #ffffff, #fff1d8);
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.18), 22, 0.18, 0, 7);
+    -fx-translate-y: -2px;
 }
 
 .puja-card-image {
+    -fx-background-radius: 13px;
+    -fx-border-radius: 13px;
+    -fx-border-color: rgba(216, 124, 18, 0.24);
     -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.10), 9, 0.12, 0, 2);
+}
+
+.puja-user-support-row {
+    -fx-padding: 0px;
+}
+
+.puja-mini-info-card {
+    -fx-background-color: linear-gradient(to bottom right, #fffdf8, #fff2dd);
+    -fx-background-radius: 15px;
+    -fx-border-color: rgba(216, 124, 18, 0.24);
+    -fx-border-radius: 15px;
+    -fx-padding: 13px;
+    -fx-min-height: 128px;
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.10), 14, 0.12, 0, 4);
+}
+
+.puja-mini-info-card:hover {
+    -fx-border-color: rgba(228, 122, 11, 0.62);
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.16), 18, 0.16, 0, 5);
 }
 
 .puja-price {
@@ -5068,6 +5098,10 @@
     -fx-background-color: #ffffff;
     -fx-border-color: #2d1a10;
     -fx-border-width: 1px;
+}
+
+.ticket-qr-image {
+    -fx-effect: dropshadow(gaussian, rgba(45, 26, 16, 0.16), 8, 0.12, 0, 2);
 }
 
 .ticket-qr-cell-on {
@@ -5551,6 +5585,50 @@
     -fx-line-spacing: 2px;
 }
 
+.puja-booking-compact-page {
+    -fx-spacing: 8px;
+    -fx-padding: 8px 18px 12px 18px;
+}
+
+.puja-booking-compact-page .pilgrim-hero {
+    -fx-pref-height: 126px;
+    -fx-min-height: 126px;
+    -fx-max-height: 126px;
+}
+
+.puja-booking-compact-page .puja-booking-left-panel,
+.puja-booking-compact-page .puja-booking-summary-card {
+    -fx-padding: 12px;
+    -fx-background-radius: 16px;
+    -fx-border-radius: 16px;
+}
+
+.puja-booking-compact-page .puja-booking-field,
+.puja-booking-compact-page .puja-booking-card {
+    -fx-padding: 8px 10px;
+    -fx-background-radius: 12px;
+    -fx-border-radius: 12px;
+}
+
+.puja-booking-compact-page .puja-booking-input,
+.puja-booking-compact-page .puja-booking-spinner,
+.puja-booking-compact-page .puja-booking-spinner .text-field {
+    -fx-min-height: 34px;
+    -fx-pref-height: 34px;
+    -fx-font-size: 13px;
+}
+
+.puja-booking-compact-page .puja-booking-notes {
+    -fx-pref-height: 62px;
+    -fx-min-height: 62px;
+    -fx-font-size: 13px;
+}
+
+.puja-booking-compact-page .puja-mini-info-card {
+    -fx-min-height: 58px;
+    -fx-padding: 9px 12px;
+}
+
 .theme-dark .puja-booking-dialog,
 .theme-dark .puja-booking-dialog > *.button-bar > *.container {
     -fx-background-color: #101722;
@@ -5624,6 +5702,65 @@
     -fx-background-color: linear-gradient(to bottom right, #ffffff, #fff5dd);
     -fx-alignment: center;
     -fx-min-width: 300px;
+}
+
+.puja-single-screen-page {
+    -fx-spacing: 8px;
+    -fx-padding: 8px 18px 14px 18px;
+}
+
+.puja-single-screen-page .pilgrim-hero {
+    -fx-pref-height: 132px;
+    -fx-min-height: 132px;
+    -fx-max-height: 132px;
+}
+
+.puja-single-screen-page .puja-success-card,
+.puja-single-screen-page .puja-details-panel {
+    -fx-padding: 12px;
+    -fx-background-radius: 16px;
+    -fx-border-radius: 16px;
+}
+
+.puja-single-screen-page .puja-mini-panel {
+    -fx-padding: 8px 10px;
+    -fx-min-height: 58px;
+    -fx-pref-height: 58px;
+}
+
+.puja-single-screen-page .puja-success-title {
+    -fx-font-size: 24px;
+}
+
+.puja-success-hero {
+    -fx-background-color: linear-gradient(to right, #fffaf0, #fff2d7);
+    -fx-background-radius: 14px;
+    -fx-border-color: rgba(217, 139, 35, 0.28);
+    -fx-border-radius: 14px;
+    -fx-padding: 10px;
+}
+
+.puja-ticket-compact {
+    -fx-padding: 10px;
+    -fx-min-width: 0px;
+    -fx-pref-width: 380px;
+}
+
+.puja-ticket-compact .ticket-qr {
+    -fx-padding: 6px;
+}
+
+.puja-ticket-compact .ticket-card,
+.puja-ticket-compact.ticket-card {
+    -fx-padding: 10px;
+}
+
+.puja-single-screen-page .ticket-card {
+    -fx-padding: 10px;
+}
+
+.puja-single-screen-page .ticket-qr {
+    -fx-padding: 6px;
 }
 
 .admin-puja-image-section {
@@ -5737,4 +5874,187 @@
 .theme-dark .puja-booking-notes {
     -fx-text-fill: #fff4d6;
     -fx-prompt-text-fill: #d8c79c;
+}
+
+/* Merge repair: keep older dark dashboard/transport rules from bleeding into the default light theme. */
+.theme-light.main-background,
+.theme-light.dashboard-background,
+.theme-light .main-background,
+.theme-light .dashboard-background,
+.theme-light .pilgrim-dashboard-root,
+.theme-light .pilgrim-dashboard-main,
+.theme-light .pilgrim-dashboard-scroll > .viewport {
+    -fx-background-color:
+        radial-gradient(center 8% 5%, radius 38%, rgba(211, 126, 42, 0.18), transparent),
+        radial-gradient(center 96% 8%, radius 42%, rgba(118, 22, 25, 0.10), transparent),
+        linear-gradient(to bottom, #fff4df 0%, #fffaf0 50%, #f4dfbf 100%);
+}
+
+.theme-light .dashboard-title,
+.theme-light .pilgrim-page-title,
+.theme-light .section-title,
+.theme-light .small-heading,
+.theme-light .portal-title,
+.theme-light .form-title,
+.theme-light .puja-section-title,
+.theme-light .puja-card-title,
+.theme-light .puja-service-title,
+.theme-light .transport-section-title,
+.theme-light .available-route-title {
+    -fx-text-fill: #5a0d10;
+}
+
+.theme-light .dashboard-subtitle,
+.theme-light .dashboard-user,
+.theme-light .description-text,
+.theme-light .pilgrim-card-detail,
+.theme-light .puja-service-detail,
+.theme-light .admin-muted-text,
+.theme-light .muted-text {
+    -fx-text-fill: #4b2a1a;
+}
+
+.theme-light .glass-panel,
+.theme-light .visual-panel,
+.theme-light .portal-card,
+.theme-light .auth-card,
+.theme-light .dashboard-card,
+.theme-light .dashboard-info-box,
+.theme-light .dashboard-topbar,
+.theme-light .dashboard-stat-card,
+.theme-light .pilgrim-module-card,
+.theme-light .pilgrim-rich-card,
+.theme-light .pilgrim-panel,
+.theme-light .transport-mode-card,
+.theme-light .transport-choice-card,
+.theme-light .transport-website-card,
+.theme-light .journey-planner,
+.theme-light .journey-input-box,
+.theme-light .transport-route-card,
+.theme-light .puja-trust-banner,
+.theme-light .puja-trust-item,
+.theme-light .puja-filter-panel,
+.theme-light .puja-section,
+.theme-light .puja-service-card,
+.theme-light .puja-mini-panel,
+.theme-light .puja-details-panel,
+.theme-light .puja-booking-left-panel,
+.theme-light .puja-success-card,
+.theme-light .puja-ticket-card,
+.theme-light .admin-puja-image-section {
+    -fx-background-color: rgba(255, 250, 239, 0.96);
+    -fx-border-color: rgba(120, 27, 24, 0.18);
+    -fx-effect: dropshadow(gaussian, rgba(97, 37, 12, 0.14), 16, 0.14, 0, 5);
+}
+
+.theme-light .input-field,
+.theme-light .input-combo,
+.theme-light .text-field,
+.theme-light .text-area,
+.theme-light .combo-box,
+.theme-light .date-picker,
+.theme-light .spinner,
+.theme-light .puja-search-field,
+.theme-light .puja-filter-combo,
+.theme-light .puja-booking-input,
+.theme-light .puja-booking-input .text-input,
+.theme-light .puja-booking-input .date-picker-display-node,
+.theme-light .puja-booking-spinner .text-field,
+.theme-light .journey-combo,
+.theme-light .journey-field {
+    -fx-background-color: #fffdf7;
+    -fx-border-color: rgba(120, 27, 24, 0.24);
+    -fx-text-fill: #32170e;
+    -fx-prompt-text-fill: #8d7760;
+    -fx-opacity: 1.0;
+}
+
+.theme-light .input-field:focused,
+.theme-light .input-combo:focused,
+.theme-light .text-field:focused,
+.theme-light .text-area:focused,
+.theme-light .combo-box:focused,
+.theme-light .date-picker:focused,
+.theme-light .puja-search-field:focused,
+.theme-light .journey-combo:focused,
+.theme-light .journey-field:focused {
+    -fx-background-color: #fffaf0;
+    -fx-border-color: #d17618;
+}
+
+.theme-light .combo-box .list-cell,
+.theme-light .date-picker .text-field,
+.theme-light .spinner .text-field,
+.theme-light .puja-booking-input .list-cell,
+.theme-light .puja-booking-input .combo-box .list-cell,
+.theme-light .journey-combo .list-cell {
+    -fx-text-fill: #32170e;
+    -fx-opacity: 1.0;
+}
+
+.theme-light .combo-box-popup .list-view,
+.theme-light .combo-box-popup .list-cell,
+.theme-light .puja-filter-combo .combo-box-popup .list-view,
+.theme-light .puja-filter-combo .combo-box-popup .list-cell,
+.theme-light .journey-combo .list-view,
+.theme-light .puja-booking-input .combo-box-popup .list-view .list-cell {
+    -fx-background-color: #fffaf0;
+    -fx-text-fill: #32170e;
+    -fx-border-color: #d17618;
+}
+
+.theme-light .combo-box-popup .list-cell:hover,
+.theme-light .combo-box-popup .list-cell:filled:selected,
+.theme-light .puja-filter-combo .combo-box-popup .list-cell:hover,
+.theme-light .journey-combo .list-cell:hover,
+.theme-light .journey-combo .list-cell:filled:selected {
+    -fx-background-color: #f3dfb7;
+    -fx-text-fill: #5a0d10;
+}
+
+/* Final Puja polish wins after merge-repair overrides. */
+.theme-light .puja-service-card {
+    -fx-background-color:
+        radial-gradient(center 18% 8%, radius 65%, rgba(255, 189, 74, 0.16), transparent),
+        linear-gradient(to bottom, rgba(255, 253, 248, 0.99), rgba(255, 246, 230, 0.99));
+    -fx-background-radius: 16px;
+    -fx-border-color: rgba(216, 124, 18, 0.26);
+    -fx-border-radius: 16px;
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.12), 16, 0.14, 0, 5);
+}
+
+.theme-light .puja-service-card:hover {
+    -fx-background-color:
+        radial-gradient(center 18% 8%, radius 65%, rgba(255, 189, 74, 0.22), transparent),
+        linear-gradient(to bottom, #ffffff, #fff1d8);
+    -fx-border-color: rgba(228, 122, 11, 0.68);
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.18), 22, 0.18, 0, 7);
+}
+
+.theme-light .admin-puja-service-row {
+    -fx-background-color:
+        linear-gradient(to right, rgba(255, 248, 235, 0.99), rgba(255, 253, 248, 0.99));
+    -fx-background-radius: 16px;
+    -fx-border-color: rgba(216, 124, 18, 0.28);
+    -fx-border-radius: 16px;
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.12), 15, 0.14, 0, 4);
+}
+
+.theme-light .admin-puja-service-row:hover {
+    -fx-background-color: linear-gradient(to right, #fffdf8, #fff3df);
+    -fx-border-color: rgba(228, 122, 11, 0.68);
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.18), 20, 0.18, 0, 6);
+}
+
+.theme-light .puja-mini-info-card,
+.theme-light .puja-success-hero {
+    -fx-background-color: linear-gradient(to bottom right, #fffdf8, #fff2dd);
+    -fx-border-color: rgba(216, 124, 18, 0.24);
+    -fx-effect: dropshadow(gaussian, rgba(73, 35, 9, 0.10), 14, 0.12, 0, 4);
+}
+
+.theme-light .puja-ticket-compact,
+.theme-light .puja-single-screen-page .ticket-card {
+    -fx-background-color: linear-gradient(to bottom right, #ffffff, #fff5dd);
+    -fx-border-color: rgba(107, 23, 18, 0.35);
 }

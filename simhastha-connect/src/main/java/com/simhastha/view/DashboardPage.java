@@ -31,7 +31,10 @@ import javafx.scene.control.TextField;
 import javafx.scene.control.TextArea;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelWriter;
+import javafx.scene.image.WritableImage;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.ColumnConstraints;
 import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Pane;
@@ -41,6 +44,7 @@ import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
+import javafx.scene.paint.Color;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
@@ -2075,7 +2079,45 @@ public class DashboardPage {
         return pageShell("Puja Services", "Safe & Trusted Spiritual Booking",
                 pujaTrustBanner(),
                 pujaFilterPanel(search, type, location, language, mode, price, today, render, resetFilters),
-                pujaSection("Available / Popular Puja Services", serviceCards));
+                pujaProviderRegistrationBanner(),
+                pujaSection("Available / Popular Puja Services", serviceCards),
+                pujaUserSupportSections(services));
+    }
+
+    private HBox pujaUserSupportSections(java.util.List<PujaService> services) {
+        VBox priests = pujaMiniInfoSection("Verified Priests", "\uE77B",
+                AppDataStore.approvedPujaProviders().isEmpty()
+                        ? "Approved priest/provider profiles will appear here after admin verification."
+                        : AppDataStore.approvedPujaProviders().stream()
+                                .limit(3)
+                                .map(provider -> valueOr(provider.providerId, provider.fullName))
+                                .reduce((left, right) -> left + "\n" + right)
+                                .orElse(""));
+        VBox darshan = pujaMiniInfoSection("Official Darshan Services", "\uE8D7",
+                services.stream().anyMatch(service -> service.type().toLowerCase(java.util.Locale.ROOT).contains("darshan"))
+                        ? "Admin-approved darshan services are listed in the Puja cards above."
+                        : "Only admin-created or admin-approved special darshan services will be shown.");
+        VBox locations = pujaMiniInfoSection("Authorized Puja Locations", "\uE707",
+                services.stream().map(PujaService::location).distinct().limit(3)
+                        .reduce((left, right) -> left + "\n" + right)
+                        .orElse("Ramkund\nTrimbakeshwar\nPanchavati"));
+        VBox safety = pujaMiniInfoSection("Puja Safety Center", "\uE72E",
+                "Book only verified services. Do not pay unknown agents. Report suspicious activity from the official support flow.");
+        HBox row = new HBox(12, priests, darshan, locations, safety);
+        row.getStyleClass().add("puja-user-support-row");
+        row.setAlignment(Pos.CENTER_LEFT);
+        row.getChildren().forEach(node -> HBox.setHgrow(node, Priority.ALWAYS));
+        return row;
+    }
+
+    private VBox pujaMiniInfoSection(String title, String icon, String text) {
+        VBox card = new VBox(8,
+                AppUi.symbolIcon(icon, "puja-trust-icon"),
+                strong(title),
+                muted(text));
+        card.getStyleClass().add("puja-mini-info-card");
+        card.setMaxWidth(Double.MAX_VALUE);
+        return card;
     }
 
     private HBox pujaProviderRegistrationBanner() {
@@ -2524,6 +2566,27 @@ public class DashboardPage {
         return grid;
     }
 
+    private GridPane compactPujaInfoGridColumns(int columns, Node... nodes) {
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        for (int index = 0; index < nodes.length; index++) {
+            grid.add(nodes[index], index % columns, index / columns);
+            GridPane.setHgrow(nodes[index], Priority.ALWAYS);
+            if (nodes[index] instanceof Region region) {
+                region.setMaxWidth(Double.MAX_VALUE);
+            }
+        }
+        for (int index = 0; index < columns; index++) {
+            ColumnConstraints column = new ColumnConstraints();
+            column.setPercentWidth(100.0 / columns);
+            column.setHgrow(Priority.ALWAYS);
+            grid.getColumnConstraints().add(column);
+        }
+        grid.getStyleClass().add("puja-compact-info-grid");
+        return grid;
+    }
+
     private VBox pujaIncludedList(PujaService service) {
         VBox list = new VBox(8,
                 muted("✓ Verified Pandit / Provider"),
@@ -2693,7 +2756,17 @@ public class DashboardPage {
                 createSpacer(), back);
         top.setAlignment(Pos.CENTER_LEFT);
 
-        root.setCenter(scroll(pageShell("Book Puja", "Proceed with a safe and verified spiritual booking.", top, layout)));
+        HBox footer = new HBox(12,
+                pujaMiniInfoSection("Verified Priests", "\uE73E", "All priests are verified by Simhastha Connect"),
+                pujaMiniInfoSection("Trusted & Secure", "\uE72E", "Booking and payment flow stays safe"),
+                pujaMiniInfoSection("Official Counters", "\uE80F", "Puja at authorized counters only"),
+                pujaMiniInfoSection("24/7 Support", "\uE717", "We are here to help anytime"));
+        footer.getStyleClass().add("puja-user-support-row");
+        footer.getChildren().forEach(node -> HBox.setHgrow(node, Priority.ALWAYS));
+
+        VBox shell = pageShell("Book Puja", "Proceed with a safe and verified spiritual booking.", top, layout, footer);
+        shell.getStyleClass().add("puja-booking-compact-page");
+        root.setCenter(scroll(shell));
     }
 
     private ComboBox<AppDataStore.PujaProviderRecord> pujaProviderCombo() {
@@ -2928,14 +3001,12 @@ public class DashboardPage {
         back.setOnAction(event -> showModulePage("bookings"));
 
         PujaService service = findPujaService(booking.serviceId);
-        ImageView image = createImage(service == null ? "/images/trimbakeshwar.jpg" : service.image(), 260, 145, 0.5, 0.5);
+        ImageView image = createImage(service == null ? "/images/trimbakeshwar.jpg" : service.image(), 190, 112, 0.5, 0.5);
         image.getStyleClass().add("puja-details-image");
 
-        GridPane details = compactPujaInfoGrid(
+        GridPane details = compactPujaInfoGridColumns(3,
                 pujaDetailCard("Booking ID", booking.bookingId),
                 pujaDetailCard("Puja", booking.serviceName),
-                pujaDetailCard("Temple / Ghat", valueOr(booking.templeOrGhat, booking.location)),
-                pujaDetailCard("Provider", valueOr("Best available verified priest", booking.providerName)),
                 pujaDetailCard("Date", booking.date),
                 pujaDetailCard("Time", booking.time),
                 pujaDetailCard("Location", valueOr(booking.location, booking.locationName)),
@@ -2945,6 +3016,7 @@ public class DashboardPage {
                 pujaDetailCard("Booking Status", "Booking Confirmed"));
 
         VBox ticket = pujaTicketCard(booking, "SIMHASTHA-PUJA|" + booking.bookingId + "|" + booking.qrVerificationToken);
+        ticket.getStyleClass().add("puja-ticket-compact");
         Button bookings = new Button("View My Bookings");
         bookings.getStyleClass().add("puja-secondary-button");
         bookings.setOnAction(event -> showModulePage("bookings"));
@@ -2954,17 +3026,29 @@ public class DashboardPage {
         HBox actions = new HBox(10, createSpacer(), bookings, viewTicket);
         actions.setAlignment(Pos.CENTER_RIGHT);
 
-        VBox success = new VBox(14,
+        VBox headline = new VBox(6,
                 label("✓ Booking Confirmed", "puja-success-title"),
-                image,
+                strong(booking.serviceName),
+                muted("Your Puja booking is confirmed. Keep the QR ticket ready at the service counter."),
+                new HBox(7, badge("Payment Success"), badge("QR Ready")));
+        headline.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(headline, Priority.ALWAYS);
+
+        HBox hero = new HBox(16, image, headline, ticket);
+        hero.setAlignment(Pos.CENTER_LEFT);
+        hero.getStyleClass().add("puja-success-hero");
+
+        VBox success = new VBox(10,
+                hero,
                 details,
-                ticket,
                 actions);
         success.getStyleClass().add("puja-success-card");
 
-        root.setCenter(scroll(pageShell("Payment Success",
+        VBox shell = pageShell("Payment Success",
                 "Your Puja booking is confirmed and QR ticket is ready.",
-                back, success)));
+                back, success);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
     }
 
     private int parseCapacity(String text) {
@@ -3480,23 +3564,21 @@ public class DashboardPage {
         Button back = pujaBackButton("← Back");
         back.setOnAction(event -> showModulePage("bookings"));
 
-        ImageView image = createImage(pujaBookingImage(booking.serviceId), 310, 180, 0.5, 0.5);
+        ImageView image = createImage(pujaBookingImage(booking.serviceId), 190, 112, 0.5, 0.5);
         image.getStyleClass().add("puja-details-image");
 
         VBox qr = booking.qrVerificationToken == null || booking.qrVerificationToken.isBlank()
                 ? new VBox(8, sectionTitle("QR Ticket"), muted("QR ticket will be available after payment confirmation."))
                 : pujaTicketCard(booking, "SIMHASTHA-PUJA|" + booking.bookingId + "|" + booking.qrVerificationToken);
+        qr.getStyleClass().add("puja-ticket-compact");
 
-        GridPane bookingInfo = compactPujaInfoGrid(
+        GridPane bookingInfo = compactPujaInfoGridColumns(4,
                 pujaDetailCard("Date", booking.date),
                 pujaDetailCard("Time", booking.time),
-                pujaDetailCard("Temple / Ghat", pujaBookingTemple(booking.serviceId, booking.templeOrGhat)),
                 pujaDetailCard("Location", valueOr(booking.location, booking.locationName)),
-                pujaDetailCard("Provider", valueOr("Best available verified priest", booking.providerName)),
                 pujaDetailCard("Devotees", String.valueOf(booking.devoteesCount)),
                 pujaDetailCard("Language", booking.language),
-                pujaDetailCard("Mode", booking.mode));
-        GridPane paymentInfo = compactPujaInfoGrid(
+                pujaDetailCard("Mode", booking.mode),
                 pujaDetailCard("Amount", "Rs. " + booking.totalAmount),
                 pujaDetailCard("Payment Status", booking.paymentStatus),
                 pujaDetailCard("Booking Status", booking.bookingStatus));
@@ -3517,23 +3599,27 @@ public class DashboardPage {
         HBox actions = new HBox(10, createSpacer(), retry, ticket);
         actions.setAlignment(Pos.CENTER_RIGHT);
 
-        VBox right = new VBox(12,
+        VBox right = new VBox(8,
                 sectionTitle(booking.serviceName),
                 muted("Booking ID: " + booking.bookingId),
                 new HBox(7, badge(booking.bookingStatus), badge(booking.paymentStatus)),
+                muted("Temple/Ghat: " + pujaBookingTemple(booking.serviceId, booking.templeOrGhat)),
+                muted("Provider: " + valueOr("Best available verified priest", booking.providerName)),
                 qr);
         right.getStyleClass().add("puja-details-panel");
         HBox hero = new HBox(16, image, right);
+        hero.getStyleClass().add("puja-success-hero");
         HBox.setHgrow(right, Priority.ALWAYS);
 
-        VBox panel = new VBox(14,
+        VBox panel = new VBox(10,
                 hero,
-                infoPanel("Booking Information", bookingInfo),
-                infoPanel("Payment & Booking Status", paymentInfo),
+                bookingInfo,
                 actions);
         panel.getStyleClass().add("puja-details-panel");
-        root.setCenter(scroll(pageShell("Puja Booking Details", "Review your booking and QR ticket.",
-                back, panel)));
+        VBox shell = pageShell("Puja Booking Details", "Review your booking and QR ticket.",
+                back, panel);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
     }
 
     private void showPujaTicketVerificationPage(String bookingId, String token) {
@@ -3554,7 +3640,8 @@ public class DashboardPage {
 
         String payload = "SIMHASTHA-PUJA|" + booking.bookingId + "|" + token;
         VBox ticketCard = pujaTicketCard(booking, payload);
-        GridPane details = compactPujaInfoGrid(
+        ticketCard.getStyleClass().add("puja-ticket-compact");
+        GridPane details = compactPujaInfoGridColumns(4,
                 pujaDetailCard("Booking ID", booking.bookingId),
                 pujaDetailCard("Puja", booking.serviceName),
                 pujaDetailCard("Date", booking.date),
@@ -3564,32 +3651,28 @@ public class DashboardPage {
                 pujaDetailCard("Payment", booking.paymentStatus),
                 pujaDetailCard("Status", booking.bookingStatus));
 
-        VBox trust = new VBox(8,
+        VBox trust = new VBox(6,
                 sectionTitle("Verification Instructions"),
-                paragraph("Show this ticket at the Puja service counter. The QR token is generated only after a valid Puja booking record is available in Simhastha Connect."));
+                muted("Show this ticket at the Puja service counter. QR token is generated from your confirmed booking."));
         trust.getStyleClass().add("puja-details-trust-card");
 
-        VBox panel = new VBox(16, ticketCard, details, trust);
+        HBox hero = new HBox(16, ticketCard, trust);
+        hero.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(trust, Priority.ALWAYS);
+        VBox panel = new VBox(10, hero, details);
         panel.getStyleClass().add("puja-details-panel");
-        root.setCenter(scroll(pageShell("Puja QR Ticket", "Use this safe ticket for verification at the service counter.",
-                back, panel)));
+        VBox shell = pageShell("Puja QR Ticket", "Use this safe ticket for verification at the service counter.",
+                back, panel);
+        shell.getStyleClass().add("puja-single-screen-page");
+        root.setCenter(scroll(shell));
     }
 
     private VBox pujaTicketCard(AppDataStore.PujaBookingRecord booking, String payload) {
-        GridPane qr = new GridPane();
-        qr.getStyleClass().add("ticket-qr");
-        int seed = payload.hashCode() & 0x7fffffff;
-        for (int row = 0; row < 21; row++) {
-            for (int col = 0; col < 21; col++) {
-                Region cell = new Region();
-                cell.setMinSize(7, 7);
-                cell.setPrefSize(7, 7);
-                boolean finder = (row < 5 && col < 5) || (row < 5 && col > 15) || (row > 15 && col < 5);
-                boolean on = finder || ((seed + row * 31 + col * 17 + row * col) % 5 == 0);
-                cell.getStyleClass().add(on ? "ticket-qr-cell-on" : "ticket-qr-cell-off");
-                qr.add(cell, col, row);
-            }
-        }
+        ImageView qr = new ImageView(createQrImage(payload, 178));
+        qr.setFitWidth(178);
+        qr.setFitHeight(178);
+        qr.setPreserveRatio(true);
+        qr.getStyleClass().add("ticket-qr-image");
 
         VBox copy = new VBox(5,
                 strong("SIMHASTHA CONNECT PUJA TICKET"),
@@ -3604,6 +3687,256 @@ public class DashboardPage {
         card.getStyleClass().add("ticket-card");
         card.setPadding(new Insets(18));
         return card;
+    }
+
+    private WritableImage createQrImage(String payload, int pixelSize) {
+        boolean[][] modules = createQrMatrix(payload == null ? "" : payload);
+        int quiet = 4;
+        int moduleCount = modules.length + quiet * 2;
+        int scale = Math.max(3, pixelSize / moduleCount);
+        int imageSize = moduleCount * scale;
+        WritableImage image = new WritableImage(imageSize, imageSize);
+        PixelWriter writer = image.getPixelWriter();
+        for (int y = 0; y < imageSize; y++) {
+            for (int x = 0; x < imageSize; x++) {
+                int moduleX = x / scale - quiet;
+                int moduleY = y / scale - quiet;
+                boolean dark = moduleX >= 0 && moduleY >= 0
+                        && moduleX < modules.length && moduleY < modules.length
+                        && modules[moduleY][moduleX];
+                writer.setColor(x, y, dark ? Color.BLACK : Color.WHITE);
+            }
+        }
+        return image;
+    }
+
+    private boolean[][] createQrMatrix(String text) {
+        final int version = 4;
+        final int size = version * 4 + 17;
+        boolean[][] modules = new boolean[size][size];
+        boolean[][] reserved = new boolean[size][size];
+        addQrFinder(modules, reserved, 0, 0);
+        addQrFinder(modules, reserved, size - 7, 0);
+        addQrFinder(modules, reserved, 0, size - 7);
+        addQrTiming(modules, reserved);
+        addQrAlignment(modules, reserved, 26, 26);
+        setQrModule(modules, reserved, 8, size - 8, true, true);
+        reserveQrFormat(reserved, size);
+
+        java.util.List<Integer> data = qrDataCodewords(text);
+        data.addAll(qrReedSolomonRemainder(data, 20));
+        placeQrData(modules, reserved, data, 0);
+        addQrFormatBits(modules, 0);
+        return modules;
+    }
+
+    private java.util.List<Integer> qrDataCodewords(String text) {
+        byte[] bytes = text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        int length = Math.min(bytes.length, 78);
+        java.util.List<Integer> bits = new java.util.ArrayList<>();
+        appendQrBits(bits, 0b0100, 4);
+        appendQrBits(bits, length, 8);
+        for (int index = 0; index < length; index++) {
+            appendQrBits(bits, bytes[index] & 0xff, 8);
+        }
+        int maxBits = 80 * 8;
+        appendQrBits(bits, 0, Math.min(4, maxBits - bits.size()));
+        while (bits.size() % 8 != 0) {
+            bits.add(0);
+        }
+        java.util.List<Integer> codewords = new java.util.ArrayList<>();
+        for (int i = 0; i < bits.size(); i += 8) {
+            int value = 0;
+            for (int bit = 0; bit < 8; bit++) {
+                value = (value << 1) | bits.get(i + bit);
+            }
+            codewords.add(value);
+        }
+        for (int pad = 0; codewords.size() < 80; pad++) {
+            codewords.add((pad % 2 == 0) ? 0xec : 0x11);
+        }
+        return codewords;
+    }
+
+    private void appendQrBits(java.util.List<Integer> bits, int value, int count) {
+        for (int i = count - 1; i >= 0; i--) {
+            bits.add((value >>> i) & 1);
+        }
+    }
+
+    private void addQrFinder(boolean[][] modules, boolean[][] reserved, int x, int y) {
+        for (int dy = -1; dy <= 7; dy++) {
+            for (int dx = -1; dx <= 7; dx++) {
+                int xx = x + dx;
+                int yy = y + dy;
+                if (xx < 0 || yy < 0 || yy >= modules.length || xx >= modules.length) {
+                    continue;
+                }
+                boolean dark = dx >= 0 && dx <= 6 && dy >= 0 && dy <= 6
+                        && (dx == 0 || dx == 6 || dy == 0 || dy == 6
+                                || (dx >= 2 && dx <= 4 && dy >= 2 && dy <= 4));
+                setQrModule(modules, reserved, xx, yy, dark, true);
+            }
+        }
+    }
+
+    private void addQrTiming(boolean[][] modules, boolean[][] reserved) {
+        for (int i = 8; i < modules.length - 8; i++) {
+            setQrModule(modules, reserved, i, 6, i % 2 == 0, true);
+            setQrModule(modules, reserved, 6, i, i % 2 == 0, true);
+        }
+    }
+
+    private void addQrAlignment(boolean[][] modules, boolean[][] reserved, int centerX, int centerY) {
+        for (int dy = -2; dy <= 2; dy++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                boolean dark = Math.max(Math.abs(dx), Math.abs(dy)) != 1;
+                setQrModule(modules, reserved, centerX + dx, centerY + dy, dark, true);
+            }
+        }
+    }
+
+    private void reserveQrFormat(boolean[][] reserved, int size) {
+        for (int i = 0; i < 9; i++) {
+            if (i != 6) {
+                reserved[8][i] = true;
+                reserved[i][8] = true;
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            reserved[8][size - 1 - i] = true;
+            reserved[size - 1 - i][8] = true;
+        }
+    }
+
+    private void setQrModule(boolean[][] modules, boolean[][] reserved, int x, int y, boolean dark, boolean reserve) {
+        modules[y][x] = dark;
+        if (reserve) {
+            reserved[y][x] = true;
+        }
+    }
+
+    private void placeQrData(boolean[][] modules, boolean[][] reserved, java.util.List<Integer> codewords, int mask) {
+        java.util.List<Integer> bits = new java.util.ArrayList<>();
+        for (int codeword : codewords) {
+            appendQrBits(bits, codeword, 8);
+        }
+        int bitIndex = 0;
+        int direction = -1;
+        for (int right = modules.length - 1; right >= 1; right -= 2) {
+            if (right == 6) {
+                right--;
+            }
+            for (int i = 0; i < modules.length; i++) {
+                int y = direction == -1 ? modules.length - 1 - i : i;
+                for (int dx = 0; dx < 2; dx++) {
+                    int x = right - dx;
+                    if (reserved[y][x]) {
+                        continue;
+                    }
+                    boolean bit = bitIndex < bits.size() && bits.get(bitIndex++) == 1;
+                    if (qrMask(mask, x, y)) {
+                        bit = !bit;
+                    }
+                    modules[y][x] = bit;
+                }
+            }
+            direction = -direction;
+        }
+    }
+
+    private boolean qrMask(int mask, int x, int y) {
+        return switch (mask) {
+            case 0 -> (x + y) % 2 == 0;
+            default -> false;
+        };
+    }
+
+    private void addQrFormatBits(boolean[][] modules, int mask) {
+        int size = modules.length;
+        int format = qrFormatBits(1, mask);
+        for (int i = 0; i <= 5; i++) {
+            modules[i][8] = ((format >>> i) & 1) != 0;
+        }
+        modules[7][8] = ((format >>> 6) & 1) != 0;
+        modules[8][8] = ((format >>> 7) & 1) != 0;
+        modules[8][7] = ((format >>> 8) & 1) != 0;
+        for (int i = 9; i < 15; i++) {
+            modules[14 - i][8] = ((format >>> i) & 1) != 0;
+        }
+        for (int i = 0; i < 8; i++) {
+            modules[8][size - 1 - i] = ((format >>> i) & 1) != 0;
+        }
+        for (int i = 8; i < 15; i++) {
+            modules[size - 15 + i][8] = ((format >>> i) & 1) != 0;
+        }
+    }
+
+    private int qrFormatBits(int errorLevelBits, int mask) {
+        int data = (errorLevelBits << 3) | mask;
+        int value = data << 10;
+        int generator = 0x537;
+        for (int i = 14; i >= 10; i--) {
+            if (((value >>> i) & 1) != 0) {
+                value ^= generator << (i - 10);
+            }
+        }
+        return ((data << 10) | value) ^ 0x5412;
+    }
+
+    private java.util.List<Integer> qrReedSolomonRemainder(java.util.List<Integer> data, int degree) {
+        int[] generator = qrRsGenerator(degree);
+        int[] remainder = new int[degree];
+        for (int value : data) {
+            int factor = value ^ remainder[0];
+            System.arraycopy(remainder, 1, remainder, 0, degree - 1);
+            remainder[degree - 1] = 0;
+            for (int i = 0; i < degree; i++) {
+                remainder[i] ^= qrGfMultiply(generator[i], factor);
+            }
+        }
+        java.util.List<Integer> result = new java.util.ArrayList<>();
+        for (int value : remainder) {
+            result.add(value);
+        }
+        return result;
+    }
+
+    private int[] qrRsGenerator(int degree) {
+        int[] generator = { 1 };
+        for (int i = 0; i < degree; i++) {
+            int[] next = new int[generator.length + 1];
+            for (int j = 0; j < generator.length; j++) {
+                next[j] ^= qrGfMultiply(generator[j], 1);
+                next[j + 1] ^= qrGfMultiply(generator[j], qrGfPow(2, i));
+            }
+            generator = next;
+        }
+        return java.util.Arrays.copyOfRange(generator, 1, generator.length);
+    }
+
+    private int qrGfPow(int value, int power) {
+        int result = 1;
+        for (int i = 0; i < power; i++) {
+            result = qrGfMultiply(result, value);
+        }
+        return result;
+    }
+
+    private int qrGfMultiply(int a, int b) {
+        int result = 0;
+        for (int i = 0; i < 8; i++) {
+            if ((b & 1) != 0) {
+                result ^= a;
+            }
+            boolean carry = (a & 0x80) != 0;
+            a = (a << 1) & 0xff;
+            if (carry) {
+                a ^= 0x1d;
+            }
+            b >>>= 1;
+        }
+        return result;
     }
 
     private String pujaBookingDetails(AppDataStore.PujaBookingRecord booking) {
@@ -3789,7 +4122,7 @@ public class DashboardPage {
             String source = path == null || path.isBlank() ? "/images/trimbakeshwar.jpg" : path;
             Image image = null;
             if (source.startsWith("http") || source.startsWith("file:")) {
-                image = IMAGE_CACHE.computeIfAbsent(source, key -> new Image(key, true));
+                image = new Image(source, true);
             } else {
                 URL imageUrl = getClass().getResource(source);
                 if (imageUrl != null) {

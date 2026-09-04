@@ -1321,7 +1321,7 @@ public class AdminDashboardPage {
         String source = uri == null || uri.isBlank() ? "/images/trimbakeshwar.jpg" : uri;
         try {
             if (source.startsWith("http") || source.startsWith("file:")) {
-                pujaImagePreview.setImage(IMAGE_CACHE.computeIfAbsent(source, key -> new Image(key, true)));
+                pujaImagePreview.setImage(new Image(source, true));
             } else {
                 URL imageUrl = getClass().getResource(source);
                 if (imageUrl != null) {
@@ -1723,8 +1723,8 @@ public class AdminDashboardPage {
         image.getStyleClass().add("admin-puja-thumb");
         String source = valueOr("/images/trimbakeshwar.jpg", imageUrl);
         try {
-            if (source.startsWith("http")) {
-                image.setImage(IMAGE_CACHE.computeIfAbsent(source, key -> new Image(key, true)));
+            if (source.startsWith("http") || source.startsWith("file:")) {
+                image.setImage(new Image(source, true));
             } else {
                 URL url = getClass().getResource(source);
                 if (url != null) {
