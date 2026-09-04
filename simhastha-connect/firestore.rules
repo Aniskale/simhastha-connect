@@ -366,6 +366,23 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }
+
+    match /emergency_reports/{reportId} {
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+
+    match /emergency_services/{serviceId} {
+      allow read: if isAdmin()
+        || (isSignedIn()
+          && resource.data.isActive == true
+          && resource.data.operationalStatus != "INACTIVE");
+      allow write: if isAdmin();
+    }
+
     // ================= GHATS =================
 
 match /ghats/{ghatId} {

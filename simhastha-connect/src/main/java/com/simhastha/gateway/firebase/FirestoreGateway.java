@@ -9,6 +9,9 @@ import com.simhastha.view.BusinessAuthPage;
 import com.simhastha.view.OperatorAuthPage;
 
 import com.simhastha.model.CloudImage;
+import com.simhastha.model.EmergencyAlert;
+import com.simhastha.model.EmergencyReport;
+import com.simhastha.model.EmergencyService;
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
 import com.simhastha.service.GhatRepository;
@@ -1370,6 +1373,212 @@ public final class FirestoreGateway implements GhatRepository {
                         + "&updateMask.fieldPaths=status&updateMask.fieldPaths=adminNote"
                         + "&updateMask.fieldPaths=foundAt&updateMask.fieldPaths=updatedAt&updateMask.fieldPaths=updatedBy"),
                 json, idToken);
+    }
+
+    public void createEmergencyReport(EmergencyReport report, String idToken) throws IOException, InterruptedException {
+        requireEmergencySession(report, idToken, "CREATE");
+        sendAuthorizedPatch(documentUri("emergency_reports", report.emergencyId()), emergencyJson(report), idToken);
+    }
+
+    public List<EmergencyService> loadEmergencyServices(String idToken) throws IOException, InterruptedException {
+        List<EmergencyService> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("emergency_services", idToken)) {
+            try {
+                String fields = document.fields;
+                String serviceId = firstNonBlank(field(fields, "serviceId"), document.id);
+                Double latitude = decimalField(fields, "latitude");
+                Double longitude = decimalField(fields, "longitude");
+                records.add(new EmergencyService(serviceId, field(fields, "name"),
+                        enumValue(EmergencyService.Category.class, field(fields, "category"), EmergencyService.Category.HELP_DESK),
+                        field(fields, "subType"), field(fields, "description"),
+                        latitude == null ? 0D : latitude, longitude == null ? 0D : longitude,
+                        field(fields, "address"), field(fields, "sector"), field(fields, "area"), field(fields, "landmark"),
+                        field(fields, "contactNumber"), field(fields, "alternateContact"),
+                        enumValue(EmergencyService.OperationalStatus.class, field(fields, "operationalStatus"), EmergencyService.OperationalStatus.INACTIVE),
+                        stringListField(fields, "facilities"), "true".equalsIgnoreCase(boolField(fields, "isActive")),
+                        field(fields, "createdAt"), field(fields, "updatedAt"), field(fields, "createdBy"), field(fields, "updatedBy")));
+            } catch (RuntimeException exception) {
+                LOGGER.warning("EMERGENCY_SERVICE_READ_DIAGNOSTIC action=PARSE recordId=" + document.id + " result=malformed");
+            }
+        }
+        return records;
+    }
+
+    public List<EmergencyAlert> loadEmergencyAlerts(String idToken) throws IOException, InterruptedException {
+        List<EmergencyAlert> alerts = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("announcements", idToken)) {
+            try {
+                String fields = document.fields;
+                String expires = field(fields, "expiresAt");
+                boolean expired = notBlank(expires) && parseLong(expires, Long.MAX_VALUE) < System.currentTimeMillis();
+                if (!"true".equalsIgnoreCase(boolField(fields, "isEmergencyAlert"))
+                        || "false".equalsIgnoreCase(boolField(fields, "active"))
+                        || "false".equalsIgnoreCase(boolField(fields, "published"))
+                        || expired) {
+                    continue;
+                }
+                Double latitude = decimalField(fields, "latitude");
+                Double longitude = decimalField(fields, "longitude");
+                alerts.add(new EmergencyAlert(document.id, field(fields, "title"),
+                        firstNonBlank(field(fields, "message"), field(fields, "description")),
+                        enumValue(EmergencyAlert.Severity.class, field(fields, "alertSeverity"), EmergencyAlert.Severity.INFO),
+                        field(fields, "locationLabel"), field(fields, "affectedArea"),
+                        latitude == null ? 0D : latitude, longitude == null ? 0D : longitude,
+                        field(fields, "createdAt"), expires));
+            } catch (RuntimeException ignored) {
+                LOGGER.fine("Skipping malformed emergency alert " + document.id);
+            }
+        }
+        return alerts;
+    }
+
+    public void saveEmergencyService(EmergencyService service, String idToken) throws IOException, InterruptedException {
+        AppSession.User user = AppSession.currentUser();
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("serviceId", service.serviceId()),
+                fieldJson("name", service.name()),
+                fieldJson("category", service.category().name()),
+                fieldJson("subType", service.subType()),
+                fieldJson("description", service.description()),
+                numberOrNullFieldJson("latitude", service.latitude()),
+                numberOrNullFieldJson("longitude", service.longitude()),
+                fieldJson("address", service.address()),
+                fieldJson("sector", service.sector()),
+                fieldJson("area", service.area()),
+                fieldJson("landmark", service.landmark()),
+                fieldJson("contactNumber", service.contactNumber()),
+                fieldJson("alternateContact", service.alternateContact()),
+                fieldJson("operationalStatus", service.operationalStatus().name()),
+                stringArrayFieldJson("facilities", service.facilities()),
+                boolFieldJson("isActive", service.active()),
+                fieldJson("createdAt", service.createdAt().isBlank() ? now : service.createdAt()),
+                fieldJson("updatedAt", now),
+                fieldJson("createdBy", service.createdBy()),
+                fieldJson("updatedBy", user == null ? "" : user.uid()));
+        sendAuthorizedPatch(documentUri("emergency_services", service.serviceId()), json, idToken);
+    }
+
+    public void deleteEmergencyService(String serviceId, String idToken) throws IOException, InterruptedException {
+        sendAuthorizedDelete(documentUri("emergency_services", serviceId), idToken);
+    }
+
+    public List<EmergencyReport> loadEmergencyReports(String idToken) throws IOException, InterruptedException {
+        List<EmergencyReport> records = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("emergency_reports", idToken)) {
+            EmergencyReport report = emergencyFrom(document);
+            if (report != null) {
+                records.add(report);
+            }
+        }
+        return records;
+    }
+
+    public List<EmergencyReport> loadEmergencyReportsForUser(String userId, String idToken)
+            throws IOException, InterruptedException {
+        if (!notBlank(userId)) {
+            return List.of();
+        }
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"emergency_reports\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"userId\"},"
+                + "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + escape(userId) + "\"}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())), query, idToken);
+        List<EmergencyReport> records = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            EmergencyReport report = emergencyFrom(document);
+            if (report != null) {
+                records.add(report);
+            }
+        }
+        return records;
+    }
+
+    public void updateEmergencyReport(EmergencyReport report, String idToken) throws IOException, InterruptedException {
+        if (!notBlank(idToken)) {
+            throw new IOException("An authenticated admin session is required.");
+        }
+        sendAuthorizedPatch(documentUri("emergency_reports", report.emergencyId()), emergencyJson(report), idToken);
+    }
+
+    private EmergencyReport emergencyFrom(Document document) {
+        try {
+            String fields = document.fields;
+            Double latitude = decimalField(fields, "latitude");
+            Double longitude = decimalField(fields, "longitude");
+            return new EmergencyReport(document.id,
+                    firstNonBlank(field(fields, "trackingId"), document.id),
+                    field(fields, "userId"),
+                    field(fields, "reporterName"),
+                    field(fields, "reporterPhone"),
+                    enumValue(EmergencyReport.EmergencyType.class, field(fields, "emergencyType"), EmergencyReport.EmergencyType.OTHER),
+                    field(fields, "description"),
+                    parseInt(numberField(fields, "peopleAffected"), 0),
+                    field(fields, "landmark"),
+                    latitude == null ? 0D : latitude,
+                    longitude == null ? 0D : longitude,
+                    field(fields, "locationLabel"),
+                    enumValue(EmergencyReport.Priority.class, field(fields, "priority"), EmergencyReport.Priority.MEDIUM),
+                    enumValue(EmergencyReport.Status.class, field(fields, "status"), EmergencyReport.Status.REPORTED),
+                    field(fields, "assignedTeamId"),
+                    field(fields, "assignedTeamName"),
+                    field(fields, "assignedTeamType"),
+                    field(fields, "adminNotes"),
+                    field(fields, "userStatusMessage"),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt"),
+                    field(fields, "acknowledgedAt"),
+                    field(fields, "dispatchedAt"),
+                    field(fields, "helpArrivingAt"),
+                    field(fields, "resolvedAt"),
+                    enumValue(EmergencyReport.Source.class, field(fields, "source"), EmergencyReport.Source.REPORT));
+        } catch (RuntimeException exception) {
+            LOGGER.warning("EMERGENCY_READ_DIAGNOSTIC action=PARSE emergencyId=" + document.id + " result=malformed");
+            return null;
+        }
+    }
+
+    private String emergencyJson(EmergencyReport report) {
+        return fieldsJson(
+                fieldJson("emergencyId", report.emergencyId()),
+                fieldJson("trackingId", report.trackingId()),
+                fieldJson("userId", report.userId()),
+                fieldJson("reporterName", report.reporterName()),
+                fieldJson("reporterPhone", report.reporterPhone()),
+                fieldJson("emergencyType", report.emergencyType().name()),
+                fieldJson("description", report.description()),
+                numberFieldJson("peopleAffected", report.peopleAffected()),
+                fieldJson("landmark", report.landmark()),
+                numberOrNullFieldJson("latitude", report.latitude()),
+                numberOrNullFieldJson("longitude", report.longitude()),
+                fieldJson("locationLabel", report.locationLabel()),
+                fieldJson("priority", report.priority().name()),
+                fieldJson("status", report.status().name()),
+                fieldJson("assignedTeamId", report.assignedTeamId()),
+                fieldJson("assignedTeamName", report.assignedTeamName()),
+                fieldJson("assignedTeamType", report.assignedTeamType()),
+                fieldJson("adminNotes", report.adminNotes()),
+                fieldJson("userStatusMessage", report.userStatusMessage()),
+                fieldJson("createdAt", report.createdAt()),
+                fieldJson("updatedAt", report.updatedAt()),
+                fieldJson("acknowledgedAt", report.acknowledgedAt()),
+                fieldJson("dispatchedAt", report.dispatchedAt()),
+                fieldJson("helpArrivingAt", report.helpArrivingAt()),
+                fieldJson("resolvedAt", report.resolvedAt()),
+                fieldJson("source", report.source().name()));
+    }
+
+    private void requireEmergencySession(EmergencyReport report, String idToken, String action) throws IOException {
+        AppSession.User user = AppSession.currentUser();
+        boolean valid = user != null && notBlank(idToken) && user.uid().equals(report.userId());
+        LOGGER.info("EMERGENCY_CREATE_DIAGNOSTIC tokenPresent=" + notBlank(idToken)
+                + " sessionUid=" + (user == null ? "" : user.uid())
+                + " sessionRole=" + (user == null ? "" : user.role())
+                + " emergencyId=" + report.emergencyId()
+                + " action=" + action
+                + " result=" + valid);
+        if (!valid) {
+            throw new IOException("An authenticated user session is required to submit an emergency request.");
+        }
     }
 
     public void saveItem(String module, AppDataStore.ServiceItem item) {

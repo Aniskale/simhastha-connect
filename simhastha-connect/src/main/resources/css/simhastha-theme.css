@@ -9228,3 +9228,141 @@
     -fx-background-color: rgba(11, 20, 32, 0.94);
     -fx-border-color: rgba(229, 180, 76, 0.45);
 }
+
+/* Emergency & Safety: scoped to the pilgrim dashboard theme. */
+.emergency-page { -fx-spacing: 9px; }
+.emergency-top-actions { -fx-padding: 2px 0 4px 0; }
+.emergency-top-meta { -fx-text-fill: #76553a; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 5px 7px; -fx-background-color: rgba(255, 251, 241, .72); -fx-background-radius: 999px; }
+.emergency-header { -fx-padding: 13px 17px; -fx-background-color: rgba(255, 251, 242, .96); -fx-background-radius: 14px; -fx-border-color: rgba(184, 100, 6, .25); -fx-border-radius: 14px; -fx-effect: dropshadow(gaussian, rgba(76, 27, 9, .11), 13, .12, 0, 4); }
+.emergency-header-icon { -fx-font-size: 25px; -fx-text-fill: #9d291c; -fx-padding: 10px; -fx-background-color: rgba(193, 49, 35, .11); -fx-background-radius: 999px; }
+.emergency-header-title, .emergency-facility-name { -fx-text-fill: #651713; -fx-font-family: "Georgia", "Cambria", serif; -fx-font-size: 23px; -fx-font-weight: bold; }
+.emergency-header-subtitle { -fx-text-fill: #76553a; -fx-font-size: 12px; }
+.emergency-content-layout { -fx-alignment: top-left; }
+.emergency-left-column, .emergency-right-column { -fx-spacing: 10px; }
+.emergency-section, .emergency-facility-details { -fx-padding: 12px; -fx-background-color: rgba(255, 251, 242, .96); -fx-background-radius: 12px; -fx-border-color: rgba(184, 100, 6, .24); -fx-border-radius: 12px; -fx-effect: dropshadow(gaussian, rgba(76, 27, 9, .09), 11, .11, 0, 3); }
+.emergency-section-title { -fx-text-fill: #6b1712; -fx-font-size: 12px; -fx-font-weight: bold; }
+.emergency-action-row { -fx-alignment: center-left; }
+.emergency-action-card { -fx-padding: 11px; -fx-background-radius: 10px; -fx-border-radius: 10px; -fx-border-width: 1px; -fx-min-height: 128px; }
+.emergency-sos-card { -fx-background-color: linear-gradient(to bottom right, #fff8f3, #fee8e1); -fx-border-color: rgba(174, 37, 29, .42); }
+.emergency-report-card { -fx-background-color: linear-gradient(to bottom right, #fffaf0, #ffefd7); -fx-border-color: rgba(211, 116, 10, .40); }
+.emergency-action-icon { -fx-font-size: 21px; -fx-padding: 8px; -fx-background-radius: 999px; }
+.emergency-sos-card .emergency-action-icon { -fx-text-fill: #a51f1c; -fx-background-color: rgba(177, 38, 30, .13); }
+.emergency-report-card .emergency-action-icon { -fx-text-fill: #b35a08; -fx-background-color: rgba(228, 137, 19, .17); }
+.emergency-action-title { -fx-text-fill: #641713; -fx-font-size: 12px; -fx-font-weight: bold; }
+.emergency-action-detail { -fx-text-fill: #76553a; -fx-font-size: 10px; }
+.emergency-action-button, .emergency-primary-button, .emergency-secondary-button { -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 8px 10px; -fx-background-radius: 7px; -fx-border-radius: 7px; -fx-cursor: hand; }
+.emergency-sos-card .emergency-action-button { -fx-background-color: linear-gradient(to right, #9b1e19, #c94733); -fx-text-fill: white; }
+.emergency-report-card .emergency-action-button, .emergency-primary-button { -fx-background-color: linear-gradient(to right, #d8760d, #efaa32); -fx-text-fill: #fffaf0; }
+.emergency-secondary-button { -fx-background-color: rgba(226, 143, 24, .10); -fx-border-color: rgba(173, 87, 9, .30); -fx-text-fill: #853b09; }
+.emergency-status-row { -fx-alignment: center-left; }
+.emergency-status-card { -fx-padding: 8px; -fx-background-color: rgba(255, 251, 242, .90); -fx-background-radius: 10px; -fx-border-color: rgba(184, 100, 6, .18); -fx-border-radius: 10px; -fx-min-height: 82px; }
+.emergency-status-icon { -fx-font-size: 16px; -fx-text-fill: #a4510a; }
+.emergency-status-title { -fx-text-fill: #59261a; -fx-font-size: 10px; -fx-font-weight: bold; }
+.emergency-status-detail { -fx-text-fill: #8a6748; -fx-font-size: 9px; }
+.emergency-status-safe { -fx-border-color: rgba(31, 137, 83, .27); }
+.emergency-status-safe .emergency-status-icon { -fx-text-fill: #23854f; }
+.emergency-service-card { -fx-padding: 8px 7px; -fx-background-color: #fffaf1; -fx-background-radius: 9px; -fx-border-color: rgba(184, 100, 6, .17); -fx-border-radius: 9px; -fx-cursor: hand; -fx-min-height: 58px; }
+.emergency-service-card:hover, .emergency-service-card-selected { -fx-background-color: #fff3df; -fx-border-color: #d58318; -fx-effect: dropshadow(gaussian, rgba(184, 100, 6, .12), 8, .14, 0, 2); }
+.emergency-service-icon { -fx-font-size: 17px; }
+.emergency-service-title { -fx-text-fill: #5f2c1a; -fx-font-size: 9px; -fx-font-weight: bold; -fx-wrap-text: true; }
+.emergency-service-hospital .emergency-service-icon, .emergency-service-police .emergency-service-icon { -fx-text-fill: #2f6fa4; }
+.emergency-service-camp .emergency-service-icon, .emergency-service-exit .emergency-service-icon { -fx-text-fill: #2f8a54; }
+.emergency-service-aid .emergency-service-icon { -fx-text-fill: #bd3d2d; }
+.emergency-service-ambulance .emergency-service-icon { -fx-text-fill: #278ba1; }
+.emergency-service-fire .emergency-service-icon { -fx-text-fill: #d65f0c; }
+.emergency-service-desk .emergency-service-icon { -fx-text-fill: #7954a6; }
+.emergency-nearby-card { -fx-padding: 8px 9px; -fx-background-color: #fffaf2; -fx-background-radius: 8px; -fx-border-color: rgba(184, 100, 6, .14); -fx-border-radius: 8px; -fx-cursor: hand; }
+.emergency-nearby-card:hover { -fx-border-color: rgba(211, 116, 10, .54); }
+.emergency-nearby-icon { -fx-font-size: 15px; -fx-text-fill: #a4510a; }
+.emergency-nearby-name { -fx-text-fill: #552317; -fx-font-size: 11px; -fx-font-weight: bold; }
+.emergency-nearby-type, .emergency-distance, .emergency-facility-detail { -fx-text-fill: #7f6044; -fx-font-size: 9px; }
+.emergency-open-status { -fx-text-fill: #207847; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 3px 6px; -fx-background-color: rgba(37, 142, 78, .12); -fx-background-radius: 999px; }
+.emergency-nearby-arrow { -fx-text-fill: #a4510a; -fx-font-size: 18px; }
+.emergency-text-button, .emergency-alert-action { -fx-background-color: transparent; -fx-text-fill: #9a4408; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 3px 0 0 0; -fx-cursor: hand; }
+.emergency-map-container { -fx-padding: 14px; }
+.emergency-filter-chip { -fx-background-color: rgba(227, 160, 53, .10); -fx-border-color: rgba(177, 99, 11, .24); -fx-text-fill: #7d430e; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 5px 8px; -fx-background-radius: 999px; -fx-border-radius: 999px; -fx-cursor: hand; }
+.emergency-filter-chip-selected { -fx-background-color: linear-gradient(to right, #8c2614, #c66a11); -fx-border-color: transparent; -fx-text-fill: #fff9ed; }
+.emergency-map-placeholder { -fx-background-color: linear-gradient(to bottom right, #fff8ed, #f8e7cc); -fx-background-radius: 10px; -fx-border-color: rgba(185, 108, 18, .30); -fx-border-radius: 10px; -fx-border-style: segments(6, 4); }
+.emergency-map-shell, .emergency-live-map { -fx-background-color: #f8e7cc; -fx-background-radius: 10px; -fx-border-color: rgba(185, 108, 18, .30); -fx-border-radius: 10px; }
+.emergency-map-shell { -fx-min-height: 360px; }
+.emergency-live-map { -fx-min-height: 360px; }
+.emergency-map-loading, .emergency-map-failure { -fx-background-color: rgba(255, 248, 237, .94); -fx-background-radius: 10px; -fx-text-fill: #713421; -fx-font-size: 11px; -fx-font-weight: bold; }
+.emergency-map-failure-title { -fx-text-fill: #8c261b; -fx-font-size: 14px; -fx-font-weight: bold; }
+.emergency-map-failure-detail { -fx-text-fill: #76553a; -fx-font-size: 10px; }
+.emergency-map-control { -fx-background-color: rgba(255, 250, 239, .96); -fx-border-color: rgba(173, 87, 9, .30); -fx-border-radius: 7px; -fx-background-radius: 7px; -fx-text-fill: #853b09; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 7px 9px; -fx-cursor: hand; }
+.emergency-route-summary { -fx-padding: 9px; -fx-background-color: rgba(217, 129, 20, .08); -fx-background-radius: 8px; -fx-border-color: rgba(187, 98, 9, .24); -fx-border-radius: 8px; }
+.emergency-route-title { -fx-text-fill: #8c3b09; -fx-font-size: 10px; -fx-font-weight: bold; }
+.emergency-map-icon { -fx-font-size: 32px; -fx-text-fill: #b15a0a; }
+.emergency-map-title { -fx-text-fill: #6a1d13; -fx-font-family: "Georgia", "Cambria", serif; -fx-font-size: 18px; -fx-font-weight: bold; }
+.emergency-map-note { -fx-text-fill: #7b5a3d; -fx-font-size: 11px; }
+.emergency-facility-icon { -fx-font-size: 20px; -fx-text-fill: #a8520a; }
+.emergency-facility-name { -fx-font-size: 16px; }
+.emergency-facility-type { -fx-text-fill: #805a3c; -fx-font-size: 10px; }
+.emergency-facility-tag { -fx-text-fill: #7f480d; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 4px 7px; -fx-background-color: rgba(221, 147, 32, .12); -fx-background-radius: 999px; }
+.emergency-alert-card { -fx-padding: 14px; -fx-background-color: linear-gradient(to right, #fff0e4, #ffe6d3); -fx-background-radius: 12px; -fx-border-color: rgba(191, 71, 27, .33); -fx-border-radius: 12px; }
+.emergency-alert-title { -fx-text-fill: #9a301b; -fx-font-size: 11px; -fx-font-weight: bold; }
+.emergency-alert-text { -fx-text-fill: #713421; -fx-font-size: 11px; -fx-font-weight: bold; }
+.admin-emergency-location-selector { -fx-padding: 12px; -fx-spacing: 9px; -fx-background-color: #fff9f0; -fx-border-color: #efc98f; -fx-border-radius: 10px; -fx-background-radius: 10px; }
+.admin-emergency-location-map { -fx-min-height: 330px; -fx-pref-height: 360px; -fx-background-color: #eee4d4; -fx-border-color: #e7bd7f; -fx-border-radius: 8px; -fx-background-radius: 8px; }
+.emergency-nearest-medical-button { -fx-background-color: rgba(226, 143, 24, .12); -fx-border-color: rgba(173, 87, 9, .30); -fx-border-radius: 7px; -fx-background-radius: 7px; -fx-text-fill: #853b09; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 8px 10px; -fx-cursor: hand; }
+.emergency-nearby-card-selected { -fx-background-color: #fff1dc; -fx-border-color: #d58318; -fx-border-width: 1.2px; }
+.emergency-empty-state { -fx-text-fill: #76553a; -fx-font-size: 10px; -fx-padding: 12px; -fx-background-color: rgba(184, 100, 6, .06); -fx-background-radius: 8px; }
+.emergency-feedback-card { -fx-padding: 9px 12px; -fx-background-color: #fff0dc; -fx-background-radius: 10px; -fx-border-color: rgba(193, 104, 10, .34); -fx-border-radius: 10px; }
+.emergency-feedback-title { -fx-text-fill: #9b4709; -fx-font-size: 9px; -fx-font-weight: bold; }
+.emergency-feedback-text { -fx-text-fill: #69351d; -fx-font-size: 11px; -fx-font-weight: bold; }
+.emergency-confirm-card, .emergency-report-form, .emergency-expanded-details { -fx-padding: 10px; -fx-background-color: rgba(255, 247, 235, .86); -fx-background-radius: 8px; -fx-border-color: rgba(185, 97, 15, .24); -fx-border-radius: 8px; }
+.emergency-confirm-title { -fx-text-fill: #8c261b; -fx-font-size: 12px; -fx-font-weight: bold; }
+.emergency-confirm-text, .emergency-form-note, .emergency-expanded-detail { -fx-text-fill: #76553a; -fx-font-size: 10px; }
+.emergency-danger-button { -fx-background-color: linear-gradient(to right, #9b1e19, #c94733); -fx-text-fill: white; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 8px 10px; -fx-background-radius: 7px; -fx-cursor: hand; }
+.emergency-validation-error { -fx-text-fill: #a32b20; -fx-font-size: 10px; -fx-font-weight: bold; }
+.emergency-status-step { -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 5px 7px; -fx-background-radius: 999px; }
+.emergency-status-step-active { -fx-background-color: rgba(31, 137, 83, .15); -fx-text-fill: #237646; }
+.emergency-status-step-inactive { -fx-background-color: rgba(117, 91, 61, .10); -fx-text-fill: #9a8166; }
+.emergency-status-request { -fx-text-fill: #8a430c; -fx-font-size: 10px; -fx-font-weight: bold; }
+
+/* Admin Emergency Service editor: scoped so other Admin forms keep their existing layout. */
+.admin-emergency-service-form { -fx-max-width: 900px; -fx-padding: 4px 2px 8px 2px; }
+.admin-emergency-form-section-box { -fx-padding: 13px 15px 15px 15px; -fx-background-color: rgba(255, 250, 242, .82); -fx-background-radius: 10px; -fx-border-color: rgba(174, 92, 12, .20); -fx-border-radius: 10px; }
+.admin-emergency-form-section { -fx-text-fill: #711a14; -fx-font-size: 11px; -fx-font-weight: bold; -fx-padding: 0 0 7px 0; -fx-border-color: transparent transparent rgba(174, 92, 12, .24) transparent; -fx-border-width: 0 0 1px 0; }
+.admin-emergency-form-subheading { -fx-text-fill: #8a430c; -fx-font-size: 9px; -fx-font-weight: bold; -fx-padding: 3px 0 0 0; }
+.admin-emergency-form-label { -fx-text-fill: #682118; -fx-font-size: 10px; -fx-font-weight: bold; }
+.admin-emergency-form-field { -fx-min-width: 260px; }
+.admin-emergency-input { -fx-background-color: #fffdf8; -fx-background-radius: 7px; -fx-border-color: rgba(155, 83, 12, .30); -fx-border-radius: 7px; -fx-padding: 7px 9px; -fx-font-size: 11px; -fx-text-fill: #542419; }
+.admin-emergency-input:focused { -fx-border-color: #d48418; -fx-border-width: 1.4px; -fx-effect: dropshadow(gaussian, rgba(203, 123, 17, .20), 5, .12, 0, 1); }
+.admin-emergency-input .text { -fx-fill: #542419; }
+.admin-emergency-input.text-area .content { -fx-background-color: #fffdf8; -fx-background-radius: 6px; }
+.admin-emergency-form-hint { -fx-text-fill: #80634b; -fx-font-size: 9px; }
+.admin-emergency-visibility { -fx-padding: 9px 10px; -fx-background-color: rgba(220, 144, 27, .07); -fx-background-radius: 8px; -fx-border-color: rgba(174, 92, 12, .16); -fx-border-radius: 8px; }
+.admin-emergency-preview-banner { -fx-padding: 8px 10px; -fx-background-color: rgba(218, 142, 25, .12); -fx-background-radius: 7px; -fx-border-color: rgba(181, 102, 13, .25); -fx-border-radius: 7px; -fx-text-fill: #8a430c; -fx-font-size: 10px; -fx-font-weight: bold; }
+.admin-emergency-form-error { -fx-text-fill: #a32b20; -fx-font-size: 10px; -fx-font-weight: bold; -fx-wrap-text: true; }
+.admin-emergency-form-actions { -fx-padding: 2px 0 0 0; }
+.admin-emergency-cancel { -fx-background-color: transparent; -fx-border-color: #b86c15; -fx-border-radius: 7px; -fx-background-radius: 7px; -fx-text-fill: #823c0a; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 8px 14px; -fx-cursor: hand; }
+
+/* Admin-only, in-app SOS notification dialog. */
+.admin-emergency-sos-selected { -fx-background-color: rgba(235, 151, 27, .16); -fx-border-color: #d87814; -fx-border-radius: 9px; -fx-background-radius: 9px; }
+.admin-sos-popup > .content { -fx-background-color: #fff9f0; }
+.admin-sos-popup .header-panel { -fx-background-color: #5d1313; }
+.admin-sos-popup-content { -fx-padding: 8px 3px 2px 3px; -fx-min-width: 360px; }
+.admin-sos-popup-title { -fx-text-fill: #981f17; -fx-font-size: 17px; -fx-font-weight: bold; }
+.admin-sos-popup-tracking { -fx-text-fill: #7b3b0d; -fx-font-size: 12px; -fx-font-weight: bold; }
+.admin-sos-popup-detail { -fx-text-fill: #542c19; -fx-font-size: 12px; -fx-line-spacing: 3px; }
+.admin-sos-popup-error { -fx-text-fill: #a1251b; -fx-font-size: 11px; -fx-font-weight: bold; }
+.admin-sos-popup .button { -fx-font-size: 11px; -fx-font-weight: bold; -fx-cursor: hand; }
+.admin-sos-popup-acknowledge { -fx-background-color: #a9291e; -fx-text-fill: white; }
+.admin-sos-popup-view { -fx-background-color: #e58b18; -fx-text-fill: #431a0d; }
+
+.theme-dark .emergency-top-meta { -fx-text-fill: #e0cba9; -fx-background-color: rgba(255, 235, 188, .08); }
+.theme-dark .emergency-header, .theme-dark .emergency-section, .theme-dark .emergency-facility-details, .theme-dark .emergency-status-card, .theme-dark .emergency-service-card, .theme-dark .emergency-nearby-card { -fx-background-color: rgba(38, 21, 22, .96); -fx-border-color: rgba(225, 173, 71, .30); }
+.theme-dark .emergency-header-title, .theme-dark .emergency-facility-name, .theme-dark .emergency-section-title, .theme-dark .emergency-action-title, .theme-dark .emergency-status-title, .theme-dark .emergency-service-title, .theme-dark .emergency-nearby-name, .theme-dark .emergency-map-title { -fx-text-fill: #fff1d1; }
+.theme-dark .emergency-header-subtitle, .theme-dark .emergency-action-detail, .theme-dark .emergency-status-detail, .theme-dark .emergency-nearby-type, .theme-dark .emergency-distance, .theme-dark .emergency-facility-detail, .theme-dark .emergency-facility-type, .theme-dark .emergency-map-note { -fx-text-fill: #d8c6a6; }
+.theme-dark .emergency-sos-card { -fx-background-color: linear-gradient(to bottom right, #3e1c1d, #50221f); }
+.theme-dark .emergency-report-card { -fx-background-color: linear-gradient(to bottom right, #3e291b, #50351d); }
+.theme-dark .emergency-map-placeholder { -fx-background-color: linear-gradient(to bottom right, #30251e, #433221); -fx-border-color: rgba(229, 180, 76, .35); }
+.theme-dark .emergency-map-shell, .theme-dark .emergency-live-map { -fx-background-color: #30251e; -fx-border-color: rgba(229, 180, 76, .35); }
+.theme-dark .emergency-map-loading, .theme-dark .emergency-map-failure { -fx-background-color: rgba(48, 37, 30, .96); -fx-text-fill: #e2ccaa; }
+.theme-dark .emergency-service-card:hover, .theme-dark .emergency-service-card-selected { -fx-background-color: #4a2d1d; }
+.theme-dark .emergency-alert-card { -fx-background-color: linear-gradient(to right, #46221e, #573020); -fx-border-color: rgba(223, 114, 56, .42); }
+.theme-dark .emergency-alert-text { -fx-text-fill: #ffe0c6; }
+.theme-dark .emergency-feedback-card, .theme-dark .emergency-confirm-card, .theme-dark .emergency-report-form, .theme-dark .emergency-expanded-details { -fx-background-color: rgba(66, 35, 24, .96); -fx-border-color: rgba(229, 180, 76, .30); }
+.theme-dark .emergency-feedback-text, .theme-dark .emergency-confirm-text, .theme-dark .emergency-form-note, .theme-dark .emergency-expanded-detail, .theme-dark .emergency-empty-state { -fx-text-fill: #e2ccaa; }
+.theme-dark .emergency-nearby-card-selected { -fx-background-color: #4a2d1d; }

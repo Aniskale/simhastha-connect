@@ -9,6 +9,9 @@ import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.model.CloudinaryUploadResult;
 import com.simhastha.service.CloudinaryService;
 
+import com.simhastha.model.EmergencyDevelopmentServices;
+import com.simhastha.model.EmergencyReport;
+import com.simhastha.model.EmergencyService;
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
 import com.simhastha.service.GhatCatalogueService;
@@ -27,6 +30,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -36,6 +45,7 @@ import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.CheckBox;
@@ -55,6 +65,7 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+import javafx.stage.Window;
 
 import com.simhastha.schedule.ScheduleCategory;
 import com.simhastha.schedule.ScheduleEvent;
@@ -89,6 +100,26 @@ public class AdminDashboardPage {
     private String ghatTypeFilter = "All Types";
     private String ghatSort = "Name A-Z";
     private final ScheduleService scheduleService = new ScheduleService();
+    private final FirestoreGateway emergencyFirestore = new FirestoreGateway(FirebaseConfig.load());
+    private List<EmergencyReport> emergencyReports = List.of();
+    private boolean emergencyReportsLoading;
+    private String emergencyReportsError = "";
+    private List<EmergencyService> emergencyServices = List.of();
+    private boolean emergencyServicesLoading;
+    private String emergencyServicesError = "";
+    private boolean emergencyServicesPreviewActive;
+    private boolean emergencyServicesFirestoreAvailable;
+    private String emergencyServicesPreviewMessage = "";
+    private EmergencyService editingEmergencyService;
+    private final Set<String> notifiedEmergencyIds = new HashSet<>();
+    private final Deque<EmergencyReport> pendingSosReports = new ArrayDeque<>();
+    private ScheduledExecutorService sosMonitorExecutor;
+    private ScheduledFuture<?> sosMonitorTask;
+    private volatile boolean sosMonitorPollInProgress;
+    private boolean sosMonitorBaselined;
+    private boolean sosPopupVisible;
+    private volatile boolean sosMonitorFailureLogged;
+    private String focusedEmergencyReportId = "";
 
     public Scene createScene(Stage stage) {
         this.stage = stage;
@@ -105,6 +136,7 @@ public class AdminDashboardPage {
         ThemeManager.addTheme(scene, this);
         ThemeManager.addListener(() -> ThemeManager.applyTo(root));
         refreshAdminData();
+        startAdminSosMonitor();
         return scene;
     }
 
@@ -236,7 +268,11 @@ public class AdminDashboardPage {
             case "Schedule & Events" -> schedulePage();
             case "Announcements" -> announcementsPage();
             case "FAQs / Help Center" -> faqManagementPage();
-            case "Emergency" -> emergencyPage();
+            case "Emergency" -> {
+                loadEmergencyReportsAsync();
+                loadEmergencyServicesAsync();
+                yield emergencyPage();
+            }
             case "Reports & Analytics" -> reportsPage();
             case "System" -> systemPage();
             default -> dashboardPage();
@@ -1966,11 +2002,588 @@ public class AdminDashboardPage {
     }
 
     private VBox emergencyPage() {
-        VBox form = structuredForm("Name", "Type", "Phone", "Location", "Map Link", "Availability", "Verified", "Priority", "Active");
-        return pageShell("Emergency Operations Center", "Maintain verified emergency information.",
-                tabRow("Emergency Contacts", "Hospitals", "Medical Camps", "Police", "Women Safety", "Active Alerts"),
-                infoPanel("Verified Emergency Information", form, actionRow("emergency", form, "Add", "Edit", "Verify", "Publish Alert")),
-                listPanel("Published Emergency Items", "emergency", "No emergency items published yet.", form));
+        long active = emergencyReports.stream().filter(EmergencyReport::unresolved).count();
+        long critical = emergencyReports.stream().filter(report -> report.unresolved() && report.priority() == EmergencyReport.Priority.CRITICAL).count();
+        long medical = emergencyReports.stream().filter(report -> report.unresolved() && report.emergencyType() == EmergencyReport.EmergencyType.MEDICAL).count();
+        long police = emergencyReports.stream().filter(report -> report.unresolved() && report.emergencyType() == EmergencyReport.EmergencyType.POLICE_SECURITY).count();
+        long fireCrowd = emergencyReports.stream().filter(report -> report.unresolved() && (report.emergencyType() == EmergencyReport.EmergencyType.FIRE || report.emergencyType() == EmergencyReport.EmergencyType.CROWD_RISK)).count();
+        long resolved = emergencyReports.stream().filter(report -> report.status() == EmergencyReport.Status.RESOLVED).count();
+        HBox summary = new HBox(10, metric(String.valueOf(active), "Active"), metric(String.valueOf(critical), "Critical"),
+                metric(String.valueOf(medical), "Medical"), metric(String.valueOf(police), "Police/Security"),
+                metric(String.valueOf(fireCrowd), "Fire/Crowd"), metric(String.valueOf(resolved), "Resolved"));
+        VBox queue = new VBox(8);
+        if (emergencyReportsLoading) queue.getChildren().add(label("Loading emergency reports...", "description-text"));
+        List<EmergencyReport> ordered = emergencyReports.stream().sorted(java.util.Comparator
+                .comparingInt((EmergencyReport report) -> report.priority().ordinal())
+                .thenComparing(EmergencyReport::createdAt).reversed()).toList();
+        if (!emergencyReportsLoading && !emergencyReportsError.isBlank()) queue.getChildren().add(label(emergencyReportsError, "description-text"));
+        else if (!emergencyReportsLoading && ordered.isEmpty()) queue.getChildren().add(label("No emergency reports available.", "description-text"));
+        ordered.forEach(report -> queue.getChildren().add(emergencyQueueRow(report)));
+        VBox serviceRows = new VBox(7);
+        if (emergencyServicesLoading) serviceRows.getChildren().add(label("Loading emergency services...", "description-text"));
+        else if (!emergencyServicesError.isBlank() && !emergencyServicesPreviewActive) serviceRows.getChildren().add(label("Emergency service management is currently unavailable due to Firestore permissions.", "description-text"));
+        else if (emergencyServices.isEmpty()) serviceRows.getChildren().add(label("No emergency services available.", "description-text"));
+        TextField search = new TextField(); search.setPromptText("Search service name");
+        ComboBox<String> filter = combo(java.util.stream.Stream.concat(java.util.stream.Stream.of("All"), java.util.Arrays.stream(EmergencyService.Category.values()).map(Enum::name)).toArray(String[]::new));
+        Runnable renderServices = () -> {
+            serviceRows.getChildren().clear();
+            if (emergencyServicesPreviewActive) {
+                serviceRows.getChildren().add(label(emergencyServicesPreviewStatus(), "description-text"));
+            }
+            emergencyServices.stream()
+                    .filter(service -> service.name().toLowerCase().contains(search.getText().toLowerCase())
+                            && ("All".equals(filter.getValue()) || service.category().name().equals(filter.getValue())))
+                    .forEach(service -> serviceRows.getChildren().add(emergencyServiceRow(service)));
+            if (!emergencyServicesPreviewMessage.isBlank()) {
+                serviceRows.getChildren().add(label(emergencyServicesPreviewMessage, "description-text"));
+            }
+        };
+        search.textProperty().addListener((o, a, b) -> renderServices.run()); filter.setOnAction(event -> renderServices.run());
+        if (!emergencyServicesLoading && (emergencyServicesError.isBlank() || emergencyServicesPreviewActive)) renderServices.run();
+        Button refreshServices = new Button("REFRESH SERVICES"); refreshServices.getStyleClass().add("secondary-button"); refreshServices.setOnAction(event -> loadEmergencyServicesAsync());
+        Button addService = new Button("ADD SERVICE"); addService.getStyleClass().add("primary-button"); addService.setOnAction(event -> { editingEmergencyService = null; root.setCenter(scroll(emergencyServiceForm())); });
+        return pageShell("Emergency Management", "Live Firestore queue. Critical cases are prioritised first.", summary,
+                infoPanel("Emergency Response Queue", queue), infoPanel("Emergency Services", new VBox(8, new HBox(8, search, filter, addService, refreshServices), serviceRows)));
+    }
+
+    private HBox emergencyServiceRow(EmergencyService service) {
+        Label copy = label(adminEmergencyServiceValue(service.name(), "Unnamed emergency service") + " | "
+                + service.category() + " | " + adminEmergencyServiceValue(service.sector(), "Not available")
+                + " / " + adminEmergencyServiceValue(service.area(), "Not available") + " | "
+                + service.operationalStatus() + " | " + adminEmergencyServiceValue(service.contactNumber(), "Not available")
+                + " | " + (service.active() ? "Active" : "Inactive"), "admin-row-detail");
+        Button edit = new Button("EDIT"); edit.setOnAction(e -> { editingEmergencyService = service; root.setCenter(scroll(emergencyServiceForm())); });
+        Button active = new Button(service.active() ? "DEACTIVATE" : "ACTIVATE"); active.setOnAction(e -> saveEmergencyService(copyActive(service, !service.active()), active));
+        Button delete = new Button("DELETE"); delete.setOnAction(e -> deleteEmergencyService(service, delete));
+        return new HBox(8, copy, createSpacer(), edit, active, delete);
+    }
+
+    private String adminEmergencyServiceValue(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private VBox emergencyQueueRow(EmergencyReport report) {
+        Label title = label(report.trackingId() + "  |  " + report.emergencyType().name().replace('_', ' '), "admin-row-title");
+        Label detail = label("Status: " + report.status().name().replace('_', ' ') + " | Priority: " + report.priority()
+                + " | Reporter: " + valueOr("Not available", report.reporterName()) + " | Contact: " + valueOr("Not available", report.reporterPhone())
+                + " | People: " + report.peopleAffected() + " | " + valueOr("Demo Nashik Location", report.locationLabel())
+                + " | Landmark: " + valueOr("Not available", report.landmark()) + " | Coordinates: " + report.latitude() + ", " + report.longitude()
+                + " | Description: " + valueOr("Not available", report.description()), "admin-row-detail");
+        ComboBox<String> team = combo("Unassigned", "Medical Team", "Police Team", "Fire/Safety Team", "Crowd Control Team", "Volunteer Help Team");
+        if (!report.assignedTeamName().isBlank()) team.setValue(report.assignedTeamName());
+        ComboBox<String> priority = combo(report.priority().name(), "CRITICAL", "HIGH", "MEDIUM");
+        ComboBox<String> status = combo(report.status().name(), "REPORTED", "ACKNOWLEDGED", "TEAM_DISPATCHED", "HELP_ARRIVING", "RESOLVED");
+        TextField notes = new TextField(report.adminNotes()); notes.setPromptText("Internal admin notes");
+        Button save = new Button("UPDATE"); save.getStyleClass().add("primary-button");
+        save.setOnAction(event -> updateEmergencyFromAdmin(report, priority.getValue(), status.getValue(), team.getValue(), notes.getText(), save));
+        HBox controls = new HBox(8, priority, status, team, notes, save);
+        controls.setAlignment(Pos.CENTER_LEFT); HBox.setHgrow(notes, Priority.ALWAYS);
+        VBox row = new VBox(6, title, detail, controls); row.getStyleClass().add("admin-data-row");
+        if (report.emergencyId().equals(focusedEmergencyReportId)) {
+            row.getStyleClass().add("admin-emergency-sos-selected");
+            focusedEmergencyReportId = "";
+        }
+        return row;
+    }
+
+    /** Starts after a valid admin session exists. The first successful read establishes a no-popup baseline. */
+    private void startAdminSosMonitor() {
+        AppSession.User user = AppSession.currentUser();
+        if (sosMonitorTask != null && !sosMonitorTask.isCancelled()) return;
+        if (!isAdminSession() || !emergencyFirestore.isEnabled() || user == null) {
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=START_PREREQUISITE");
+            return;
+        }
+        sosMonitorExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "admin-sos-monitor");
+            thread.setDaemon(true);
+            return thread;
+        });
+        System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=START adminUid=" + user.uid());
+        sosMonitorTask = sosMonitorExecutor.scheduleWithFixedDelay(this::pollAdminSosReports, 0, 5, TimeUnit.SECONDS);
+    }
+
+    /** Stops the admin-session monitor; called on logout and available for any future page disposal path. */
+    public void dispose() {
+        if (sosMonitorTask != null) {
+            sosMonitorTask.cancel(true);
+            sosMonitorTask = null;
+        }
+        if (sosMonitorExecutor != null) {
+            sosMonitorExecutor.shutdownNow();
+            sosMonitorExecutor = null;
+        }
+        sosMonitorPollInProgress = false;
+        sosMonitorBaselined = false;
+        sosPopupVisible = false;
+        sosMonitorFailureLogged = false;
+        pendingSosReports.clear();
+        notifiedEmergencyIds.clear();
+    }
+
+    private void pollAdminSosReports() {
+        try {
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POLL");
+            if (sosMonitorPollInProgress) {
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=POLL_IN_PROGRESS");
+                return;
+            }
+            if (!isAdminSession() || !emergencyFirestore.isEnabled()) {
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=SESSION_OR_FIRESTORE");
+                return;
+            }
+            AppSession.User user = AppSession.currentUser();
+            if (user == null) {
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=NO_ADMIN_SESSION");
+                return;
+            }
+            sosMonitorPollInProgress = true;
+            List<EmergencyReport> records = emergencyFirestore.loadEmergencyReports(user.idToken());
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=LOAD count=" + records.size());
+            Platform.runLater(() -> processAdminSosPoll(records));
+        } catch (Exception exception) {
+            if (!sosMonitorFailureLogged) {
+                sosMonitorFailureLogged = true;
+                System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POLL result=failed error=" + exception.getMessage());
+            }
+            sosMonitorPollInProgress = false;
+        }
+    }
+
+    /** Runs on the JavaFX thread so the report cache, seen IDs, and popup queue stay consistent. */
+    private void processAdminSosPoll(List<EmergencyReport> records) {
+        try {
+            if (!isAdminSession()) {
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=SESSION_ENDED");
+                return;
+            }
+            emergencyReports = records == null ? List.of() : records;
+            sosMonitorFailureLogged = false;
+            if (!sosMonitorBaselined) {
+                int baselineCount = 0;
+                for (EmergencyReport report : emergencyReports) {
+                    if (isNewCriticalSosCandidate(report)) {
+                        notifiedEmergencyIds.add(report.emergencyId());
+                        baselineCount++;
+                    } else {
+                        logSosSkip(report, sosSkipReason(report));
+                    }
+                }
+                sosMonitorBaselined = true;
+                System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=BASELINE count=" + baselineCount);
+                return;
+            }
+
+            for (EmergencyReport report : emergencyReports) {
+                if (!isNewCriticalSosCandidate(report)) {
+                    logSosSkip(report, sosSkipReason(report));
+                } else if (!notifiedEmergencyIds.add(report.emergencyId())) {
+                    logSosSkip(report, "ALREADY_SEEN");
+                } else {
+                    logSosCandidate(report);
+                    queueSosPopup(report);
+                }
+            }
+            showNextSosPopup();
+        } catch (RuntimeException exception) {
+            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POLL result=ui_failed error=" + exception.getMessage());
+        } finally {
+            // Never let a UI-side failure permanently suppress later five-second polls.
+            sosMonitorPollInProgress = false;
+        }
+    }
+
+    private void queueSosPopup(EmergencyReport report) {
+        pendingSosReports.addLast(report);
+        System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=QUEUE emergencyId=" + report.emergencyId());
+    }
+
+    private void logSosCandidate(EmergencyReport report) {
+        System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=CANDIDATE emergencyId=" + report.emergencyId()
+                + " source=" + report.source() + " status=" + report.status() + " priority=" + report.priority()
+                + " emergencyType=" + report.emergencyType() + " trackingId=" + report.trackingId()
+                + " createdAt=" + report.createdAt() + " userId=" + report.userId());
+    }
+
+    private void logSosSkip(EmergencyReport report, String reason) {
+        if (report == null) {
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=NULL_REPORT");
+            return;
+        }
+        System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=SKIP reason=" + reason
+                + " emergencyId=" + report.emergencyId() + " source=" + report.source()
+                + " status=" + report.status() + " priority=" + report.priority());
+    }
+
+    private String sosSkipReason(EmergencyReport report) {
+        if (report == null) return "NULL_REPORT";
+        if (report.source() != EmergencyReport.Source.SOS) return "SOURCE";
+        if (report.status() != EmergencyReport.Status.REPORTED) return "STATUS";
+        if (report.priority() != EmergencyReport.Priority.CRITICAL) return "PRIORITY";
+        if (report.emergencyId().isBlank()) return "MISSING_ID";
+        return "UNKNOWN";
+    }
+
+    private boolean isNewCriticalSosCandidate(EmergencyReport report) {
+        return report != null
+                && report.source() == EmergencyReport.Source.SOS
+                && report.status() == EmergencyReport.Status.REPORTED
+                && report.priority() == EmergencyReport.Priority.CRITICAL
+                && !report.emergencyId().isBlank();
+    }
+
+    private void showNextSosPopup() {
+        if (sosPopupVisible || pendingSosReports.isEmpty()) return;
+        Stage owner = activeAdminStage();
+        if (owner == null || !isAdminSession()) {
+            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId="
+                    + pendingSosReports.peekFirst().emergencyId() + " result=failed reason=STALE_OWNER");
+            return;
+        }
+        EmergencyReport report = pendingSosReports.removeFirst();
+        sosPopupVisible = true;
+        try {
+            Dialog<ButtonType> dialog = new Dialog<>();
+            dialog.initOwner(owner);
+            dialog.setTitle("Emergency SOS Received");
+            dialog.getDialogPane().getStyleClass().add("admin-sos-popup");
+            dialog.getDialogPane().getStylesheets().addAll(owner.getScene().getStylesheets());
+
+            Label heading = label("EMERGENCY SOS RECEIVED", "admin-sos-popup-title");
+            Label tracking = label("Tracking ID: " + valueOr("Not available", report.trackingId()), "admin-sos-popup-tracking");
+            Label details = label("Type: " + report.emergencyType().name().replace('_', ' ')
+                    + "\nPriority: " + report.priority()
+                    + "\nLocation: " + valueOr("Not available", report.locationLabel())
+                    + "\nReporter: " + valueOr("Not available", report.reporterName())
+                    + "\nContact: " + valueOr("Not available", report.reporterPhone())
+                    + "\nTime: " + valueOr("Not available", report.createdAt()), "admin-sos-popup-detail");
+            Label error = label("", "admin-sos-popup-error");
+            error.setWrapText(true);
+            VBox content = new VBox(8, heading, tracking, details, error);
+            content.getStyleClass().add("admin-sos-popup-content");
+            dialog.getDialogPane().setContent(content);
+
+            ButtonType acknowledge = new ButtonType("ACKNOWLEDGE", ButtonBar.ButtonData.OK_DONE);
+            ButtonType view = new ButtonType("VIEW EMERGENCY", ButtonBar.ButtonData.OTHER);
+            ButtonType dismiss = new ButtonType("DISMISS", ButtonBar.ButtonData.CANCEL_CLOSE);
+            dialog.getDialogPane().getButtonTypes().addAll(acknowledge, view, dismiss);
+            Button acknowledgeButton = (Button) dialog.getDialogPane().lookupButton(acknowledge);
+            Button viewButton = (Button) dialog.getDialogPane().lookupButton(view);
+            acknowledgeButton.getStyleClass().add("admin-sos-popup-acknowledge");
+            viewButton.getStyleClass().add("admin-sos-popup-view");
+            acknowledgeButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
+                event.consume();
+                acknowledgeSosFromPopup(report, dialog, acknowledgeButton, error);
+            });
+            viewButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
+                event.consume();
+                focusedEmergencyReportId = report.emergencyId();
+                dialog.close();
+                showSection("Emergency");
+            });
+            dialog.setOnHidden(event -> {
+                sosPopupVisible = false;
+                Platform.runLater(this::showNextSosPopup);
+            });
+            dialog.show();
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId=" + report.emergencyId() + " result=success");
+        } catch (RuntimeException exception) {
+            sosPopupVisible = false;
+            notifiedEmergencyIds.remove(report.emergencyId());
+            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId=" + report.emergencyId()
+                    + " result=failed error=" + exception.getMessage());
+        }
+    }
+
+    /** Returns the currently visible window hosting this dashboard, not a stale navigation stage. */
+    private Stage activeAdminStage() {
+        for (Window window : Window.getWindows()) {
+            if (window instanceof Stage candidate && candidate.isShowing() && candidate.getScene() != null
+                    && candidate.getScene().getRoot() == root) {
+                return candidate;
+            }
+        }
+        return stage != null && stage.isShowing() && stage.getScene() != null && stage.getScene().getRoot() == root
+                ? stage : null;
+    }
+
+    private void acknowledgeSosFromPopup(EmergencyReport report, Dialog<ButtonType> dialog, Button acknowledgeButton, Label error) {
+        AppSession.User user = AppSession.currentUser();
+        if (user == null) {
+            error.setText("Admin session is no longer available. Please sign in again.");
+            return;
+        }
+        acknowledgeButton.setDisable(true);
+        String stamp = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        EmergencyReport updated = new EmergencyReport(report.emergencyId(), report.trackingId(), report.userId(),
+                report.reporterName(), report.reporterPhone(), report.emergencyType(), report.description(),
+                report.peopleAffected(), report.landmark(), report.latitude(), report.longitude(), report.locationLabel(),
+                report.priority(), EmergencyReport.Status.ACKNOWLEDGED, report.assignedTeamId(), report.assignedTeamName(),
+                report.assignedTeamType(), report.adminNotes(), EmergencyReport.userStatusText(EmergencyReport.Status.ACKNOWLEDGED),
+                report.createdAt(), stamp, stamp, report.dispatchedAt(), report.helpArrivingAt(), report.resolvedAt(), report.source());
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                emergencyFirestore.updateEmergencyReport(updated, user.idToken());
+                Platform.runLater(() -> {
+                    emergencyReports = emergencyReports.stream()
+                            .map(item -> item.emergencyId().equals(updated.emergencyId()) ? updated : item).toList();
+                    dialog.close();
+                    if ("Emergency".equals(selectedSection)) root.setCenter(scroll(emergencyPage()));
+                });
+            } catch (Exception exception) {
+                System.err.println("EMERGENCY_SOS_MONITOR_DIAGNOSTIC action=ACKNOWLEDGE emergencyId="
+                        + report.emergencyId() + " result=failed error=" + exception.getMessage());
+                Platform.runLater(() -> {
+                    acknowledgeButton.setDisable(false);
+                    error.setText("Could not acknowledge this SOS. It remains reported; please retry.");
+                });
+            }
+        });
+    }
+
+    private void loadEmergencyReportsAsync() {
+        if (emergencyReportsLoading || !emergencyFirestore.isEnabled()) return;
+        AppSession.User user = AppSession.currentUser(); if (user == null) return;
+        emergencyReportsLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return emergencyFirestore.loadEmergencyReports(user.idToken()); }
+            catch (Exception exception) { System.err.println("EMERGENCY_ADMIN_UPDATE_DIAGNOSTIC action=LOAD result=failed error=" + exception.getMessage()); return null; }
+        }).thenAccept(records -> Platform.runLater(() -> {
+            emergencyReportsLoading = false;
+            if (records == null) emergencyReportsError = "Emergency reports cannot be loaded (Firestore permission denied). Deploy the scoped emergency_reports rules, then reopen this page.";
+            else { emergencyReports = records; emergencyReportsError = ""; }
+            if ("Emergency".equals(selectedSection)) root.setCenter(scroll(emergencyPage()));
+        }));
+    }
+
+    private void loadEmergencyServicesAsync() {
+        if (emergencyServicesLoading || !emergencyFirestore.isEnabled()) return;
+        AppSession.User user = AppSession.currentUser(); if (user == null) return;
+        emergencyServicesLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> { try { return emergencyFirestore.loadEmergencyServices(user.idToken()); }
+            catch (Exception exception) { System.err.println("EMERGENCY_SERVICE_READ_DIAGNOSTIC action=ADMIN_LOAD result=failed error=" + exception.getMessage()); return null; } })
+            .thenAccept(records -> Platform.runLater(() -> {
+                emergencyServicesLoading = false;
+                emergencyServicesPreviewMessage = "";
+                if (records == null) {
+                    emergencyServicesError = "permission";
+                    emergencyServicesPreviewActive = true;
+                    emergencyServicesFirestoreAvailable = false;
+                    emergencyServices = EmergencyDevelopmentServices.create();
+                } else if (records.isEmpty()) {
+                    emergencyServicesError = "";
+                    emergencyServicesPreviewActive = true;
+                    emergencyServicesFirestoreAvailable = true;
+                    emergencyServices = EmergencyDevelopmentServices.create();
+                } else {
+                    emergencyServices = records;
+                    emergencyServicesError = "";
+                    emergencyServicesPreviewActive = false;
+                    emergencyServicesFirestoreAvailable = true;
+                }
+                System.out.println("EMERGENCY_ADMIN_SERVICE_DIAGNOSTIC action=LOAD count=" + emergencyServices.size()
+                        + " source=" + (emergencyServicesPreviewActive ? "preview" : "firestore"));
+                if (!emergencyServicesPreviewActive) {
+                    emergencyServices.forEach(service -> System.out.println(
+                            "EMERGENCY_ADMIN_SERVICE_DIAGNOSTIC action=LOAD serviceId=" + service.serviceId()
+                                    + " name=" + service.name() + " category=" + service.category()
+                                    + " isActive=" + service.active()));
+                }
+                if ("Emergency".equals(selectedSection)) root.setCenter(scroll(emergencyPage()));
+            }));
+    }
+
+    private VBox emergencyServiceForm() {
+        EmergencyService s = editingEmergencyService;
+        TextField name = new TextField(s == null ? "" : s.name()), sub = new TextField(s == null ? "" : s.subType()), lat = new TextField(s == null ? "" : String.valueOf(s.latitude())), lon = new TextField(s == null ? "" : String.valueOf(s.longitude())), address = new TextField(s == null ? "" : s.address()), sector = new TextField(s == null ? "" : s.sector()), area = new TextField(s == null ? "" : s.area()), landmark = new TextField(s == null ? "" : s.landmark()), contact = new TextField(s == null ? "" : s.contactNumber()), alternate = new TextField(s == null ? "" : s.alternateContact());
+        TextArea desc = new TextArea(s == null ? "" : s.description());
+        TextArea facilities = new TextArea(s == null ? "" : String.join(", ", s.facilities()));
+        name.setPromptText("Enter service name"); sub.setPromptText("e.g. Emergency medical unit");
+        contact.setPromptText("Primary contact number"); alternate.setPromptText("Optional alternate contact");
+        sector.setPromptText("Sector or zone"); area.setPromptText("Area"); address.setPromptText("Street or access point"); landmark.setPromptText("Nearby landmark");
+        lat.setPromptText("20.00..."); lon.setPromptText("73.79...");
+        desc.setPromptText("Describe the emergency service and available support"); desc.setPrefRowCount(4);
+        facilities.setPromptText("ICU, First Aid, Ambulance, Oxygen, Wheelchair..."); facilities.setPrefRowCount(3);
+        ComboBox<String> category = combo(java.util.Arrays.stream(EmergencyService.Category.values()).map(Enum::name).toArray(String[]::new)); category.setValue(s == null ? "HOSPITAL" : s.category().name());
+        ComboBox<String> status = combo(java.util.Arrays.stream(EmergencyService.OperationalStatus.values()).map(Enum::name).toArray(String[]::new)); status.setValue(s == null ? "OPEN" : s.operationalStatus().name());
+        CheckBox active = new CheckBox("Active"); active.setSelected(s == null || s.active()); Label error = label("", "admin-emergency-form-error");
+        Button save = new Button("SAVE SERVICE"); save.getStyleClass().add("primary-button"); save.setOnAction(e -> { try {
+            double a=Double.parseDouble(lat.getText()), b=Double.parseDouble(lon.getText());
+            if(name.getText().isBlank()||Double.isNaN(a)||Double.isNaN(b)||a==0&&b==0||Math.abs(a)>90||Math.abs(b)>180) throw new IllegalArgumentException("Enter a valid name and latitude/longitude.");
+            if(a<19.4||a>20.5||b<73.4||b>74.4) { error.setText("Location appears outside the supported Nashik emergency area. Please verify."); return; }
+            if (!emergencyServicesFirestoreAvailable) { error.setText("Preview only — Firebase access unavailable."); return; }
+            String id=s==null?"svc-"+System.currentTimeMillis():s.serviceId();
+            saveEmergencyService(new EmergencyService(id,name.getText(),EmergencyService.Category.valueOf(category.getValue()),sub.getText(),desc.getText(),a,b,address.getText(),sector.getText(),area.getText(),landmark.getText(),contact.getText(),alternate.getText(),EmergencyService.OperationalStatus.valueOf(status.getValue()),java.util.Arrays.stream(facilities.getText().split(",")).map(String::trim).filter(x->!x.isBlank()).toList(),active.isSelected(),s==null?String.valueOf(System.currentTimeMillis()):s.createdAt(),"",s==null?"":"", ""),save, true);
+        } catch(Exception x){error.setText("Enter valid service values.");} });
+        Button cancel=new Button("CANCEL"); cancel.getStyleClass().add("admin-emergency-cancel"); cancel.setOnAction(e->showSection("Emergency"));
+
+        for (Node control : List.of(name, sub, lat, lon, address, sector, area, landmark, contact, alternate, desc, facilities, category, status)) {
+            control.getStyleClass().add("admin-emergency-input");
+            if (control instanceof javafx.scene.control.Control fxControl) fxControl.setMaxWidth(Double.MAX_VALUE);
+        }
+        GridPane basic = emergencyFormGrid(
+                emergencyFormField("Service Name", true, name), emergencyFormField("Category", true, category),
+                emergencyFormField("Sub Type", false, sub), emergencyFormField("Operational Status", true, status));
+        GridPane contactLocation = emergencyFormGrid(
+                emergencyFormField("Contact Number", false, contact), emergencyFormField("Alternate Contact", false, alternate),
+                emergencyFormField("Sector", false, sector), emergencyFormField("Area", false, area),
+                emergencyFormField("Address", false, address), emergencyFormField("Landmark", false, landmark));
+        GridPane coordinates = emergencyFormGrid(
+                emergencyFormField("Latitude", true, lat), emergencyFormField("Longitude", true, lon));
+        Label coordinateHint = label("Enter the exact service location used on the Emergency map.", "admin-emergency-form-hint");
+        VBox mapSelectorSlot = new VBox(8);
+        Button selectOnMap = new Button("SELECT ON MAP");
+        selectOnMap.getStyleClass().add("secondary-button");
+        selectOnMap.setOnAction(event -> openEmergencyLocationSelector(lat, lon, error, mapSelectorSlot));
+        VBox visibility = new VBox(3, label("Service Visibility", "admin-emergency-form-label"), active,
+                label("Active services are visible on the User Emergency page.", "admin-emergency-form-hint"));
+        visibility.getStyleClass().add("admin-emergency-visibility");
+        HBox actions = new HBox(10, cancel, save); actions.setAlignment(Pos.CENTER_RIGHT); actions.getStyleClass().add("admin-emergency-form-actions");
+        VBox form = new VBox(16);
+        form.getStyleClass().add("admin-emergency-service-form");
+        if (emergencyServicesPreviewActive) form.getChildren().add(label(emergencyServicesPreviewStatus(), "admin-emergency-preview-banner"));
+        form.getChildren().addAll(
+                emergencyFormSection("BASIC INFORMATION", basic),
+                emergencyFormSection("CONTACT & LOCATION", contactLocation, label("LOCATION COORDINATES", "admin-emergency-form-subheading"), coordinates, coordinateHint, selectOnMap, mapSelectorSlot),
+                emergencyFormSection("SERVICE DETAILS", emergencyFormField("Description", false, desc), emergencyFormField("Facilities", false, facilities), visibility),
+                error, actions);
+        return pageShell("Emergency Service", "Add or edit an Admin-managed emergency service.", infoPanel("SERVICE INFORMATION", form));
+    }
+
+    private GridPane emergencyFormGrid(Node... fields) {
+        GridPane grid = new GridPane(); grid.setHgap(16); grid.setVgap(12);
+        for (int i = 0; i < fields.length; i++) { grid.add(fields[i], i % 2, i / 2); GridPane.setHgrow(fields[i], Priority.ALWAYS); }
+        return grid;
+    }
+
+    private VBox emergencyFormField(String title, boolean required, Node control) {
+        Label fieldTitle = label(title + (required ? " *" : ""), "admin-emergency-form-label");
+        VBox field = new VBox(5, fieldTitle, control); field.getStyleClass().add("admin-emergency-form-field");
+        GridPane.setHgrow(field, Priority.ALWAYS); return field;
+    }
+
+    private VBox emergencyFormSection(String title, Node... content) {
+        VBox section = new VBox(10, label(title, "admin-emergency-form-section"));
+        section.getChildren().addAll(content); section.getStyleClass().add("admin-emergency-form-section-box");
+        return section;
+    }
+
+    private void openEmergencyLocationSelector(TextField latitudeField, TextField longitudeField, Label validation,
+            VBox selectorSlot) {
+        String previousLatitude = latitudeField.getText();
+        String previousLongitude = longitudeField.getText();
+        double initialLatitude = validCoordinateText(previousLatitude, true) ? Double.parseDouble(previousLatitude.trim()) : 20.0097;
+        double initialLongitude = validCoordinateText(previousLongitude, false) ? Double.parseDouble(previousLongitude.trim()) : 73.7920;
+        Label selected = label("Selected Location\nLatitude: " + formatCoordinate(initialLatitude)
+                + "\nLongitude: " + formatCoordinate(initialLongitude), "admin-emergency-form-hint");
+        EmergencyLocationSelector selector = new EmergencyLocationSelector((latitude, longitude) -> {
+            latitudeField.setText(formatCoordinate(latitude));
+            longitudeField.setText(formatCoordinate(longitude));
+            selected.setText("Selected Location\nLatitude: " + formatCoordinate(latitude)
+                    + "\nLongitude: " + formatCoordinate(longitude));
+            if (!isNashikEmergencyCoordinate(latitude, longitude)) {
+                validation.setText("Location appears outside the supported Nashik emergency area. Please verify.");
+            } else {
+                validation.setText("");
+            }
+        });
+        selector.setInitialLocation(initialLatitude, initialLongitude);
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("admin-emergency-cancel");
+        cancel.setOnAction(event -> {
+            latitudeField.setText(previousLatitude);
+            longitudeField.setText(previousLongitude);
+            selectorSlot.getChildren().clear();
+            validation.setText("");
+        });
+        Button use = new Button("USE THIS LOCATION");
+        use.getStyleClass().add("primary-button");
+        use.setOnAction(event -> selectorSlot.getChildren().clear());
+        HBox actions = new HBox(10, cancel, createSpacer(), use);
+        actions.setAlignment(Pos.CENTER_RIGHT);
+        VBox selectorCard = new VBox(9, label("Select Emergency Service Location", "admin-emergency-form-subheading"),
+                selector.node(), selected, actions);
+        selectorCard.getStyleClass().add("admin-emergency-location-selector");
+        selectorSlot.getChildren().setAll(selectorCard);
+    }
+
+    private boolean validCoordinateText(String value, boolean latitude) {
+        try {
+            double coordinate = Double.parseDouble(value == null ? "" : value.trim());
+            return Double.isFinite(coordinate) && coordinate != 0D
+                    && (latitude ? coordinate >= -90D && coordinate <= 90D : coordinate >= -180D && coordinate <= 180D);
+        } catch (NumberFormatException exception) {
+            return false;
+        }
+    }
+
+    private boolean isNashikEmergencyCoordinate(double latitude, double longitude) {
+        return latitude >= 19.4D && latitude <= 20.5D && longitude >= 73.4D && longitude <= 74.4D;
+    }
+
+    private String formatCoordinate(double coordinate) {
+        return String.format(java.util.Locale.ROOT, "%.5f", coordinate);
+    }
+    private EmergencyService copyActive(EmergencyService s, boolean value){return new EmergencyService(s.serviceId(),s.name(),s.category(),s.subType(),s.description(),s.latitude(),s.longitude(),s.address(),s.sector(),s.area(),s.landmark(),s.contactNumber(),s.alternateContact(),s.operationalStatus(),s.facilities(),value,s.createdAt(),"",s.createdBy(),"");}
+    private void saveEmergencyService(EmergencyService s, Button b) {
+        saveEmergencyService(s, b, false);
+    }
+    /** Preview-row toggles are local; an explicit form save may create the first real record. */
+    private void saveEmergencyService(EmergencyService s, Button b, boolean explicitFormSave) {
+        if (emergencyServicesPreviewActive && !explicitFormSave) { updatePreviewService(s); return; }
+        if (!emergencyServicesFirestoreAvailable) {
+            emergencyServicesPreviewMessage = "Preview only — Firebase access unavailable.";
+            showSection("Emergency");
+            return;
+        }
+        b.setDisable(true); AppSession.User u=AppSession.currentUser();
+        java.util.concurrent.CompletableFuture.runAsync(()->{try{emergencyFirestore.saveEmergencyService(s,u.idToken());Platform.runLater(this::loadEmergencyServicesAsync);}
+            catch(Exception x){Platform.runLater(()->{b.setDisable(false);emergencyServicesError="permission";emergencyServicesPreviewMessage="Preview only — Firebase access unavailable.";showSection("Emergency");});}});
+    }
+
+    private void updatePreviewService(EmergencyService updated) {
+        emergencyServices = emergencyServices.stream().map(service -> service.serviceId().equals(updated.serviceId()) ? updated : service).toList();
+        emergencyServicesPreviewMessage = emergencyServicesFirestoreAvailable
+                ? "Preview change only — no Firestore service records found."
+                : "Preview only — Firebase access unavailable.";
+        showSection("Emergency");
+    }
+
+    private void deleteEmergencyService(EmergencyService s, Button b) {
+        if (!confirm("Delete Emergency Service", "Delete " + s.name() + "?")) return;
+        if (emergencyServicesPreviewActive) {
+            emergencyServices = emergencyServices.stream().filter(service -> !service.serviceId().equals(s.serviceId())).toList();
+            emergencyServicesPreviewMessage = emergencyServicesFirestoreAvailable
+                    ? "Preview deletion only — no Firestore service records found."
+                    : "Preview only — Firebase access unavailable.";
+            showSection("Emergency");
+            return;
+        }
+        b.setDisable(true); AppSession.User u=AppSession.currentUser();
+        java.util.concurrent.CompletableFuture.runAsync(()->{try{emergencyFirestore.deleteEmergencyService(s.serviceId(),u.idToken());Platform.runLater(this::loadEmergencyServicesAsync);}
+            catch(Exception x){Platform.runLater(()->{b.setDisable(false);emergencyServicesError="permission";emergencyServicesPreviewMessage="Preview only — Firebase access unavailable.";showSection("Emergency");});}});
+    }
+
+    private String emergencyServicesPreviewStatus() {
+        if (!emergencyServicesPreviewMessage.isBlank()) return emergencyServicesPreviewMessage;
+        return emergencyServicesFirestoreAvailable
+                ? "Local preview services — no Firestore service records found."
+                : "Local preview services — Firebase access unavailable.";
+    }
+
+    private void updateEmergencyFromAdmin(EmergencyReport report, String priorityValue, String statusValue, String teamName, String notes, Button button) {
+        EmergencyReport.Status status = EmergencyReport.Status.valueOf(statusValue);
+        if (status == EmergencyReport.Status.TEAM_DISPATCHED && (teamName == null || "Unassigned".equals(teamName))) { showInfo("Assign a response team", "Assign a team before marking it dispatched."); return; }
+        long now = System.currentTimeMillis(); String stamp = String.valueOf(now);
+        String team = "Unassigned".equals(teamName) ? "" : teamName;
+        EmergencyReport updated = new EmergencyReport(report.emergencyId(), report.trackingId(), report.userId(), report.reporterName(), report.reporterPhone(), report.emergencyType(), report.description(), report.peopleAffected(), report.landmark(), report.latitude(), report.longitude(), report.locationLabel(), EmergencyReport.Priority.valueOf(priorityValue), status, team.isBlank() ? "" : team.toLowerCase().replace(' ', '-'), team, team.isBlank() ? "" : team.split(" ")[0], notes, EmergencyReport.userStatusText(status), report.createdAt(), stamp,
+                status.ordinal() >= EmergencyReport.Status.ACKNOWLEDGED.ordinal() ? valueOr(stamp, report.acknowledgedAt()) : report.acknowledgedAt(),
+                status.ordinal() >= EmergencyReport.Status.TEAM_DISPATCHED.ordinal() ? valueOr(stamp, report.dispatchedAt()) : report.dispatchedAt(),
+                status.ordinal() >= EmergencyReport.Status.HELP_ARRIVING.ordinal() ? valueOr(stamp, report.helpArrivingAt()) : report.helpArrivingAt(),
+                status == EmergencyReport.Status.RESOLVED ? stamp : report.resolvedAt(), report.source());
+        button.setDisable(true); AppSession.User user = AppSession.currentUser();
+        java.util.concurrent.CompletableFuture.runAsync(() -> { try { emergencyFirestore.updateEmergencyReport(updated, user.idToken()); Platform.runLater(this::loadEmergencyReportsAsync); }
+            catch (Exception exception) { System.err.println("EMERGENCY_ADMIN_UPDATE_DIAGNOSTIC action=UPDATE emergencyId=" + report.emergencyId() + " result=failed error=" + exception.getMessage()); Platform.runLater(() -> button.setDisable(false)); } });
     }
 
     private VBox reportsPage() {

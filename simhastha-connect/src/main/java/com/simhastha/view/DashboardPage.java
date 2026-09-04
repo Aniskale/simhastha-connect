@@ -12,6 +12,10 @@ import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.service.CloudinaryService;
 import com.simhastha.service.AuthService;
 import com.simhastha.model.CloudinaryUploadResult;
+import com.simhastha.model.EmergencyAlert;
+import com.simhastha.model.EmergencyDevelopmentServices;
+import com.simhastha.model.EmergencyReport;
+import com.simhastha.model.EmergencyService;
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
 import com.simhastha.service.GhatService;
@@ -74,6 +78,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.Slider;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.control.Tooltip;
 import javafx.scene.image.Image;
@@ -186,6 +191,34 @@ public class DashboardPage {
     private String editedProfileBirthDate = "15 Aug 1995";
     private String editedProfileGender = "Male";
     private String profileSuccessMessage;
+    private final FirestoreGateway emergencyFirestore = new FirestoreGateway(FirebaseConfig.load());
+    private List<EmergencyServiceDemo> emergencyServices = List.of();
+    private boolean emergencyServicesLoading;
+    private String emergencyServicesError = "";
+    private boolean usingEmergencyDevelopmentFallback;
+    private EmergencyAlert activeEmergencyAlert;
+    private boolean emergencyAlertsLoading;
+    private String emergencyAlertsError = "";
+    private boolean usingEmergencyAlertPreview;
+    private String selectedEmergencyCategory = "All";
+    private String selectedEmergencyFilter = "All";
+    private EmergencyServiceDemo selectedEmergencyFacility;
+    private EmergencyReport currentEmergency;
+    private EmergencyDemoRequest currentDemoEmergency;
+    private boolean emergencySubmissionInProgress;
+    private boolean emergencyStateLoading;
+    private boolean emergencyPageActive;
+    private Timeline emergencyStatusRefresh;
+    private boolean emergencyReportFormVisible;
+    private boolean emergencyDetailsExpanded;
+    private boolean sosConfirmationVisible;
+    private String emergencyFeedback = "";
+    private String emergencyMapMessage = "";
+    private static final double EMERGENCY_DEMO_USER_LATITUDE = 20.0105;
+    private static final double EMERGENCY_DEMO_USER_LONGITUDE = 73.7925;
+    private EmergencyMapView emergencyMapView;
+    private String emergencyMapFocusId = "";
+    private boolean emergencyRouteActive;
 
     public Scene createScene(Stage stage) {
         hydrateProfilePhotoFromSession();
@@ -312,6 +345,8 @@ public class DashboardPage {
     private void showHomePage() {
         stopGhatRefresh();
         stopScheduleRefresh();
+        emergencyPageActive = false;
+        stopEmergencyRefresh();
         setActiveModule("home");
         root.setCenter(scroll(createHomePage()));
     }
@@ -324,6 +359,12 @@ public class DashboardPage {
     if (!"schedule".equals(module)) {
         stopScheduleRefresh();
     }
+        emergencyPageActive = "emergency".equals(module);
+        if (emergencyPageActive) {
+            startEmergencyRefresh();
+        } else {
+            stopEmergencyRefresh();
+        }
         setActiveModule(module);
         if ("stay".equals(module)) {
             root.setCenter(scroll(stayPage()));
@@ -334,7 +375,12 @@ public class DashboardPage {
             case "transport" -> transportPage();
             case "puja" -> pujaPage();
             case "ghat" -> ghatsPage();
-            case "emergency" -> emergencyPage();
+            case "emergency" -> {
+                loadCurrentEmergencyAsync();
+                loadEmergencyServicesAsync();
+                loadEmergencyAlertsAsync();
+                yield emergencyPage();
+            }
             case "lost" -> lostFoundPage();
             case "schedule" -> schedulePage();
             case "business" -> businessPage();
@@ -3573,22 +3619,855 @@ public class DashboardPage {
     private String coordinateText(Ghat ghat) { return ghat.latitude() == null || ghat.longitude() == null ? "Nashik Godavari zone coordinates will be updated by administration." : ghat.latitude() + ", " + ghat.longitude(); }
 
     private VBox emergencyPage() {
-        if (!AppDataStore.items("emergency").isEmpty()) {
-            return pageShell("Emergency & Medical", "Important emergency numbers and safety support.",
-                    infoPanel("Emergency Safety Tips", "Stay calm\nFollow police instructions\nUse official help booths\nKeep ID with you\nAvoid overcrowded routes"),
-                    adminControlledGrid("emergency", "Verified"));
+        VBox page = new VBox(12, emergencyTopControls(), emergencyHeader());
+        page.getStyleClass().addAll("pilgrim-dashboard-main", "emergency-page");
+        page.setPadding(new Insets(12, 22, 28, 22));
+        if (!emergencyFeedback.isBlank()) {
+            page.getChildren().add(emergencyFeedbackCard());
         }
-        return pageShell("Emergency & Medical", "Important emergency numbers and safety support.",
-                infoPanel("Emergency Safety Tips", "Stay calm\nFollow police instructions\nUse official help booths\nKeep ID with you\nAvoid overcrowded routes"),
-                twoColumnGrid(
-                        emergencyCard("Unified Emergency", "112", "Police, fire and medical help"),
-                        emergencyCard("Ambulance", "108", "Medical emergency support"),
-                        emergencyCard("Police", "100 / 112", "Nashik city emergency control"),
-                        emergencyCard("Fire", "101", "Fire and rescue support"),
-                        emergencyCard("Women Helpline", "1091", "Women safety support"),
-                        emergencyCard("Child Helpline", "1098", "Child safety support"),
-                        emergencyCard("Cyber Crime", "1930", "Cyber fraud helpline"),
-                        emergencyCard("District Disaster Management Nashik", "1077", "Disaster control support")));
+
+        VBox left = new VBox(12, immediateHelpSection(), emergencyStatusRow(), emergencyServicesSection(), nearbyServicesSection());
+        if (emergencyReportFormVisible) left.getChildren().add(emergencyReportForm());
+        if (currentEmergency != null) left.getChildren().add(emergencyStatusSection());
+        left.getStyleClass().add("emergency-left-column");
+        left.setMinWidth(0);
+        left.setMaxWidth(Double.MAX_VALUE);
+
+        VBox right = new VBox(12, emergencyMapSection(), selectedFacilitySection(), kumbhAlertSection());
+        right.getStyleClass().add("emergency-right-column");
+        right.setMinWidth(0);
+        right.setMaxWidth(Double.MAX_VALUE);
+
+        GridPane layout = new GridPane();
+        layout.getStyleClass().add("emergency-content-layout");
+        layout.setHgap(14);
+        layout.setVgap(14);
+        javafx.scene.layout.ColumnConstraints leftColumn = new javafx.scene.layout.ColumnConstraints();
+        leftColumn.setPercentWidth(35);
+        leftColumn.setHgrow(Priority.ALWAYS);
+        leftColumn.setFillWidth(true);
+        javafx.scene.layout.ColumnConstraints rightColumn = new javafx.scene.layout.ColumnConstraints();
+        rightColumn.setPercentWidth(65);
+        rightColumn.setHgrow(Priority.ALWAYS);
+        rightColumn.setFillWidth(true);
+        layout.getColumnConstraints().addAll(leftColumn, rightColumn);
+        layout.add(left, 0, 0);
+        layout.add(right, 1, 0);
+        GridPane.setHgrow(left, Priority.ALWAYS);
+        GridPane.setHgrow(right, Priority.ALWAYS);
+        GridPane.setFillWidth(left, true);
+        GridPane.setFillWidth(right, true);
+        layout.setMaxWidth(Double.MAX_VALUE);
+        page.getChildren().add(layout);
+        return page;
+    }
+
+    private HBox emergencyTopControls() {
+        Label location = label("Nashik, Maharashtra", "emergency-top-meta");
+        Label weather = label("Clear  •  29°C", "emergency-top-meta");
+        Label dateTime = label(java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("dd MMM uuuu  •  h:mm a")), "emergency-top-meta");
+        HBox actions = new HBox(10, location, weather, dateTime, createSpacer(), AppUi.createThemeToggle(),
+                roundButton("\uE7F4", "Notifications"), roundButton("\uE77B", "Profile"));
+        actions.getStyleClass().addAll("pilgrim-top-actions", "emergency-top-actions");
+        actions.setAlignment(Pos.CENTER_LEFT);
+        return actions;
+    }
+
+    private HBox emergencyHeader() {
+        Label icon = AppUi.symbolIcon("\uE95E", "emergency-header-icon");
+        Label title = label("Emergency & Safety", "emergency-header-title");
+        Label subtitle = label("Get immediate help or find nearest emergency services", "emergency-header-subtitle");
+        VBox copy = new VBox(3, title, subtitle);
+        HBox header = new HBox(13, icon, copy);
+        header.getStyleClass().add("emergency-header");
+        header.setAlignment(Pos.CENTER_LEFT);
+        return header;
+    }
+
+    private VBox immediateHelpSection() {
+        VBox sos = emergencyActionCard("\uE95E", "SOS EMERGENCY", "Tap for instant critical help", "SEND SOS", "emergency-sos-card");
+        VBox report = emergencyActionCard("\uE7BA", "REPORT EMERGENCY", "Provide details & get help", "REPORT NOW", "emergency-report-card");
+        HBox cards = new HBox(10, sos, report);
+        HBox.setHgrow(sos, Priority.ALWAYS);
+        HBox.setHgrow(report, Priority.ALWAYS);
+        cards.getStyleClass().add("emergency-action-row");
+        VBox section = new VBox(10, emergencySectionTitle("NEED IMMEDIATE HELP?"), cards);
+        if (sosConfirmationVisible) section.getChildren().add(sosConfirmationCard());
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private VBox emergencyActionCard(String iconText, String titleText, String detailText, String actionText, String style) {
+        Button action = new Button(actionText);
+        action.getStyleClass().add("emergency-action-button");
+        action.setMaxWidth(Double.MAX_VALUE);
+        action.setOnAction(event -> {
+            if ("SEND SOS".equals(actionText)) {
+                sosConfirmationVisible = true;
+            } else {
+                emergencyReportFormVisible = true;
+            }
+            emergencyFeedback = "";
+            refreshEmergencyPage();
+        });
+        VBox card = new VBox(8, AppUi.symbolIcon(iconText, "emergency-action-icon"),
+                label(titleText, "emergency-action-title"), label(detailText, "emergency-action-detail"), action);
+        card.getStyleClass().addAll("emergency-action-card", style);
+        card.setMaxWidth(Double.MAX_VALUE);
+        VBox.setVgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private HBox emergencyStatusRow() {
+        HBox row = new HBox(8,
+                emergencyStatusCard("\uE707", "Current Location", "Nashik Kumbh Zone", "location"),
+                emergencyStatusCard("\uE774", "GPS Accuracy", "High", "accuracy"),
+                emergencyStatusCard("\uE73E", "You Are Safe", "We are here to help", "safe"));
+        row.getStyleClass().add("emergency-status-row");
+        return row;
+    }
+
+    private VBox emergencyStatusCard(String iconText, String titleText, String detailText, String type) {
+        VBox card = new VBox(3, AppUi.symbolIcon(iconText, "emergency-status-icon"),
+                label(titleText, "emergency-status-title"), label(detailText, "emergency-status-detail"));
+        card.getStyleClass().addAll("emergency-status-card", "emergency-status-" + type);
+        HBox.setHgrow(card, Priority.ALWAYS);
+        return card;
+    }
+
+    private VBox emergencyServicesSection() {
+        GridPane grid = new GridPane();
+        grid.setHgap(8);
+        grid.setVgap(8);
+        String[][] services = {
+                { "\uE91D", "Hospital", "hospital" }, { "\uE7B8", "Medical Camp", "camp" },
+                { "\uE95E", "First Aid Center", "aid" }, { "\uE7F2", "Ambulance", "ambulance" },
+                { "\uE7FC", "Police Help Center", "police" }, { "\uE894", "Fire / Safety Unit", "fire" },
+                { "\uE897", "Emergency Help Desk", "desk" }, { "\uE7E8", "Emergency Exit", "exit" } };
+        for (int index = 0; index < services.length; index++) {
+            VBox card = emergencyServiceCard(services[index][0], services[index][1], services[index][2]);
+            grid.add(card, index % 4, index / 4);
+            GridPane.setHgrow(card, Priority.ALWAYS);
+        }
+        Button nearestMedical = new Button("FIND NEAREST MEDICAL HELP");
+        nearestMedical.getStyleClass().add("emergency-nearest-medical-button");
+        nearestMedical.setMaxWidth(Double.MAX_VALUE);
+        nearestMedical.setOnAction(event -> selectNearestMedicalHelp());
+        VBox section = new VBox(10, emergencySectionTitle("FIND EMERGENCY SERVICES"), grid, nearestMedical);
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private VBox emergencyServiceCard(String iconText, String titleText, String category) {
+        VBox card = new VBox(5, AppUi.symbolIcon(iconText, "emergency-service-icon"), label(titleText, "emergency-service-title"));
+        card.getStyleClass().addAll("emergency-service-card", "emergency-service-" + category);
+        String filter = categoryForServiceCard(category);
+        if (filter.equals(selectedEmergencyCategory)) card.getStyleClass().add("emergency-service-card-selected");
+        card.setOnMouseClicked(event -> selectEmergencyCategory(filter));
+        return card;
+    }
+
+    private VBox nearbyServicesSection() {
+        VBox rows = new VBox(7);
+        List<EmergencyServiceDemo> services = filteredEmergencyServices();
+        if (emergencyServicesLoading) {
+            rows.getChildren().add(label("Loading emergency services...", "emergency-empty-state"));
+        } else if (!emergencyServicesError.isBlank() && !usingEmergencyDevelopmentFallback) {
+            Button retry = new Button("RETRY"); retry.getStyleClass().add("emergency-secondary-button"); retry.setOnAction(event -> loadEmergencyServicesAsync());
+            rows.getChildren().addAll(label("Emergency service data is currently unavailable.", "emergency-empty-state"), retry);
+        } else if (services.isEmpty()) {
+            rows.getChildren().add(label("No emergency service locations are currently available.", "emergency-empty-state"));
+        } else {
+            if (usingEmergencyDevelopmentFallback) {
+                rows.getChildren().add(label("Emergency Service Locations", "emergency-empty-state"));
+            }
+            services.forEach(service -> rows.getChildren().add(nearbyServiceRow(service)));
+        }
+        Button viewAll = new Button("VIEW ALL SERVICES");
+        viewAll.getStyleClass().add("emergency-text-button");
+        viewAll.setOnAction(event -> selectEmergencyFilter("All"));
+        VBox section = new VBox(10, emergencySectionTitle("NEARBY SERVICES"), rows, viewAll);
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private HBox nearbyServiceRow(EmergencyServiceDemo service) {
+        VBox copy = new VBox(2, label(service.name(), "emergency-nearby-name"), label(service.subType(), "emergency-nearby-type"));
+        Label open = label(displayEmergencyValue(service.status()), "emergency-open-status");
+        Label arrow = label(">", "emergency-nearby-arrow");
+        HBox row = new HBox(9, AppUi.symbolIcon(emergencyIcon(service.category()), "emergency-nearby-icon"), copy, createSpacer(),
+                label(formatEmergencyDistance(emergencyDistanceMeters(service)), "emergency-distance"), open, arrow);
+        row.getStyleClass().add("emergency-nearby-card");
+        if (selectedEmergencyFacility != null && service.id().equals(selectedEmergencyFacility.id())) row.getStyleClass().add("emergency-nearby-card-selected");
+        row.setOnMouseClicked(event -> selectEmergencyFacility(service));
+        row.setAlignment(Pos.CENTER_LEFT);
+        return row;
+    }
+
+    private VBox emergencyMapSection() {
+        FlowPane chips = new FlowPane(7, 7);
+        String[] filters = { "All", "Hospital", "Medical Camp", "Ambulance", "Police", "Fire / Safety",
+                "First Aid", "Emergency Help Desk", "Exit" };
+        for (String filter : filters) {
+            Button chip = new Button(filter);
+            chip.getStyleClass().add("emergency-filter-chip");
+            if (filter.equals(selectedEmergencyFilter)) chip.getStyleClass().add("emergency-filter-chip-selected");
+            chip.setOnAction(event -> selectEmergencyFilter(filter));
+            chips.getChildren().add(chip);
+        }
+        StackPane map = buildEmergencyMapShell();
+        VBox section = new VBox(11, chips, map);
+        section.getStyleClass().addAll("emergency-section", "emergency-map-container");
+        return section;
+    }
+
+    private StackPane buildEmergencyMapShell() {
+        try {
+            EmergencyMapView mapView = emergencyMapView();
+            if (mapView == null) return emergencyMapFallback();
+            mapView.detach();
+            List<EmergencyServiceDemo> filteredServices = filteredEmergencyServices();
+            mapView.updateMarkers(emergencyMarkersJson(filteredServices),
+                    selectedEmergencyFacility == null ? "" : selectedEmergencyFacility.id());
+            if (!emergencyMapFocusId.isBlank()) mapView.focusFacility(emergencyMapFocusId);
+            if (emergencyRouteActive && selectedEmergencyFacility != null) mapView.drawApproximateRoute(selectedEmergencyFacility.latitude(), selectedEmergencyFacility.longitude());
+            else mapView.clearRoute();
+            if (activeEmergencyAlert != null && activeEmergencyAlert.hasLocation()) {
+                mapView.showEmergencyAlert(activeEmergencyAlert);
+            } else {
+                mapView.clearEmergencyAlert();
+            }
+
+            Button centerOnMe = new Button("CENTER ON ME");
+            centerOnMe.getStyleClass().add("emergency-map-control");
+            centerOnMe.setOnAction(event -> mapView.centerOnDemoLocation());
+            StackPane map = new StackPane(mapView.node(), centerOnMe);
+            map.getStyleClass().add("emergency-map-shell");
+            map.setMinHeight(360);
+            StackPane.setAlignment(centerOnMe, Pos.TOP_RIGHT);
+            StackPane.setMargin(centerOnMe, new Insets(10));
+            return map;
+        } catch (RuntimeException | LinkageError error) {
+            System.err.println("EMERGENCY_MAP_DIAGNOSTIC stage=PAGE_BUILD error=" + error);
+            return emergencyMapFallback();
+        }
+    }
+
+    private StackPane emergencyMapFallback() {
+        Label title = label("Nashik Emergency Map unavailable", "emergency-map-failure-title");
+        Label detail = label("Check internet connection or retry.", "emergency-map-failure-detail");
+        Button retry = new Button("RETRY MAP");
+        retry.getStyleClass().add("emergency-secondary-button");
+        retry.setOnAction(event -> { emergencyMapView = null; refreshEmergencyPage(); });
+        VBox fallback = new VBox(7, title, detail, retry);
+        fallback.setAlignment(Pos.CENTER);
+        StackPane map = new StackPane(fallback);
+        map.getStyleClass().addAll("emergency-map-shell", "emergency-map-failure");
+        map.setMinHeight(360);
+        return map;
+    }
+
+    private VBox selectedFacilitySection() {
+        EmergencyServiceDemo facility = selectedEmergencyFacility;
+        if (facility == null) {
+            VBox empty = new VBox(8, emergencySectionTitle("SELECTED FACILITY"), label("Select a nearby service to view facility details.", "emergency-empty-state"));
+            empty.getStyleClass().add("emergency-facility-details");
+            return empty;
+        }
+        HBox heading = new HBox(10, AppUi.symbolIcon(emergencyIcon(facility.category()), "emergency-facility-icon"),
+                new VBox(2, label(facility.name(), "emergency-facility-name"), label(facility.subType(), "emergency-facility-type")),
+                createSpacer(), label(displayEmergencyValue(facility.status()), "emergency-open-status"));
+        HBox details = new HBox(13, label("Distance: " + formatEmergencyDistance(emergencyDistanceMeters(facility)), "emergency-facility-detail"), label("Contact: " + displayEmergencyValue(facility.contact()), "emergency-facility-detail"),
+                label("Sector: " + displayEmergencyValue(facility.sector()), "emergency-facility-detail"));
+        FlowPane facilities = new FlowPane(6, 6);
+        for (String item : facility.facilities()) facilities.getChildren().add(label(item, "emergency-facility-tag"));
+        Button directions = emergencyPlaceholderButton("GET DIRECTIONS", "emergency-secondary-button");
+        directions.setOnAction(event -> {
+            emergencyRouteActive = true;
+            emergencyMapFocusId = facility.id();
+            emergencyFeedback = "Approximate route preview shown for " + facility.name() + ".";
+            refreshEmergencyPage();
+        });
+        Button call = emergencyPlaceholderButton("CALL", "emergency-primary-button");
+        call.setOnAction(event -> showEmergencyFeedback(facility.contact() == null || facility.contact().isBlank() ? "Contact information is not available." : "Emergency Contact: " + facility.contact()));
+        Button detailsButton = emergencyPlaceholderButton(emergencyDetailsExpanded ? "HIDE DETAILS" : "VIEW DETAILS", "emergency-secondary-button");
+        detailsButton.setOnAction(event -> { emergencyDetailsExpanded = !emergencyDetailsExpanded; refreshEmergencyPage(); });
+        HBox actions = new HBox(8, directions, call, detailsButton);
+        VBox panel = new VBox(10, heading, details, facilities, actions);
+        if (emergencyRouteActive) panel.getChildren().add(emergencyRouteSummary(facility));
+        if (emergencyDetailsExpanded) panel.getChildren().add(expandedFacilityDetails(facility));
+        panel.getStyleClass().add("emergency-facility-details");
+        return panel;
+    }
+
+    private Button emergencyPlaceholderButton(String text, String style) {
+        Button button = new Button(text);
+        button.getStyleClass().add(style);
+        return button;
+    }
+
+    private VBox kumbhAlertSection() {
+        if (emergencyAlertsLoading) return alertCard("KUMBH ALERT", "Loading emergency alerts...");
+        if (activeEmergencyAlert == null) return alertCard("KUMBH ALERT", "No active emergency alerts.");
+        Button view = new Button("VIEW ON MAP");
+        view.getStyleClass().add("emergency-alert-action");
+        boolean hasMapLocation = activeEmergencyAlert.hasLocation();
+        view.setDisable(!hasMapLocation);
+        view.setOnAction(event -> {
+            if (!activeEmergencyAlert.hasLocation()) return;
+            EmergencyMapView mapView = emergencyMapView();
+            if (mapView != null) {
+                mapView.focusEmergencyAlert(activeEmergencyAlert);
+                emergencyMapMessage = activeEmergencyAlert.title() + " emergency alert selected.";
+                emergencyFeedback = "Emergency alert location selected on the Nashik map.";
+            }
+            refreshEmergencyPage();
+        });
+        if (!hasMapLocation) view.setText("MAP LOCATION UNAVAILABLE");
+        HBox heading = new HBox(8, label("KUMBH ALERT", "emergency-alert-title"), createSpacer(),
+                label(activeEmergencyAlert.severity().name(), "emergency-alert-title"));
+        heading.setAlignment(Pos.CENTER_LEFT);
+        VBox content = new VBox(3,
+                label(displayEmergencyValue(activeEmergencyAlert.title()), "emergency-alert-text"),
+                label(displayEmergencyValue(activeEmergencyAlert.message()), "emergency-alert-text"));
+        if (!activeEmergencyAlert.locationLabel().isBlank()) {
+            content.getChildren().add(label("Location: " + activeEmergencyAlert.locationLabel(), "emergency-alert-text"));
+        }
+        if (!activeEmergencyAlert.affectedArea().isBlank()) {
+            content.getChildren().add(label("Affected area: " + activeEmergencyAlert.affectedArea(), "emergency-alert-text"));
+        }
+        VBox alert = new VBox(5, heading, content, view);
+        alert.getStyleClass().add("emergency-alert-card");
+        return alert;
+    }
+    private VBox alertCard(String title,String text){ VBox alert=new VBox(5,label(title,"emergency-alert-title"),label(text,"emergency-alert-text")); alert.getStyleClass().add("emergency-alert-card"); return alert; }
+
+    private void selectEmergencyCategory(String category) {
+        applyEmergencyFilter(category);
+    }
+
+    private void selectEmergencyFilter(String filter) {
+        applyEmergencyFilter(filter);
+    }
+
+    /** Shared by sidebar category cards and map chips to keep list and marker state identical. */
+    private void applyEmergencyFilter(String filter) {
+        selectedEmergencyFilter = filter == null ? "All" : filter;
+        selectedEmergencyCategory = selectedEmergencyFilter;
+        emergencyMapMessage = "";
+        // A category change should display the complete result set, not retain a prior row's map focus.
+        emergencyMapFocusId = "";
+        reconcileEmergencySelectionForFilter();
+        refreshEmergencyPage();
+    }
+
+    private void reconcileEmergencySelectionForFilter() {
+        if (selectedEmergencyFacility == null) return;
+
+        EmergencyServiceDemo previous = selectedEmergencyFacility;
+        EmergencyServiceDemo latest = filteredEmergencyServices().stream()
+                .filter(service -> service.id().equals(previous.id()))
+                .findFirst()
+                .orElse(null);
+        if (latest == null) {
+            // The document was deleted, deactivated, or filtered out: never leave a stale
+            // details card or route on the page.
+            selectedEmergencyFacility = null;
+            emergencyDetailsExpanded = false;
+            emergencyMapFocusId = "";
+            clearEmergencyRouteForUnavailableFacility();
+            return;
+        }
+
+        // A reload may contain an Admin edit for the same service id. Keep the selection
+        // attached to that document, not to the old immutable display snapshot.
+        selectedEmergencyFacility = latest;
+        boolean locationChanged = Double.compare(previous.latitude(), latest.latitude()) != 0
+                || Double.compare(previous.longitude(), latest.longitude()) != 0;
+        if (locationChanged) clearEmergencyRouteForUnavailableFacility();
+    }
+
+    private void clearEmergencyRouteForUnavailableFacility() {
+        if (!emergencyRouteActive) return;
+        emergencyRouteActive = false;
+        if (emergencyMapView != null) emergencyMapView.clearRoute();
+    }
+
+    private void selectEmergencyFacility(EmergencyServiceDemo facility) {
+        selectedEmergencyFacility = facility;
+        emergencyDetailsExpanded = false;
+        emergencyMapFocusId = facility.id();
+        emergencyFeedback = "Selected facility: " + facility.name() + " — " + formatEmergencyDistance(emergencyDistanceMeters(facility));
+        refreshEmergencyPage();
+    }
+
+    private void selectNearestMedicalHelp() {
+        selectedEmergencyFacility = emergencyServices.stream()
+                .filter(service -> List.of("Hospital", "Medical Camp", "First Aid", "Ambulance").contains(service.category()))
+                .min(java.util.Comparator.comparingInt(this::emergencyDistanceMeters))
+                .orElse(null);
+        selectedEmergencyFilter = "All";
+        selectedEmergencyCategory = "All";
+        emergencyDetailsExpanded = false;
+        emergencyMapMessage = "";
+        emergencyMapFocusId = selectedEmergencyFacility == null ? "" : selectedEmergencyFacility.id();
+        if (selectedEmergencyFacility != null) {
+            emergencyFeedback = "Nearest medical help: " + selectedEmergencyFacility.name() + " — " + formatEmergencyDistance(emergencyDistanceMeters(selectedEmergencyFacility));
+        }
+        refreshEmergencyPage();
+    }
+
+    private List<EmergencyServiceDemo> filteredEmergencyServices() {
+        return emergencyServices.stream().filter(service -> matchesEmergencyFilter(service, selectedEmergencyFilter)).toList();
+    }
+
+    private boolean matchesEmergencyFilter(EmergencyServiceDemo service, String filter) {
+        return "All".equals(filter) || service.category().equals(filter);
+    }
+
+    private void loadEmergencyServicesAsync() {
+        AppSession.User user = AppSession.currentUser();
+        if (emergencyServicesLoading || user == null || user.idToken() == null || user.idToken().isBlank() || !emergencyFirestore.isEnabled()) return;
+        emergencyServicesLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return emergencyFirestore.loadEmergencyServices(user.idToken()); }
+            catch (Exception exception) {
+                System.err.println("EMERGENCY_SERVICE_READ_DIAGNOSTIC action=LOAD tokenPresent=true sessionRole=" + user.role() + " result=failed error=" + exception.getMessage());
+                return null;
+            }
+        }).thenAccept(records -> Platform.runLater(() -> {
+            emergencyServicesLoading = false;
+            if (records == null) {
+                emergencyServicesError = "permission_or_network";
+                usingEmergencyDevelopmentFallback = true;
+                emergencyServices = EmergencyDevelopmentServices.create().stream()
+                        .map(this::toEmergencyServiceDemo).toList();
+            }
+            else {
+                emergencyServicesError = "";
+                // A successful but empty collection gets a local visual dataset; any real
+                // document immediately replaces it rather than being mixed with it.
+                usingEmergencyDevelopmentFallback = records.isEmpty();
+                emergencyServices = (records.isEmpty() ? EmergencyDevelopmentServices.create() : records).stream()
+                        .filter(EmergencyService::visibleToUsers)
+                        .map(this::toEmergencyServiceDemo)
+                        .toList();
+                reconcileEmergencySelectionForFilter();
+            }
+            reconcileEmergencySelectionForFilter();
+            if (emergencyPageActive) refreshEmergencyPage();
+        }));
+    }
+    private void loadEmergencyAlertsAsync() {
+        AppSession.User user = AppSession.currentUser();
+        if (emergencyAlertsLoading || user == null || !emergencyFirestore.isEnabled()) return;
+        emergencyAlertsLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return emergencyFirestore.loadEmergencyAlerts(user.idToken());
+            } catch (Exception exception) {
+                System.err.println("EMERGENCY_ALERT_READ_DIAGNOSTIC action=LOAD result=failed error=" + exception.getMessage());
+                return null;
+            }
+        }).thenAccept(alerts -> Platform.runLater(() -> {
+            emergencyAlertsLoading = false;
+            if (alerts == null) {
+                emergencyAlertsError = "permission_or_network";
+                usingEmergencyAlertPreview = true;
+                activeEmergencyAlert = emergencyAlertPreview();
+            } else {
+                emergencyAlertsError = "";
+                usingEmergencyAlertPreview = false;
+                activeEmergencyAlert = alerts.stream()
+                        .sorted(java.util.Comparator
+                                .comparingInt((EmergencyAlert alert) -> alertSeverityPriority(alert.severity()))
+                                .reversed()
+                                .thenComparing(EmergencyAlert::createdAt,
+                                        java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+                        .findFirst()
+                        .orElse(null);
+            }
+            if (emergencyPageActive) refreshEmergencyPage();
+        }));
+    }
+
+    private int alertSeverityPriority(EmergencyAlert.Severity severity) {
+        return switch (severity == null ? EmergencyAlert.Severity.INFO : severity) {
+            case CRITICAL -> 3;
+            case HIGH -> 2;
+            case INFO -> 1;
+        };
+    }
+
+    private EmergencyAlert emergencyAlertPreview() {
+        return new EmergencyAlert("local-preview-ramkund-advisory", "Crowd Advisory - Ramkund Area",
+                "Heavy pilgrim movement reported near Ramkund. Use alternate access routes and follow on-ground instructions.",
+                EmergencyAlert.Severity.HIGH, "Ramkund, Nashik", "Ramkund Area", 20.0056, 73.7939, "", "");
+    }
+
+    private EmergencyServiceDemo toEmergencyServiceDemo(EmergencyService service) {
+        String category = switch (service.category()) {
+            case HOSPITAL -> "Hospital"; case MEDICAL_CAMP -> "Medical Camp"; case FIRST_AID -> "First Aid";
+            case AMBULANCE -> "Ambulance"; case POLICE -> "Police"; case FIRE_SAFETY -> "Fire / Safety";
+            case HELP_DESK -> "Emergency Help Desk"; case EMERGENCY_EXIT -> "Exit";
+        };
+        return new EmergencyServiceDemo(service.serviceId(), service.name(), category, service.subType(), 0,
+                EmergencyService.displayStatus(service.operationalStatus()), service.contactNumber(), service.sector(), service.area(),
+                service.facilities(), service.description(), service.latitude(), service.longitude());
+    }
+
+    private String categoryForServiceCard(String category) {
+        return switch (category) {
+            case "camp" -> "Medical Camp";
+            case "aid" -> "First Aid";
+            case "police" -> "Police";
+            case "fire" -> "Fire / Safety";
+            case "desk" -> "Emergency Help Desk";
+            case "exit" -> "Exit";
+            default -> category.substring(0, 1).toUpperCase() + category.substring(1);
+        };
+    }
+
+    private String emergencyIcon(String category) {
+        return switch (category) {
+            case "Hospital" -> "\uE91D";
+            case "Medical Camp" -> "\uE7B8";
+            case "First Aid" -> "\uE95E";
+            case "Ambulance" -> "\uE7F2";
+            case "Police" -> "\uE7FC";
+            case "Fire / Safety" -> "\uE894";
+            case "Emergency Help Desk" -> "\uE897";
+            default -> "\uE7E8";
+        };
+    }
+
+    private String formatEmergencyDistance(int meters) {
+        return meters >= 1000 ? String.format(java.util.Locale.ROOT, "%.1f km", meters / 1000.0) : meters + " m";
+    }
+
+    private int emergencyDistanceMeters(EmergencyServiceDemo service) {
+        double latitudeDelta = Math.toRadians(service.latitude() - EMERGENCY_DEMO_USER_LATITUDE);
+        double longitudeDelta = Math.toRadians(service.longitude() - EMERGENCY_DEMO_USER_LONGITUDE);
+        double originLatitude = Math.toRadians(EMERGENCY_DEMO_USER_LATITUDE);
+        double destinationLatitude = Math.toRadians(service.latitude());
+        double a = Math.sin(latitudeDelta / 2) * Math.sin(latitudeDelta / 2)
+                + Math.cos(originLatitude) * Math.cos(destinationLatitude)
+                * Math.sin(longitudeDelta / 2) * Math.sin(longitudeDelta / 2);
+        return (int) Math.round(6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+    }
+
+    private String displayEmergencyValue(String value) {
+        return value == null || value.isBlank() ? "Not available" : value;
+    }
+
+    private void refreshEmergencyPage() {
+        root.setCenter(scroll(emergencyPage()));
+        if (emergencyMapView != null) {
+            Platform.runLater(emergencyMapView::requestSizeInvalidationAfterLayout);
+        }
+    }
+
+    private void showEmergencyFeedback(String message) {
+        emergencyFeedback = message;
+        refreshEmergencyPage();
+    }
+
+    private EmergencyMapView emergencyMapView() {
+        try {
+            if (emergencyMapView == null) {
+                emergencyMapView = new EmergencyMapView(this::selectEmergencyFacilityById);
+            }
+            return emergencyMapView;
+        } catch (RuntimeException | LinkageError error) {
+            System.err.println("EMERGENCY_MAP_DIAGNOSTIC stage=CONSTRUCT error=" + error);
+            emergencyMapView = null;
+            return null;
+        }
+    }
+
+    private void selectEmergencyFacilityById(String id) {
+        emergencyServices.stream().filter(service -> service.id().equals(id)).findFirst()
+                .ifPresent(this::selectEmergencyFacility);
+    }
+
+    private String emergencyMarkersJson(List<EmergencyServiceDemo> services) {
+        return services.stream().map(service -> "{"
+                + "\"id\":\"" + json(service.id()) + "\","
+                + "\"name\":\"" + json(service.name()) + "\","
+                + "\"category\":\"" + json(service.category()) + "\","
+                + "\"subType\":\"" + json(service.subType()) + "\","
+                + "\"distance\":\"" + json(formatEmergencyDistance(emergencyDistanceMeters(service))) + "\","
+                + "\"status\":\"" + json(service.status()) + "\","
+                + "\"contact\":\"" + json(service.contact()) + "\","
+                + "\"sector\":\"" + json(service.sector()) + "\","
+                + "\"area\":\"" + json(service.area()) + "\","
+                + "\"latitude\":" + service.latitude() + ","
+                + "\"longitude\":" + service.longitude() + "}").collect(java.util.stream.Collectors.joining(",", "[", "]"));
+    }
+
+    private String json(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+    }
+
+    private VBox emergencyFeedbackCard() {
+        VBox feedback = new VBox(3, label("EMERGENCY UPDATE", "emergency-feedback-title"), label(emergencyFeedback, "emergency-feedback-text"));
+        feedback.getStyleClass().add("emergency-feedback-card");
+        return feedback;
+    }
+
+    private VBox sosConfirmationCard() {
+        Button confirm = new Button(emergencySubmissionInProgress ? "SUBMITTING..." : "CONFIRM SOS");
+        confirm.getStyleClass().add("emergency-danger-button");
+        confirm.setDisable(emergencySubmissionInProgress);
+        confirm.setOnAction(event -> submitEmergency(createEmergencyReport(EmergencyReport.Source.SOS,
+                EmergencyReport.EmergencyType.OTHER, "Emergency SOS request", 1, "", EmergencyReport.Priority.CRITICAL), true));
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("emergency-secondary-button");
+        cancel.setDisable(emergencySubmissionInProgress);
+        cancel.setOnAction(event -> { sosConfirmationVisible = false; refreshEmergencyPage(); });
+        VBox card = new VBox(7, label("Send Emergency SOS?", "emergency-confirm-title"),
+                label("This is a real emergency request to Simhastha Emergency Management. The stored location is Demo Nashik Location until GPS is enabled.", "emergency-confirm-text"),
+                new HBox(8, confirm, cancel));
+        card.getStyleClass().add("emergency-confirm-card");
+        return card;
+    }
+
+    private VBox emergencyReportForm() {
+        ComboBox<String> category = new ComboBox<>();
+        category.getItems().addAll("Medical Emergency", "Police / Security", "Fire Emergency", "Crowd / Stampede Risk", "Accident", "Child / Elderly Assistance", "River / Ghat Emergency", "Other");
+        category.setPromptText("Emergency Type *");
+        category.getStyleClass().add("input-combo");
+        TextField description = AppUi.textField("Short Description *");
+        TextField peopleAffected = AppUi.textField("People Affected *");
+        TextField landmark = AppUi.textField("Optional Landmark");
+        Label error = label("", "emergency-validation-error");
+        Label location = label("Location: Demo Nashik Location (GPS integration is not enabled).", "emergency-form-note");
+        Button submit = new Button(emergencySubmissionInProgress ? "SUBMITTING..." : "SUBMIT REPORT");
+        submit.getStyleClass().add("emergency-primary-button");
+        submit.setDisable(emergencySubmissionInProgress);
+        submit.setOnAction(event -> {
+            int people;
+            try { people = Integer.parseInt(peopleAffected.getText().trim()); } catch (Exception ignored) { people = 0; }
+            if (category.getValue() == null || category.getValue().isBlank()) { error.setText("Select an emergency type."); return; }
+            if (description.getText().trim().isBlank()) { error.setText("Enter a short description."); return; }
+            if (people < 1) { error.setText("People affected must be at least 1."); return; }
+            EmergencyReport.EmergencyType type = EmergencyReport.typeForLabel(category.getValue());
+            submitEmergency(createEmergencyReport(EmergencyReport.Source.REPORT, type, description.getText().trim(), people,
+                    landmark.getText().trim(), EmergencyReport.defaultPriority(type)), false);
+        });
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("emergency-secondary-button");
+        cancel.setDisable(emergencySubmissionInProgress);
+        cancel.setOnAction(event -> { emergencyReportFormVisible = false; refreshEmergencyPage(); });
+        VBox form = new VBox(8, emergencySectionTitle("REPORT EMERGENCY"), category, description, peopleAffected, location, landmark, error, new HBox(8, submit, cancel));
+        form.getStyleClass().add("emergency-report-form");
+        return form;
+    }
+
+    private EmergencyReport createEmergencyReport(EmergencyReport.Source source, EmergencyReport.EmergencyType type,
+            String description, int peopleAffected, String landmark, EmergencyReport.Priority priority) {
+        AppSession.User user = AppSession.currentUser();
+        String now = String.valueOf(System.currentTimeMillis());
+        String id = "emg-" + now + "-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        String tracking = "EMG-" + now.substring(Math.max(0, now.length() - 8));
+        return new EmergencyReport(id, tracking, user == null ? "" : user.uid(), user == null ? "" : user.displayName(),
+                "Not available", type, description, peopleAffected, landmark, EMERGENCY_DEMO_USER_LATITUDE,
+                EMERGENCY_DEMO_USER_LONGITUDE, "Demo Nashik Location", priority, EmergencyReport.Status.REPORTED,
+                "", "", "", "", EmergencyReport.userStatusText(EmergencyReport.Status.REPORTED), now, now, "", "", "", "", source);
+    }
+
+    private void submitEmergency(EmergencyReport report, boolean sos) {
+        if (emergencySubmissionInProgress) return;
+        AppSession.User user = AppSession.currentUser();
+        if (user == null || user.idToken() == null || user.idToken().isBlank() || !emergencyFirestore.isEnabled()) {
+            emergencyFeedback = "Emergency request could not be submitted. Sign in with Firebase and check the connection, then retry.";
+            refreshEmergencyPage();
+            return;
+        }
+        emergencySubmissionInProgress = true;
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                emergencyFirestore.createEmergencyReport(report, user.idToken());
+                Platform.runLater(() -> {
+                    currentEmergency = report;
+                    sosConfirmationVisible = false;
+                    emergencyReportFormVisible = false;
+                    emergencySubmissionInProgress = false;
+                    emergencyFeedback = (sos ? "Emergency SOS submitted successfully. " : "Emergency report submitted successfully. ")
+                            + "Tracking ID: " + report.trackingId() + ". Your emergency request has been submitted to Simhastha Emergency Management.";
+                    if (emergencyPageActive) refreshEmergencyPage();
+                });
+            } catch (Exception exception) {
+                System.err.println("EMERGENCY_CREATE_DIAGNOSTIC action=CREATE emergencyId=" + report.emergencyId() + " result=failed error=" + exception.getMessage());
+                Platform.runLater(() -> {
+                    emergencySubmissionInProgress = false;
+                    emergencyFeedback = "Emergency request could not be submitted. Please use RETRY after checking your connection.";
+                    if (emergencyPageActive) refreshEmergencyPage();
+                });
+            }
+        });
+    }
+
+    private void loadCurrentEmergencyAsync() {
+        AppSession.User user = AppSession.currentUser();
+        if (emergencyStateLoading || user == null || user.idToken() == null || user.idToken().isBlank() || !emergencyFirestore.isEnabled()) return;
+        emergencyStateLoading = true;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try { return emergencyFirestore.loadEmergencyReportsForUser(user.uid(), user.idToken()); }
+            catch (Exception exception) {
+                System.err.println("EMERGENCY_READ_DIAGNOSTIC action=USER_LOAD sessionUid=" + user.uid() + " result=failed error=" + exception.getMessage());
+                return null;
+            }
+        }).thenAccept(records -> Platform.runLater(() -> {
+            emergencyStateLoading = false;
+            if (records == null) {
+                emergencyFeedback = "Emergency status cannot be loaded because Firestore access was denied. Please contact the administrator.";
+                stopEmergencyRefresh();
+                if (emergencyPageActive) refreshEmergencyPage();
+                return;
+            }
+            currentEmergency = records.stream().filter(EmergencyReport::unresolved)
+                    .max(java.util.Comparator.comparing(EmergencyReport::createdAt)).orElseGet(() -> records.stream()
+                            .max(java.util.Comparator.comparing(EmergencyReport::createdAt)).orElse(null));
+            if (emergencyPageActive) refreshEmergencyPage();
+        }));
+    }
+
+    private void startEmergencyRefresh() {
+        if (emergencyStatusRefresh == null) {
+            emergencyStatusRefresh = new Timeline(new KeyFrame(Duration.seconds(15), event -> loadCurrentEmergencyAsync()));
+            emergencyStatusRefresh.setCycleCount(Animation.INDEFINITE);
+        }
+        emergencyStatusRefresh.play();
+    }
+
+    private void stopEmergencyRefresh() {
+        if (emergencyStatusRefresh != null) emergencyStatusRefresh.stop();
+    }
+
+    private VBox emergencyStatusSection() {
+        FlowPane steps = new FlowPane(6, 6);
+        for (EmergencyReport.Status status : EmergencyReport.Status.values()) {
+            Label item = label(status.name().replace('_', ' '), "emergency-status-step");
+            item.getStyleClass().add(status.ordinal() <= currentEmergency.status().ordinal()
+                    ? "emergency-status-step-active" : "emergency-status-step-inactive");
+            steps.getChildren().add(item);
+        }
+        VBox section = new VBox(8, emergencySectionTitle("YOUR EMERGENCY STATUS"),
+                label("Tracking ID: " + currentEmergency.trackingId() + " | " + currentEmergency.emergencyType().name().replace('_', ' '), "emergency-status-request"),
+                label("Priority: " + currentEmergency.priority() + " | Status: " + currentEmergency.status().name().replace('_', ' '), "emergency-status-request"),
+                label(currentEmergency.userStatusMessage().isBlank() ? EmergencyReport.userStatusText(currentEmergency.status()) : currentEmergency.userStatusMessage(), "emergency-form-note"),
+                currentEmergency.assignedTeamName().isBlank() ? new Label() : label("Assigned team: " + currentEmergency.assignedTeamName(), "emergency-form-note"), steps);
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private VBox demoSosConfirmationCard() {
+        Button confirm = new Button("CONFIRM SOS");
+        confirm.getStyleClass().add("emergency-danger-button");
+        confirm.setOnAction(event -> {
+            currentDemoEmergency = new EmergencyDemoRequest("DEMO-EMG-" + System.currentTimeMillis(), "SOS Emergency", "Emergency SOS created locally", 0, "", "CRITICAL", "REPORTED", java.time.LocalDateTime.now());
+            sosConfirmationVisible = false;
+            emergencyFeedback = "SOS REQUEST CREATED — DEMO MODE. Not sent to emergency services.";
+            refreshEmergencyPage();
+        });
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("emergency-secondary-button");
+        cancel.setOnAction(event -> { sosConfirmationVisible = false; refreshEmergencyPage(); });
+        VBox card = new VBox(7, label("Send Emergency SOS?", "emergency-confirm-title"),
+                label("This will send your current location and emergency request when backend integration is enabled.", "emergency-confirm-text"),
+                new HBox(8, confirm, cancel));
+        card.getStyleClass().add("emergency-confirm-card");
+        return card;
+    }
+
+    private VBox demoEmergencyReportForm() {
+        ComboBox<String> category = new ComboBox<>();
+        category.getItems().addAll("Medical Emergency", "Police / Security", "Fire Emergency", "Crowd / Stampede Risk", "Accident", "Child / Elderly Assistance", "River / Ghat Emergency", "Other");
+        category.setPromptText("Emergency Type *");
+        category.getStyleClass().add("input-combo");
+        TextField description = AppUi.textField("Short Description *");
+        TextField peopleAffected = AppUi.textField("People Affected *");
+        TextField landmark = AppUi.textField("Optional Landmark");
+        Label error = label("", "emergency-validation-error");
+        Label location = label("Location: Demo Nashik Location (GPS integration is not enabled).", "emergency-form-note");
+        Button submit = new Button("SUBMIT REPORT");
+        submit.getStyleClass().add("emergency-primary-button");
+        submit.setOnAction(event -> {
+            int people;
+            try { people = Integer.parseInt(peopleAffected.getText().trim()); } catch (Exception exception) { people = 0; }
+            if (category.getValue() == null || category.getValue().isBlank()) { error.setText("Select an emergency type."); return; }
+            if (description.getText().trim().isBlank()) { error.setText("Enter a short description."); return; }
+            if (people < 1) { error.setText("People affected must be at least 1."); return; }
+            String priority = (category.getValue().contains("Fire") || category.getValue().contains("Crowd")) ? "CRITICAL" : "HIGH";
+            currentDemoEmergency = new EmergencyDemoRequest("DEMO-RPT-" + System.currentTimeMillis(), category.getValue(), description.getText().trim(), people, landmark.getText().trim(), priority, "REPORTED", java.time.LocalDateTime.now());
+            emergencyReportFormVisible = false;
+            emergencyFeedback = "Emergency report created in demo mode. Not sent to emergency services.";
+            refreshEmergencyPage();
+        });
+        Button cancel = new Button("CANCEL");
+        cancel.getStyleClass().add("emergency-secondary-button");
+        cancel.setOnAction(event -> { emergencyReportFormVisible = false; refreshEmergencyPage(); });
+        VBox form = new VBox(8, emergencySectionTitle("REPORT EMERGENCY — DEMO MODE"), category, description, peopleAffected, location, landmark, error, new HBox(8, submit, cancel));
+        form.getStyleClass().add("emergency-report-form");
+        return form;
+    }
+
+    private VBox demoEmergencyStatusSection() {
+        FlowPane steps = new FlowPane(6, 6);
+        for (String step : new String[] { "Reported", "Acknowledged", "Team Dispatched", "Help Arriving", "Resolved" }) {
+            Label item = label(step, "emergency-status-step");
+            if ("Reported".equals(step)) item.getStyleClass().add("emergency-status-step-active");
+            else item.getStyleClass().add("emergency-status-step-inactive");
+            steps.getChildren().add(item);
+        }
+        VBox section = new VBox(8, emergencySectionTitle("YOUR EMERGENCY STATUS"),
+                label("Demo mode — not sent to emergency services.", "emergency-form-note"),
+                label("Request ID: " + currentDemoEmergency.requestId() + "  •  Priority: " + currentDemoEmergency.priority(), "emergency-status-request"), steps);
+        section.getStyleClass().add("emergency-section");
+        return section;
+    }
+
+    private VBox expandedFacilityDetails(EmergencyServiceDemo facility) {
+        VBox details = new VBox(4,
+                label("Facility: " + facility.name(), "emergency-expanded-detail"),
+                label("Category: " + facility.category(), "emergency-expanded-detail"),
+                label("Description: " + displayEmergencyValue(facility.description()), "emergency-expanded-detail"),
+                label("Sector: " + displayEmergencyValue(facility.sector()), "emergency-expanded-detail"),
+                label("Location: " + displayEmergencyValue(facility.area()), "emergency-expanded-detail"),
+                label("Contact: " + displayEmergencyValue(facility.contact()), "emergency-expanded-detail"),
+                label("Distance: " + formatEmergencyDistance(emergencyDistanceMeters(facility)), "emergency-expanded-detail"),
+                label("Status: " + displayEmergencyValue(facility.status()), "emergency-expanded-detail"));
+        details.getStyleClass().add("emergency-expanded-details");
+        return details;
+    }
+
+    private VBox emergencyRouteSummary(EmergencyServiceDemo facility) {
+        Button clear = new Button("CLEAR ROUTE");
+        clear.getStyleClass().add("emergency-secondary-button");
+        clear.setOnAction(event -> {
+            emergencyRouteActive = false;
+            if (emergencyMapView != null) emergencyMapView.clearRoute();
+            emergencyFeedback = "Route preview cleared.";
+            refreshEmergencyPage();
+        });
+        VBox summary = new VBox(4, label("APPROXIMATE ROUTE PREVIEW", "emergency-route-title"),
+                label("To: " + facility.name(), "emergency-expanded-detail"),
+                label("Distance: " + formatEmergencyDistance(emergencyDistanceMeters(facility)), "emergency-expanded-detail"),
+                label("Route: Straight-line map route (not road navigation)", "emergency-expanded-detail"), clear);
+        summary.getStyleClass().add("emergency-route-summary");
+        return summary;
+    }
+
+    private record EmergencyServiceDemo(String id, String name, String category, String subType, int distanceMeters,
+            String status, String contact, String sector, String area, List<String> facilities, String description,
+            double latitude, double longitude) { }
+
+    private record EmergencyDemoRequest(String requestId, String category, String description, int peopleAffected,
+            String landmark, String priority, String status, java.time.LocalDateTime createdAt) { }
+
+    private Label emergencySectionTitle(String text) {
+        return label(text, "emergency-section-title");
     }
 
     private VBox stayPage() {

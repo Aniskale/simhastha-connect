@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { width:100%; height:100%; margin:0; padding:0; overflow:hidden; font-family:Arial, sans-serif; }
+    #map { width:100%; height:100%; margin:0; padding:0; }
+    #offline { display:none; position:absolute; inset:0; z-index:1000; background:#fff8ed; color:#692c18; text-align:center; padding-top:92px; }
+    #offline strong { display:block; font-size:16px; margin-bottom:8px; }
+    #offline button { margin-top:12px; border:1px solid #b56a14; border-radius:7px; background:#fff3df; color:#853b09; font-weight:bold; padding:8px 11px; cursor:pointer; }
+    .emergency-marker { width:21px; height:21px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); border:2px solid #fff; box-shadow:0 1px 5px rgba(52,24,8,.40); }
+    .emergency-marker > span { display:block; transform:rotate(45deg); color:#fff; font-size:12px; text-align:center; line-height:21px; font-weight:bold; }
+    .emergency-user { width:17px; height:17px; border-radius:50%; background:#237bc0; border:3px solid #fff; box-shadow:0 1px 5px rgba(13,65,125,.55); }
+    .emergency-alert { width:23px; height:23px; border-radius:50%; color:#fff; border:2px solid #fff; box-shadow:0 1px 5px rgba(89,31,11,.55); text-align:center; line-height:23px; font-weight:bold; }
+    .emergency-alert.alert-critical { background:#a72117; box-shadow:0 1px 7px rgba(113,17,11,.78); }
+    .emergency-alert.alert-high { background:#c75020; }
+    .emergency-alert.alert-info { background:#3976a8; }
+    .leaflet-popup-content { color:#57291a; font-size:12px; line-height:1.35; }
+    .leaflet-popup-content strong { color:#6b1712; }
+    /* JavaFX WebView can retain only fragments of transformed Leaflet tile panes.
+       Keep tile painting static; marker positioning is intentionally untouched. */
+    .leaflet-tile,
+    .leaflet-tile-container,
+    .leaflet-zoom-animated {
+      opacity:1 !important;
+      visibility:visible !important;
+      transition:none !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="offline"><strong>Nashik Emergency Map unavailable</strong><span>Check internet connection or retry.</span><br><button onclick="location.reload()">RETRY MAP</button></div>
+  <script>
+    (function () {
+      const userLocation = [20.0105, 73.7925];
+      const ramkund = [20.0097, 73.7920];
+      const colors = {
+        'Hospital':'#2f6fa4', 'Medical Camp':'#2f8a54', 'First Aid':'#bd3d2d', 'Ambulance':'#278ba1',
+        'Police':'#3c6f9f', 'Fire / Safety':'#d65f0c', 'Emergency Help Desk':'#7954a6', 'Exit':'#2f8a54'
+      };
+      let map, facilitiesLayer, routeLine, alertMarker, userMarker, tileLayer;
+      const markers = {};
+      let pendingMarkerArgs, pendingFocusId, pendingRoute, pendingAlert;
+      let tileErrors = 0;
+      let tileLoads = 0;
+      let usingFallbackTiles = false;
+      let lastDiagnostic = '';
+
+      const primaryTiles = {
+        name: 'Humanitarian OpenStreetMap',
+        url: 'https://tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Tiles style by <a href="https://www.hotosm.org/">Humanitarian OpenStreetMap Team</a> hosted by <a href="https://www.openstreetmap.fr/">OpenStreetMap France</a>'
+      };
+      const fallbackTiles = {
+        name: 'OpenStreetMap Germany',
+        url: 'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+      };
+
+      function markerIcon(category) {
+        const color = colors[category] || '#a4510a';
+        const symbol = {
+          'Hospital':'H', 'Medical Camp':'M', 'First Aid':'+', 'Ambulance':'A',
+          'Police':'P', 'Fire / Safety':'F', 'Emergency Help Desk':'?', 'Exit':'E'
+        }[category] || '!';
+        return L.divIcon({className:'', iconSize:[25,25], iconAnchor:[12,25], popupAnchor:[0,-24],
+          html:'<div class="emergency-marker" style="background:'+color+'"><span>'+symbol+'</span></div>'});
+      }
+      function unavailable() { document.getElementById('offline').style.display = 'block'; }
+      function mapDiagnostic() {
+        if (!map) return;
+        const center = map.getCenter();
+        const message = 'EMERGENCY_MAP size=' + map.getSize().x + 'x' + map.getSize().y
+          + ' center=' + center.lat.toFixed(5) + ',' + center.lng.toFixed(5)
+          + ' zoom=' + map.getZoom() + ' tileLoads=' + tileLoads + ' tileErrors=' + tileErrors
+          + ' basemap=' + (usingFallbackTiles ? fallbackTiles.name : primaryTiles.name);
+        if (message === lastDiagnostic) return;
+        lastDiagnostic = message;
+        console.log(message);
+        if (window.emergencyBridge) window.emergencyBridge.mapDiagnostic(message);
+      }
+      function invalidateMapSize() {
+        if (!map) return;
+        map.invalidateSize(true);
+        mapDiagnostic();
+      }
+      function addTileLayer(config) {
+        const layer = L.tileLayer(config.url, {maxZoom:19, attribution:config.attribution});
+        layer.on('tileload', function () { tileLoads++; });
+        layer.on('tileerror', function(event) {
+          tileErrors++;
+          if (tileErrors === 1 || tileErrors % 6 === 0) {
+            console.warn('Emergency map tile failed', event.coords, 'count=' + tileErrors + ' basemap=' + config.name);
+            mapDiagnostic();
+          }
+          // Replace the one base layer immediately on a failed tile; never stack layers.
+          if (!usingFallbackTiles) activateFallbackTiles();
+        });
+        layer.on('load', mapDiagnostic);
+        layer.addTo(map);
+        return layer;
+      }
+      function activateFallbackTiles() {
+        if (!map || usingFallbackTiles) return;
+        usingFallbackTiles = true;
+        tileLoads = 0;
+        tileErrors = 0;
+        if (tileLayer && map.hasLayer(tileLayer)) map.removeLayer(tileLayer);
+        tileLayer = addTileLayer(fallbackTiles);
+        console.warn('EMERGENCY_MAP basemap fallback=' + fallbackTiles.name);
+        invalidateMapSize();
+      }
+      function init() {
+        if (!window.L) { unavailable(); return; }
+        // Avoid GPU transform compositing in JavaFX WebView. Leaflet then positions
+        // tile panes with stable layout values instead of animated 3D transforms.
+        if (L.Browser) L.Browser.any3d = false;
+        map = L.map('map', {
+          zoomControl:true,
+          attributionControl:true,
+          zoomAnimation:false,
+          fadeAnimation:false,
+          markerZoomAnimation:false
+        }).setView(ramkund, 15);
+        tileLayer = addTileLayer(primaryTiles);
+        facilitiesLayer = L.layerGroup().addTo(map);
+        userMarker = L.marker(userLocation, {icon:L.divIcon({className:'', iconSize:[23,23], iconAnchor:[11,11], html:'<div class="emergency-user"></div>'})})
+          .addTo(map).bindPopup('<strong>YOU ARE HERE</strong><br>Nashik Kumbh Zone');
+        if (pendingMarkerArgs) api.setMarkers(pendingMarkerArgs.json, pendingMarkerArgs.selectedId);
+        if (pendingFocusId) api.focusFacility(pendingFocusId);
+        if (pendingRoute) api.drawRoute(pendingRoute.latitude, pendingRoute.longitude);
+        if (pendingAlert) api.showAlert(pendingAlert.json, pendingAlert.focus);
+        invalidateMapSize();
+        requestAnimationFrame(invalidateMapSize);
+        if (window.ResizeObserver) new ResizeObserver(invalidateMapSize).observe(document.getElementById('map'));
+      }
+      const api = {
+        setMarkers: function (json, selectedId) {
+          pendingMarkerArgs = {json:json, selectedId:selectedId};
+          if (!map) return;
+          const services = JSON.parse(json || '[]');
+          facilitiesLayer.clearLayers();
+          Object.keys(markers).forEach(key => delete markers[key]);
+          const validServices = services.filter(function (service) {
+            return Number.isFinite(Number(service.latitude)) && Number.isFinite(Number(service.longitude))
+              && !(Number(service.latitude) === 0 && Number(service.longitude) === 0)
+              && Number(service.latitude) >= -90 && Number(service.latitude) <= 90
+              && Number(service.longitude) >= -180 && Number(service.longitude) <= 180;
+          });
+          validServices.forEach(function (service) {
+            const marker = L.marker([service.latitude, service.longitude], {icon:markerIcon(service.category)}).addTo(facilitiesLayer);
+            marker.bindPopup('<strong>'+escapeHtml(service.name)+'</strong><br>'+escapeHtml(service.subType)
+              + '<br>' + escapeHtml(service.distance) + ' • ' + escapeHtml(service.status)
+              + (service.contact ? '<br>Contact: ' + escapeHtml(service.contact) : ''));
+            marker.on('click', function () { if (window.emergencyBridge) window.emergencyBridge.markerSelected(service.id); });
+            markers[service.id] = marker;
+            if (service.id === selectedId) marker.setZIndexOffset(1000);
+          });
+          if (validServices.length === 1) {
+            map.setView([validServices[0].latitude, validServices[0].longitude], 16, {animate:true});
+          } else if (validServices.length > 1) {
+            map.fitBounds(L.latLngBounds(validServices.map(function (service) {
+              return [service.latitude, service.longitude];
+            })), {padding:[28,28], maxZoom:16});
+          } else {
+            map.setView(ramkund, 15, {animate:false});
+          }
+        },
+        focusFacility: function (id) {
+          pendingFocusId = id;
+          const marker = markers[id];
+          if (!marker || !map) return;
+          map.setView(marker.getLatLng(), 17, {animate:true});
+          marker.openPopup();
+        },
+        drawRoute: function (latitude, longitude) {
+          pendingRoute = {latitude:latitude, longitude:longitude};
+          if (!map) return;
+          if (routeLine) map.removeLayer(routeLine);
+          routeLine = L.polyline([userLocation, [latitude, longitude]], {color:'#c66a11', weight:5, dashArray:'8 6', opacity:.9}).addTo(map);
+          routeLine.bindPopup('<strong>Approximate route preview</strong><br>Straight-line map route, not road navigation.');
+          map.fitBounds(routeLine.getBounds(), {padding:[35,35]});
+        },
+        clearRoute: function () { pendingRoute = null; if (routeLine && map) { map.removeLayer(routeLine); routeLine = null; } },
+        centerOnUser: function () { if (map) { map.setView(userLocation, 16, {animate:true}); userMarker.openPopup(); } },
+        retryTiles: function () { if (tileLayer) tileLayer.redraw(); invalidateMapSize(); },
+        showAlert: function (json, focus) {
+          pendingAlert = {json:json, focus:focus};
+          if (!map) return;
+          let alert;
+          try { alert = JSON.parse(json || '{}'); } catch (error) {
+            console.warn('EMERGENCY_ALERT_MAP_DIAGNOSTIC action=VIEW_ON_MAP result=failed invalidAlertJson');
+            return;
+          }
+          const latitude = Number(alert.latitude), longitude = Number(alert.longitude);
+          if (!Number.isFinite(latitude) || !Number.isFinite(longitude)
+              || (latitude === 0 && longitude === 0) || latitude < -90 || latitude > 90
+              || longitude < -180 || longitude > 180) {
+            console.warn('EMERGENCY_ALERT_MAP_DIAGNOSTIC action=VIEW_ON_MAP result=failed invalidCoordinates');
+            return;
+          }
+          if (alertMarker) map.removeLayer(alertMarker);
+          const severity = ['CRITICAL', 'HIGH', 'INFO'].includes(alert.severity) ? alert.severity : 'INFO';
+          const popup = '<strong>' + escapeHtml(alert.title) + '</strong><br>'
+            + '<b>' + escapeHtml(severity) + '</b>'
+            + (alert.locationLabel ? '<br>' + escapeHtml(alert.locationLabel) : '')
+            + (alert.message ? '<br>' + escapeHtml(alert.message) : '');
+          alertMarker = L.marker([latitude, longitude], {
+            icon:L.divIcon({className:'', iconSize:[27,27], iconAnchor:[13,13], popupAnchor:[0,-13],
+              html:'<div class="emergency-alert alert-' + severity.toLowerCase() + '">!</div>'})
+          }).addTo(map);
+          alertMarker.bindPopup(popup);
+          if (focus) {
+            map.setView([latitude, longitude], 16, {animate:true});
+            alertMarker.openPopup();
+          }
+        },
+        clearAlert: function () {
+          pendingAlert = null;
+          if (alertMarker && map) map.removeLayer(alertMarker);
+          alertMarker = null;
+        }
+      };
+      window.emergencyMap = api;
+      window.invalidateEmergencyMapSize = invalidateMapSize;
+      window.getEmergencyMapDiagnostics = function () {
+        return {tileLoads:tileLoads, tileErrors:tileErrors, usingFallbackTiles:usingFallbackTiles,
+          basemap:usingFallbackTiles ? fallbackTiles.name : primaryTiles.name};
+      };
+      function escapeHtml(value) { return String(value || '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+      window.addEventListener('load', init);
+      window.addEventListener('resize', invalidateMapSize);
+    }());
+  </script>
+</body>
+</html>
