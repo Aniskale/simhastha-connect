@@ -5778,14 +5778,224 @@ public class DashboardPage {
     }
 
     private VBox aboutPage() {
-        return pageShell("About Us", "Simhastha Connect platform vision and service purpose.",
-                new VBox(12,
-                        infoPanel("About Simhastha Connect",
-                                "Simhastha Connect is a unified digital platform designed to help pilgrims access transport, ghats, puja services, accommodation, emergency support and official information during Nashik Simhastha."),
-                        infoPanel("Our Mission", "Safe pilgrimage. Reliable information. Better coordination."),
-                        infoPanel("Platform Features", "Pilgrim Services\nTransport Integration\nEmergency Assistance\nBusiness Services\nOfficial Announcements\nAdmin-controlled Information"),
-                        infoPanel("Nashik Simhastha 2027", "A traditional and technology-ready information layer for Nashik, Ramkund, Godavari and Trimbakeshwar pilgrimage movement."),
-                        label("सेवा • सुरक्षा • श्रद्धा • समन्वय", "pilgrim-about-slogan")));
+        VBox content = new VBox(8,
+                topControls(),
+                label("About Us", "pilgrim-page-title"),
+                aboutHeroSection(),
+                aboutMissionVisionSection(),
+                aboutPlatformFeaturesSection(),
+                aboutSafetyAndFlowSection(),
+                aboutSimhasthaAndHelpSection(),
+                aboutFooter());
+        content.getStyleClass().addAll("pilgrim-dashboard-main", "about-dashboard-main");
+        content.setPadding(new Insets(10, 18, 10, 18));
+        return content;
+    }
+
+    private StackPane aboutHeroSection() {
+        ImageView image = createImage("/images/welcome-light.png", 620, 150, 0.54, 0.48);
+        image.getStyleClass().add("about-hero-image");
+        StackPane imagePane = new StackPane(image);
+        imagePane.getStyleClass().add("about-hero-image-pane");
+
+        HBox highlights = new HBox(8,
+                aboutHighlight("\uE716", "Millions of", "Pilgrims"),
+                aboutHighlight("\uE73E", "Trusted &", "Verified"),
+                aboutHighlight("\uE717", "24/7", "Support"),
+                aboutHighlight("\uE946", "Official", "Information"));
+        highlights.getStyleClass().add("about-highlight-row");
+
+        VBox text = new VBox(8,
+                label("About Simhastha Connect", "about-hero-title"),
+                paragraph("Simhastha Connect is a unified digital platform designed to help pilgrims access transport, accommodation, puja services, emergency support and official information during Nashik Simhastha 2027."),
+                highlights);
+        text.getStyleClass().add("about-hero-copy");
+        text.setMaxWidth(520);
+
+        HBox content = new HBox(14, text, createSpacer(), imagePane);
+        content.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(imagePane, Priority.ALWAYS);
+
+        StackPane hero = new StackPane(content);
+        hero.getStyleClass().add("about-hero-card");
+        return hero;
+    }
+
+    private HBox aboutHighlight(String iconCode, String lineOne, String lineTwo) {
+        Label icon = AppUi.symbolIcon(iconCode, "about-highlight-icon");
+        VBox copy = new VBox(0,
+                label(lineOne, "about-highlight-text"),
+                label(lineTwo, "about-highlight-text"));
+        HBox item = new HBox(9, icon, copy);
+        item.getStyleClass().add("about-highlight-item");
+        item.setAlignment(Pos.CENTER_LEFT);
+        return item;
+    }
+
+    private HBox aboutMissionVisionSection() {
+        HBox row = new HBox(10,
+                aboutInfoCard("\uF1D8", "Our Mission",
+                        "Our mission is to make the Simhastha pilgrimage safer, easier and better organized by connecting pilgrims with verified services and official information."),
+                aboutInfoCard("\uE890", "Our Vision",
+                        "To build a reliable digital platform that improves accessibility, coordination, safety and convenience for every pilgrim."));
+        row.getStyleClass().add("about-two-card-row");
+        HBox.setHgrow(row.getChildren().get(0), Priority.ALWAYS);
+        HBox.setHgrow(row.getChildren().get(1), Priority.ALWAYS);
+        return row;
+    }
+
+    private HBox aboutInfoCard(String iconCode, String title, String text) {
+        Label icon = AppUi.symbolIcon(iconCode, "about-info-icon");
+        VBox copy = new VBox(4, sectionTitle(title), paragraph(text));
+        HBox card = new HBox(12, icon, copy);
+        card.getStyleClass().add("about-info-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return card;
+    }
+
+    private VBox aboutPlatformFeaturesSection() {
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        Node[] cards = {
+                aboutFeatureCard("\uE806", "Transport Services", "Find travel options, routes and transport guidance.", "blue"),
+                aboutFeatureCard("\uE774", "Puja Services", "Browse verified puja and spiritual services.", "orange"),
+                aboutFeatureCard("\uE80F", "Ghats & Snan", "Get information about ghats, snan dates and important locations.", "green"),
+                aboutFeatureCard("\uE783", "Emergency Support", "Quick access to emergency assistance and helpline services.", "red"),
+                aboutFeatureCard("\uE809", "Stay & Accommodation", "Find suitable accommodation and stay options.", "purple"),
+                aboutFeatureCard("\uE721", "Lost & Found", "Report or search for lost items and persons.", "green"),
+                aboutFeatureCard("\uE787", "All Day Schedule", "View daily schedules and important Simhastha events.", "orange"),
+                aboutFeatureCard("\uE789", "Official Announcements", "Receive important official updates and notices.", "purple")
+        };
+        for (int i = 0; i < cards.length; i++) {
+            grid.add(cards[i], i, 0);
+            GridPane.setHgrow(cards[i], Priority.ALWAYS);
+        }
+        VBox section = new VBox(8, sectionTitle("Platform Features"), grid);
+        section.getStyleClass().add("about-section-card");
+        return section;
+    }
+
+    private VBox aboutFeatureCard(String iconCode, String title, String detail, String accent) {
+        Label icon = AppUi.symbolIcon(iconCode, "about-feature-icon");
+        StackPane iconBubble = new StackPane(icon);
+        iconBubble.getStyleClass().addAll("about-feature-icon-bubble", "about-accent-" + accent);
+        VBox card = new VBox(5, iconBubble, strong(title), muted(detail));
+        card.getStyleClass().addAll("about-feature-card", "about-feature-" + accent);
+        card.setAlignment(Pos.TOP_CENTER);
+        return card;
+    }
+
+    private HBox aboutSafetyAndFlowSection() {
+        HBox row = new HBox(10, aboutSafetySection(), aboutWorksSection());
+        row.getStyleClass().add("about-two-card-row");
+        HBox.setHgrow(row.getChildren().get(0), Priority.ALWAYS);
+        HBox.setHgrow(row.getChildren().get(1), Priority.ALWAYS);
+        return row;
+    }
+
+    private HBox aboutSafetySection() {
+        Label shield = AppUi.symbolIcon("\uE73E", "about-safety-icon");
+        VBox points = new VBox(4,
+                aboutCheckPoint("Trusted and official information"),
+                aboutCheckPoint("Verified service providers"),
+                aboutCheckPoint("Safe and transparent service flow"),
+                aboutCheckPoint("Fraud and suspicious activity reporting"),
+                aboutCheckPoint("Admin-controlled services and information"));
+        VBox copy = new VBox(7, sectionTitle("Safety & Verified Services"), points);
+        HBox card = new HBox(12, shield, copy);
+        card.getStyleClass().addAll("about-info-card", "about-safety-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return card;
+    }
+
+    private HBox aboutCheckPoint(String text) {
+        HBox point = new HBox(6, AppUi.symbolIcon("\uE930", "about-check-icon"), muted(text));
+        point.setAlignment(Pos.CENTER_LEFT);
+        return point;
+    }
+
+    private VBox aboutWorksSection() {
+        HBox flow = new HBox(6,
+                aboutFlowStep("\uE707", "Plan Your Visit", "Select destination, dates and preferences."),
+                aboutArrow(),
+                aboutFlowStep("\uE721", "Find Verified Services", "Explore transport, stay, puja and more."),
+                aboutArrow(),
+                aboutFlowStep("\uE8A5", "Book / Navigate Safely", "Book services or get routes and guidance."),
+                aboutArrow(),
+                aboutFlowStep("\uE7F4", "Receive Updates", "Get real-time updates, alerts and notices."),
+                aboutArrow(),
+                aboutFlowStep("\uE717", "Get Support", "24/7 help and emergency support."));
+        flow.setAlignment(Pos.CENTER_LEFT);
+        VBox card = new VBox(8, sectionTitle("How Simhastha Connect Works"), flow);
+        card.getStyleClass().add("about-section-card");
+        return card;
+    }
+
+    private VBox aboutFlowStep(String iconCode, String title, String detail) {
+        Label icon = AppUi.symbolIcon(iconCode, "about-flow-icon");
+        VBox step = new VBox(4, icon, strong(title), muted(detail));
+        step.getStyleClass().add("about-flow-step");
+        step.setAlignment(Pos.TOP_CENTER);
+        return step;
+    }
+
+    private Label aboutArrow() {
+        Label arrow = label("\u2192", "about-flow-arrow");
+        arrow.setMinWidth(18);
+        return arrow;
+    }
+
+    private HBox aboutSimhasthaAndHelpSection() {
+        HBox row = new HBox(10, aboutSimhastha2027Card(), aboutNeedHelpCard());
+        row.getStyleClass().add("about-two-card-row");
+        HBox.setHgrow(row.getChildren().get(0), Priority.ALWAYS);
+        HBox.setHgrow(row.getChildren().get(1), Priority.ALWAYS);
+        return row;
+    }
+
+    private HBox aboutSimhastha2027Card() {
+        Label icon = AppUi.symbolIcon("\uE80F", "about-info-icon");
+        VBox copy = new VBox(5,
+                sectionTitle("Nashik Simhastha 2027"),
+                paragraph("Nashik Simhastha 2027 is a major spiritual gathering that brings together millions of pilgrims. Simhastha Connect aims to provide a technology-enabled platform for better access to information, services, coordination and support."));
+        HBox card = new HBox(12, icon, copy);
+        card.getStyleClass().add("about-info-card");
+        card.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        return card;
+    }
+
+    private VBox aboutNeedHelpCard() {
+        HBox actions = new HBox(7,
+                aboutSupportAction("\uE783", "Emergency\nSupport", () -> showModulePage("emergency")),
+                aboutSupportAction("\uE789", "Official\nAnnouncements", () -> showModulePage("announcement")),
+                aboutSupportAction("\uE717", "Help &\nSupport", () -> showInfo("Help & Support", "Use the 24/7 Support panel or Emergency section for quick assistance.")),
+                aboutSupportAction("\uE946", "Report Fraud /\nSuspicious Activity", () -> showInfo("Report Fraud", "Use the Puja booking safety flow or contact official support to report suspicious activity.")));
+        actions.setAlignment(Pos.CENTER_LEFT);
+        VBox card = new VBox(8, sectionTitle("Need Help?"),
+                muted("We are here for you. Reach out anytime you need assistance."), actions);
+        card.getStyleClass().add("about-section-card");
+        return card;
+    }
+
+    private Button aboutSupportAction(String iconCode, String text, Runnable action) {
+        Button button = new Button(text);
+        button.setGraphic(AppUi.symbolIcon(iconCode, "about-support-icon"));
+        button.getStyleClass().add("about-support-button");
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private HBox aboutFooter() {
+        Label slogan = label("सेवा • सुरक्षा • श्रद्धा • समन्वय", "pilgrim-about-slogan");
+        Label copyright = muted("Simhastha Connect 2027");
+        HBox footer = new HBox(14, slogan, createSpacer(), copyright, smallGold("Nashik Simhastha 2027"));
+        footer.getStyleClass().add("about-footer");
+        footer.setAlignment(Pos.CENTER_LEFT);
+        return footer;
     }
 
     private VBox genericModulePage(String module) {
