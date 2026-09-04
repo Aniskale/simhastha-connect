@@ -14,6 +14,8 @@ import com.simhastha.model.EmergencyReport;
 import com.simhastha.model.EmergencyService;
 import com.simhastha.model.Ghat;
 import com.simhastha.model.GhatOperationalState;
+import com.simhastha.model.LostFoundReport;
+import com.simhastha.model.OfficialHelpLocation;
 import com.simhastha.service.GhatRepository;
 import java.io.IOException;
 import java.net.URI;
@@ -617,22 +619,136 @@ public final class FirestoreGateway implements GhatRepository {
             records.add(new AppDataStore.LostFoundCaseRecord(
                     document.id,
                     firstNonBlank(field(fields, "type"), field(fields, "reportType")),
-                    firstNonBlank(field(fields, "name"), field(fields, "itemName")),
+                    firstNonBlank(field(fields, "name"), field(fields, "itemName"), field(fields, "title")),
                     field(fields, "age"),
                     field(fields, "gender"),
                     field(fields, "clothing"),
                     field(fields, "identificationMarks"),
-                    firstNonBlank(field(fields, "lastSeenLocation"), field(fields, "location")),
-                    firstNonBlank(field(fields, "lastSeenDateTime"), field(fields, "lastSeenAt")),
+                    firstNonBlank(field(fields, "lastSeenLocation"), field(fields, "location"), field(fields, "locationName")),
+                    firstNonBlank(field(fields, "lastSeenDateTime"), field(fields, "lastSeenAt"), field(fields, "incidentDate")),
                     field(fields, "reporterName"),
                     field(fields, "relation"),
-                    firstNonBlank(field(fields, "contact"), field(fields, "mobile")),
+                    firstNonBlank(field(fields, "contact"), field(fields, "mobile"), field(fields, "reporterPhone")),
                     firstNonBlank(field(fields, "status"), "open"),
                     firstNonBlank(field(fields, "priority"), "normal"),
                     field(fields, "createdAt"),
                     field(fields, "updatedAt")));
         }
         return records;
+    }
+
+    public void saveLostFoundReport(LostFoundReport report, String idToken)
+            throws IOException, InterruptedException {
+        requireLostFoundSession(report, idToken);
+        sendAuthorizedPatch(documentUri("lostFoundReports", report.reportId()), lostFoundReportJson(report), idToken);
+    }
+
+    public List<LostFoundReport> loadLostFoundReportsForUser(String userId, String idToken)
+            throws IOException, InterruptedException {
+        if (!notBlank(userId)) {
+            return List.of();
+        }
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"lostFoundReports\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"userId\"},"
+                + "\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"" + escape(userId) + "\"}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())),
+                query, idToken);
+        List<LostFoundReport> reports = new ArrayList<>();
+        for (Document document : parseDocuments(json)) {
+            LostFoundReport report = lostFoundReportFrom(document);
+            if (report != null) {
+                reports.add(report);
+            }
+        }
+        return reports;
+    }
+
+    public void markLostFoundReportFoundByOwner(String reportId, String idToken)
+            throws IOException, InterruptedException {
+        String now = String.valueOf(System.currentTimeMillis());
+        String json = fieldsJson(
+                fieldJson("status", "FOUND"),
+                fieldJson("updatedAt", now),
+                fieldJson("resolvedAt", now));
+        sendAuthorizedPatch(URI.create(documentUrl("lostFoundReports", reportId)
+                        + "&updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt&updateMask.fieldPaths=resolvedAt"),
+                json, idToken);
+    }
+
+    public int seedLostFoundDemoReports(String idToken) throws IOException, InterruptedException {
+        if (!notBlank(idToken)) {
+            throw new IOException("An authenticated admin session is required.");
+        }
+        String now = String.valueOf(System.currentTimeMillis());
+        List<LostFoundReport> reports = List.of(
+                new LostFoundReport("demo-child-help", "SC-LF-2026-DEMO01", "demo-user", "LOST", "Child",
+                        "Missing child near Ramkund", "Last seen near the Ramkund entry queue wearing a yellow kurta.",
+                        List.of(), "Ramkund, Panchavati", 20.0057, 73.7908, "Main entry arch", "2026-09-04", "15:10",
+                        "Demo Reporter", "+91 90000 00001", "Parent", "CRITICAL", "Missing child requires immediate assistance",
+                        "SUBMITTED", "VERIFIED", "", "", "", "", now, now, ""),
+                new LostFoundReport("demo-doc-found", "SC-LF-2026-DEMO02", "demo-user", "FOUND", "Documents",
+                        "Found ID pouch", "Brown pouch containing travel documents submitted near help desk.",
+                        List.of(), "Tapovan Help Desk", 20.0134, 73.8172, "Volunteer tent 3", "2026-09-04", "14:20",
+                        "Help Desk Volunteer", "+91 90000 00002", "Volunteer", "MEDIUM", "Sensitive or valuable item",
+                        "SUBMITTED", "VERIFIED", "", "", "", "Collect from verified help desk with ID proof.", now, now, ""));
+        for (LostFoundReport report : reports) {
+            sendAuthorizedPatch(documentUri("lostFoundReports", report.reportId()), lostFoundReportJson(report), idToken);
+        }
+        return reports.size();
+    }
+
+    public List<OfficialHelpLocation> loadOfficialHelpLocations(String idToken)
+            throws IOException, InterruptedException {
+        return loadOfficialHelpLocationsForAdmin(idToken).stream()
+                .filter(OfficialHelpLocation::publiclyVisible)
+                .toList();
+    }
+
+    public List<OfficialHelpLocation> loadOfficialHelpLocationsForAdmin(String idToken)
+            throws IOException, InterruptedException {
+        List<OfficialHelpLocation> locations = new ArrayList<>();
+        for (Document document : loadCollectionDocuments("officialHelpLocations", idToken)) {
+            OfficialHelpLocation location = officialHelpLocationFrom(document);
+            if (location != null) {
+                locations.add(location);
+            }
+        }
+        return locations;
+    }
+
+    public void saveOfficialHelpLocation(OfficialHelpLocation location, boolean create, String idToken)
+            throws IOException, InterruptedException {
+        if (!notBlank(idToken)) {
+            throw new IOException("An authenticated admin session is required.");
+        }
+        sendAuthorizedPatch(documentUri("officialHelpLocations", location.id()), officialHelpLocationJson(location, create),
+                idToken);
+    }
+
+    public void deleteOfficialHelpLocation(String locationId, String idToken)
+            throws IOException, InterruptedException {
+        sendAuthorizedDelete(documentUri("officialHelpLocations", locationId), idToken);
+    }
+
+    public int seedOfficialHelpLocations(String idToken) throws IOException, InterruptedException {
+        if (!notBlank(idToken)) {
+            throw new IOException("An authenticated admin session is required.");
+        }
+        String now = String.valueOf(System.currentTimeMillis());
+        List<OfficialHelpLocation> locations = List.of(
+                new OfficialHelpLocation("help-ramkund", "Ramkund Lost & Found Help Desk", "Lost & Found", "Panchavati",
+                        20.0057, 73.7908, "Ramkund entry area, Panchavati", "Main entry arch", "+91 90000 10001",
+                        "24 hours", List.of("Lost person reporting", "Found item deposit", "Announcements"), "VERIFIED",
+                        true, now, now),
+                new OfficialHelpLocation("help-tapovan", "Tapovan Pilgrim Assistance Center", "Help Center", "Tapovan",
+                        20.0134, 73.8172, "Tapovan volunteer camp", "Volunteer tent 3", "+91 90000 10002",
+                        "06:00 - 23:00", List.of("Directions", "Document collection", "Medical coordination"), "VERIFIED",
+                        true, now, now));
+        for (OfficialHelpLocation location : locations) {
+            sendAuthorizedPatch(documentUri("officialHelpLocations", location.id()), officialHelpLocationJson(location, true),
+                    idToken);
+        }
+        return locations.size();
     }
 
     private void loadPublicCollection(List<AppDataStore.ServiceItem> target, String collection, String module,
@@ -1363,10 +1479,11 @@ public final class FirestoreGateway implements GhatRepository {
             throws IOException, InterruptedException {
         String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
         String now = String.valueOf(System.currentTimeMillis());
+        boolean resolved = "found".equalsIgnoreCase(status) || "reunited".equalsIgnoreCase(status);
         String json = fieldsJson(
                 fieldJson("status", status),
                 fieldJson("adminNote", note),
-                fieldJson("foundAt", ("found".equals(status) || "reunited".equals(status)) ? now : ""),
+                fieldJson("foundAt", resolved ? now : ""),
                 fieldJson("updatedAt", now),
                 fieldJson("updatedBy", adminUid));
         sendAuthorizedPatch(URI.create(documentUrl("lostFoundReports", caseId)
@@ -1567,6 +1684,123 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("source", report.source().name()));
     }
 
+    private LostFoundReport lostFoundReportFrom(Document document) {
+        try {
+            String fields = document.fields;
+            return new LostFoundReport(
+                    firstNonBlank(field(fields, "reportId"), document.id),
+                    firstNonBlank(field(fields, "trackingId"), document.id),
+                    field(fields, "userId"),
+                    firstNonBlank(field(fields, "reportType"), field(fields, "type")),
+                    field(fields, "category"),
+                    firstNonBlank(field(fields, "title"), field(fields, "name"), field(fields, "itemName")),
+                    field(fields, "description"),
+                    stringListField(fields, "imageUrls"),
+                    firstNonBlank(field(fields, "locationName"), field(fields, "location"), field(fields, "lastSeenLocation")),
+                    decimalField(fields, "latitude"),
+                    decimalField(fields, "longitude"),
+                    field(fields, "landmark"),
+                    field(fields, "incidentDate"),
+                    field(fields, "incidentTime"),
+                    field(fields, "reporterName"),
+                    firstNonBlank(field(fields, "reporterPhone"), field(fields, "contact"), field(fields, "mobile")),
+                    field(fields, "relation"),
+                    firstNonBlank(field(fields, "priority"), "NORMAL"),
+                    field(fields, "priorityReason"),
+                    firstNonBlank(field(fields, "status"), "SUBMITTED"),
+                    firstNonBlank(field(fields, "verificationStatus"), "PENDING"),
+                    field(fields, "assignedAdminId"),
+                    field(fields, "assignedAuthorityId"),
+                    field(fields, "foundLocationId"),
+                    field(fields, "collectionInstructions"),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt"),
+                    field(fields, "resolvedAt"));
+        } catch (RuntimeException exception) {
+            LOGGER.warning("LOST_FOUND_READ_DIAGNOSTIC action=PARSE reportId=" + document.id + " result=malformed");
+            return null;
+        }
+    }
+
+    private String lostFoundReportJson(LostFoundReport report) {
+        return fieldsJson(
+                fieldJson("reportId", report.reportId()),
+                fieldJson("trackingId", report.trackingId()),
+                fieldJson("userId", report.userId()),
+                fieldJson("reportType", report.reportType()),
+                fieldJson("category", report.category()),
+                fieldJson("title", report.title()),
+                fieldJson("description", report.description()),
+                stringArrayFieldJson("imageUrls", report.imageUrls()),
+                fieldJson("locationName", report.locationName()),
+                numberOrNullFieldJson("latitude", report.latitude()),
+                numberOrNullFieldJson("longitude", report.longitude()),
+                fieldJson("landmark", report.landmark()),
+                fieldJson("incidentDate", report.incidentDate()),
+                fieldJson("incidentTime", report.incidentTime()),
+                fieldJson("reporterName", report.reporterName()),
+                fieldJson("reporterPhone", report.reporterPhone()),
+                fieldJson("relation", report.relation()),
+                fieldJson("priority", report.priority()),
+                fieldJson("priorityReason", report.priorityReason()),
+                fieldJson("status", report.status()),
+                fieldJson("verificationStatus", report.verificationStatus()),
+                fieldJson("assignedAdminId", report.assignedAdminId()),
+                fieldJson("assignedAuthorityId", report.assignedAuthorityId()),
+                fieldJson("foundLocationId", report.foundLocationId()),
+                fieldJson("collectionInstructions", report.collectionInstructions()),
+                fieldJson("createdAt", report.createdAt()),
+                fieldJson("updatedAt", report.updatedAt()),
+                fieldJson("resolvedAt", report.resolvedAt()));
+    }
+
+    private OfficialHelpLocation officialHelpLocationFrom(Document document) {
+        try {
+            String fields = document.fields;
+            Double latitude = decimalField(fields, "latitude");
+            Double longitude = decimalField(fields, "longitude");
+            return new OfficialHelpLocation(
+                    firstNonBlank(field(fields, "id"), document.id),
+                    field(fields, "name"),
+                    field(fields, "type"),
+                    field(fields, "area"),
+                    latitude == null ? 0D : latitude,
+                    longitude == null ? 0D : longitude,
+                    field(fields, "address"),
+                    field(fields, "landmark"),
+                    firstNonBlank(field(fields, "phone"), field(fields, "contact")),
+                    firstNonBlank(field(fields, "openingHours"), field(fields, "availability")),
+                    stringListField(fields, "services"),
+                    firstNonBlank(field(fields, "verificationStatus"), "PENDING"),
+                    !"false".equalsIgnoreCase(boolField(fields, "active")),
+                    field(fields, "createdAt"),
+                    field(fields, "updatedAt"));
+        } catch (RuntimeException exception) {
+            LOGGER.warning("HELP_LOCATION_READ_DIAGNOSTIC action=PARSE locationId=" + document.id + " result=malformed");
+            return null;
+        }
+    }
+
+    private String officialHelpLocationJson(OfficialHelpLocation location, boolean create) {
+        String now = String.valueOf(System.currentTimeMillis());
+        return fieldsJson(
+                fieldJson("id", location.id()),
+                fieldJson("name", location.name()),
+                fieldJson("type", location.type()),
+                fieldJson("area", location.area()),
+                numberOrNullFieldJson("latitude", location.latitude()),
+                numberOrNullFieldJson("longitude", location.longitude()),
+                fieldJson("address", location.address()),
+                fieldJson("landmark", location.landmark()),
+                fieldJson("phone", location.phone()),
+                fieldJson("openingHours", location.openingHours()),
+                stringArrayFieldJson("services", location.services()),
+                fieldJson("verificationStatus", location.verificationStatus()),
+                boolFieldJson("active", location.active()),
+                fieldJson("createdAt", create || !notBlank(location.createdAt()) ? now : location.createdAt()),
+                fieldJson("updatedAt", now));
+    }
+
     private void requireEmergencySession(EmergencyReport report, String idToken, String action) throws IOException {
         AppSession.User user = AppSession.currentUser();
         boolean valid = user != null && notBlank(idToken) && user.uid().equals(report.userId());
@@ -1578,6 +1812,14 @@ public final class FirestoreGateway implements GhatRepository {
                 + " result=" + valid);
         if (!valid) {
             throw new IOException("An authenticated user session is required to submit an emergency request.");
+        }
+    }
+
+    private void requireLostFoundSession(LostFoundReport report, String idToken) throws IOException {
+        AppSession.User user = AppSession.currentUser();
+        boolean valid = user != null && notBlank(idToken) && user.uid().equals(report.userId());
+        if (!valid) {
+            throw new IOException("An authenticated user session is required to submit a lost and found report.");
         }
     }
 

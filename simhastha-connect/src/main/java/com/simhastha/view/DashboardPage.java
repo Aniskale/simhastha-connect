@@ -2340,28 +2340,36 @@ public class DashboardPage {
 
         java.util.function.Consumer<String> filter = text -> {
             String query = text == null ? "" : text.trim().toLowerCase(java.util.Locale.ROOT);
-            java.util.stream.Stream<AirportOption> airports = query.isBlank()
-                    ? INDIA_AIRPORT_OPTIONS.stream().limit(12)
-                    : INDIA_AIRPORT_OPTIONS.stream().filter(airport -> airport.matches(query));
-            AirportOption selected = selectedAirportProperty.get();
-            java.util.List<AirportOption> matches = airports.limit(LOCATION_SEARCH_LIMIT)
-                    .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
-            if (selected != null && !matches.contains(selected)) {
-                matches.add(0, selected);
-            }
-            combo.getProperties().put("airportSelectionInProgress", true);
-            try {
-                combo.getItems().setAll(matches);
-                if (selected != null) {
-                    combo.setValue(selected);
-                    combo.getSelectionModel().select(selected);
-                }
-            } finally {
-                combo.getProperties().remove("airportSelectionInProgress");
-            }
+            int requestId = nextAirportRequestId(combo);
+            LOCATION_SEARCH_EXECUTOR.execute(() -> {
+                java.util.stream.Stream<AirportOption> airports = query.isBlank()
+                        ? INDIA_AIRPORT_OPTIONS.stream().limit(12)
+                        : INDIA_AIRPORT_OPTIONS.stream().filter(airport -> airport.matches(query));
+                java.util.List<AirportOption> matches = airports.limit(LOCATION_SEARCH_LIMIT).toList();
+                javafx.application.Platform.runLater(() -> {
+                    if (currentAirportRequestId(combo) == requestId) {
+                        setAirportItemsPreservingSelection(combo, matches, selectedAirportProperty,
+                                combo.getEditor().getText());
+                    }
+                });
+            });
         };
-        combo.getEditor().addEventFilter(javafx.scene.input.KeyEvent.KEY_TYPED, event ->
-                combo.getProperties().put("airportUserTyping", true));
+
+        combo.getEditor().addEventFilter(javafx.scene.input.KeyEvent.KEY_TYPED, event -> {
+            if (!Boolean.TRUE.equals(combo.getProperties().get("airportSelectionInProgress"))) {
+                combo.getProperties().put("airportUserTyping", true);
+            }
+        });
+        combo.getEditor().addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
+            switch (event.getCode()) {
+                case BACK_SPACE, DELETE -> {
+                    if (!Boolean.TRUE.equals(combo.getProperties().get("airportSelectionInProgress"))) {
+                        combo.getProperties().put("airportUserTyping", true);
+                    }
+                }
+                default -> { }
+            }
+        });
         combo.getEditor().textProperty().addListener((observable, previous, text) -> {
             if (Boolean.TRUE.equals(combo.getProperties().get("airportSelectionInProgress"))) {
                 return;
@@ -2433,6 +2441,46 @@ public class DashboardPage {
         });
         filter.accept("");
         return combo;
+    }
+
+    private void setAirportItemsPreservingSelection(ComboBox<AirportOption> combo,
+            java.util.List<AirportOption> matches, ObjectProperty<AirportOption> selectedAirportProperty,
+            String editorText) {
+        AirportOption selected = selectedAirportProperty.get();
+        boolean editorStillShowsSelection = selected != null && selected.displayName().equals(editorText);
+        boolean shouldRestoreSelection = selected != null && (editorStillShowsSelection || !combo.isFocused());
+        java.util.List<AirportOption> items = new java.util.ArrayList<>(matches);
+        if (shouldRestoreSelection && !items.contains(selected)) {
+            items.add(0, selected);
+            if (items.size() > LOCATION_SEARCH_LIMIT) {
+                items = new java.util.ArrayList<>(items.subList(0, LOCATION_SEARCH_LIMIT));
+            }
+        }
+        combo.getProperties().put("airportSelectionInProgress", true);
+        try {
+            combo.getItems().setAll(items);
+            if (shouldRestoreSelection) {
+                combo.setValue(selected);
+                combo.getSelectionModel().select(selected);
+                combo.getEditor().setText(selected.displayName());
+                combo.getEditor().positionCaret(combo.getEditor().getText().length());
+            }
+        } finally {
+            combo.getProperties().remove("airportSelectionInProgress");
+            combo.getProperties().remove("airportUserTyping");
+        }
+    }
+
+    private int nextAirportRequestId(ComboBox<AirportOption> combo) {
+        Object requestId = combo.getProperties().getOrDefault("airportRequestId", 0);
+        int next = ((Integer) requestId) + 1;
+        combo.getProperties().put("airportRequestId", next);
+        return next;
+    }
+
+    private int currentAirportRequestId(ComboBox<AirportOption> combo) {
+        Object requestId = combo.getProperties().getOrDefault("airportRequestId", 0);
+        return (Integer) requestId;
     }
 
     private void setSelectedAirport(ComboBox<AirportOption> combo, AirportOption airport,

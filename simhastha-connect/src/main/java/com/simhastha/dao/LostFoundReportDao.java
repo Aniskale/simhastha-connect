@@ -1,7 +1,7 @@
 package com.simhastha.dao;
 
 import com.simhastha.model.LostFoundReport;
-import com.simhastha.view.FirestoreGateway;
+import com.simhastha.gateway.firebase.FirestoreGateway;
 import java.util.List;
 
 public final class LostFoundReportDao {
