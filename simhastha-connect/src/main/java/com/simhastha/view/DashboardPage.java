@@ -115,6 +115,13 @@ public class DashboardPage {
     private final java.util.Map<String, Button> navButtons = new java.util.LinkedHashMap<>();
     private LocationOption selectedFromLocation;
     private LocationOption selectedToLocation;
+    private LocationOption selectedTrainFrom;
+    private LocationOption selectedTrainTo;
+    private AirportOption selectedFlightFrom;
+    private AirportOption selectedFlightTo;
+    private LocationOption selectedLocalFrom;
+    private LocationOption selectedLocalTo;
+    private java.time.LocalDate selectedLocalDate;
     private static final java.util.Map<String, Place> TRANSPORT_PLACES = createTransportPlaces();
     private List<PublicBusinessListing> marketplaceBusinesses = List.of();
     private FlowPane marketplaceGrid;
@@ -123,6 +130,8 @@ public class DashboardPage {
     private HBox marketplaceStatsStrip;
     private String selectedMarketplaceCategory = "All";
     private static final java.util.List<LocationOption> INDIA_LOCATION_OPTIONS = loadIndiaLocationOptions();
+    private static final java.util.List<AirportOption> INDIA_AIRPORT_OPTIONS = loadIndiaAirportOptions();
+    private static final java.util.List<LocationOption> NASHIK_LOCAL_OPTIONS = loadNashikLocalOptions();
     private static final int LOCATION_SEARCH_LIMIT = 30;
     private static final java.util.concurrent.ExecutorService LOCATION_SEARCH_EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "simhastha-location-search");
@@ -1901,68 +1910,329 @@ public class DashboardPage {
     }
 
     private void showTrainSearch() {
-        ComboBox<String> from = cityCombo("Select Station", majorIndianStations());
-        ComboBox<String> to = cityCombo("Select Station", majorIndianStations());
-        DatePicker date = transportDatePicker();
-        ComboBox<Integer> passengers = passengerCombo();
-        Button search = new Button("SEARCH TRAINS");
-        search.getStyleClass().add("transport-primary-button");
-        VBox results = new VBox(12);
-        search.setOnAction(event -> {
-            if (validJourney(selectedValue(from), selectedValue(to), date.getValue(), passengers.getValue())) {
-                results.getChildren().setAll(officialTrainWebsites(date.getValue()));
-            }
-        });
-        VBox form = transportForm("TRAIN SEARCH", journeyInput("FROM", from, "\uE707"),
-                journeyInput("TO", to, "\uE707"), journeyInput("DATE", date, "\uE787"),
-                journeyInput("PASSENGERS", passengers, "\uE716"), search);
-        form.getStyleClass().add("transport-train-form");
-        root.setCenter(scroll(pageShell("Train Travel", "Search train travel websites for your journey to Nashik.",
-                transportBackButton("Back to Transport", this::showTransportLanding), form, results)));
+        showTrainSearch(null);
     }
 
-    private VBox officialTrainWebsites(java.time.LocalDate date) {
-        VBox cards = new VBox(10, sectionTitle("Official Train Travel Websites"));
-        HBox sites = new HBox(12,
-                travelWebsiteCard("🚆", "IRCTC", "Official Indian Railways online ticketing portal.", "https://www.irctc.co.in/nget/train-search", date),
-                travelWebsiteCard("🚆", "MakeMyTrip Rail", "Search rail travel options on MakeMyTrip.", "https://www.makemytrip.com/railways/", date),
-                travelWebsiteCard("🚆", "ConfirmTkt", "Check rail travel information on ConfirmTkt.", "https://www.confirmtkt.com/", date),
-                travelWebsiteCard("🚆", "ixigo Trains", "Search train journeys on ixigo.", "https://www.ixigo.com/trains", date));
-        cards.getChildren().addAll(sites, dateEntryNote(date), muted("Live availability, timings, fares and seat information are provided by the respective travel provider."));
-        return cards;
+    private void showTrainSearch(JourneySearchState savedSearch) {
+        if (savedSearch != null) {
+            selectedTrainFrom = savedSearch.from();
+            selectedTrainTo = savedSearch.to();
+        }
+        ObjectProperty<LocationOption> selectedTrainFromProperty = new SimpleObjectProperty<>(selectedTrainFrom);
+        ObjectProperty<LocationOption> selectedTrainToProperty = new SimpleObjectProperty<>(selectedTrainTo);
+        selectedTrainFromProperty.addListener((observable, oldLocation, newLocation) -> selectedTrainFrom = newLocation);
+        selectedTrainToProperty.addListener((observable, oldLocation, newLocation) -> selectedTrainTo = newLocation);
+
+        ComboBox<LocationOption> from = locationCombo("Search station or city", selectedTrainFromProperty);
+        ComboBox<LocationOption> to = locationCombo("Search station or city", selectedTrainToProperty);
+        DatePicker date = transportDatePicker();
+        ComboBox<Integer> passengers = passengerCombo();
+        if (selectedTrainFrom != null) {
+            setSelectedLocation(from, selectedTrainFrom, selectedTrainFromProperty);
+        }
+        if (selectedTrainTo != null) {
+            setSelectedLocation(to, selectedTrainTo, selectedTrainToProperty);
+        }
+        if (savedSearch != null) {
+            date.setValue(savedSearch.date());
+            passengers.setValue(savedSearch.passengers());
+        }
+
+        Button swap = new Button("\uE8AB");
+        swap.getStyleClass().add("outside-swap-button");
+        swap.setAccessibleText("Swap train From and To");
+        swap.setOnAction(event -> {
+            LocationOption oldFrom = selectedTrainFrom;
+            LocationOption oldTo = selectedTrainTo;
+            setSelectedLocation(from, oldTo, selectedTrainFromProperty);
+            setSelectedLocation(to, oldFrom, selectedTrainToProperty);
+        });
+
+        Button search = new Button("SEARCH TRAINS");
+        search.getStyleClass().add("transport-primary-button");
+        search.setOnAction(event -> {
+            LocationOption fromValue = selectedTrainFrom;
+            LocationOption toValue = selectedTrainTo;
+            if (!validSelectedJourney(fromValue, toValue, date.getValue(), passengers.getValue())) {
+                return;
+            }
+            showAvailableTrainBookingOptions(new JourneySearchState(fromValue, toValue, date.getValue(), passengers.getValue()));
+        });
+
+        VBox form = trainJourneySearchForm(from, swap, to, date, passengers, search);
+        form.getStyleClass().add("transport-train-form");
+        root.setCenter(scroll(pageShell("Plan Your Train Journey",
+                "Search your route and continue to trusted official train booking platforms.",
+                transportBackButton("Back to Transport", this::showTransportLanding),
+                trainJourneyHero(), form, trainTravelNotice())));
+    }
+
+    private VBox trainJourneySearchForm(ComboBox<LocationOption> from, Button swap, ComboBox<LocationOption> to,
+            DatePicker date, ComboBox<Integer> passengers, Button search) {
+        VBox fromBox = journeyInput("From Station / City", from, "\uE7C0");
+        VBox toBox = journeyInput("To Station / City", to, "\uE7C0");
+        VBox dateBox = journeyInput("Journey Date", date, "\uE787");
+        VBox passengerBox = journeyInput("Passengers", passengers, "\uE716");
+
+        HBox fields = new HBox(10, fromBox, swap, toBox, dateBox, passengerBox, search);
+        fields.setAlignment(Pos.BOTTOM_LEFT);
+        fields.getStyleClass().add("outside-journey-search-row");
+
+        VBox form = new VBox(12, sectionTitle("Train Outside Traveller"), fields);
+        form.getStyleClass().addAll("journey-planner", "outside-journey-form");
+        fromBox.setMinWidth(0);
+        toBox.setMinWidth(0);
+        dateBox.setMinWidth(0);
+        passengerBox.setMinWidth(0);
+        fromBox.prefWidthProperty().bind(form.widthProperty().multiply(0.23));
+        toBox.prefWidthProperty().bind(form.widthProperty().multiply(0.23));
+        dateBox.prefWidthProperty().bind(form.widthProperty().multiply(0.18));
+        passengerBox.prefWidthProperty().bind(form.widthProperty().multiply(0.12));
+        search.prefWidthProperty().bind(form.widthProperty().multiply(0.12));
+        search.setMaxWidth(Double.MAX_VALUE);
+        return form;
+    }
+
+    private StackPane trainJourneyHero() {
+        ImageView image = createImage("/images/transport-train-reference.png", 1100, 130, 0.5, 0.5);
+        image.getStyleClass().add("outside-journey-hero-image");
+        VBox text = new VBox(4, smallGold("OFFICIAL TRAIN BOOKING"), label("Plan Your Train Journey", "outside-journey-hero-title"),
+                muted("Search your route and open trusted train booking platforms in the external browser."));
+        text.setPadding(new Insets(18, 28, 18, 28));
+        StackPane.setAlignment(text, Pos.CENTER_LEFT);
+        StackPane hero = new StackPane(image, text);
+        hero.getStyleClass().addAll("outside-journey-hero", "train-journey-hero");
+        return hero;
+    }
+
+    private HBox trainTravelNotice() {
+        HBox notice = new HBox(12,
+                journeyBenefit("\uE8FD", "Official platforms", "Continue booking on IRCTC and trusted partners"),
+                journeyBenefit("\uE787", "Date preserved", "Use the selected journey date during external search"),
+                journeyBenefit("\uE72E", "No fake live data", "Availability is confirmed only on provider websites"));
+        notice.getStyleClass().add("outside-journey-benefits");
+        return notice;
+    }
+
+    private void showAvailableTrainBookingOptions(JourneySearchState search) {
+        VBox optionCards = new VBox(12,
+                trainBookingOptionCard("🚆", "IRCTC Official Train Booking",
+                        "Official Indian Railways online ticketing portal.",
+                        "https://www.irctc.co.in/nget/train-search", search),
+                trainBookingOptionCard("🚆", "MakeMyTrip Rail",
+                        "Trusted train search and booking partner.",
+                        "https://www.makemytrip.com/railways/", search),
+                trainBookingOptionCard("🚆", "ConfirmTkt",
+                        "Train search, availability guidance and booking partner.",
+                        "https://www.confirmtkt.com/", search),
+                trainBookingOptionCard("🚆", "ixigo Trains",
+                        "Train journey search and booking partner.",
+                        "https://www.ixigo.com/trains", search));
+
+        root.setCenter(scroll(pageShell("Available Train Booking Options",
+                "Open official/trusted platforms and complete train booking externally.",
+                transportBackButton("Back to Train Search", () -> showTrainSearch(search)),
+                trainJourneySummaryCard(search), optionCards,
+                muted("Simhastha Connect does not show fake live train availability and does not collect train payment details."))));
+    }
+
+    private VBox trainJourneySummaryCard(JourneySearchState search) {
+        Label title = label("AVAILABLE TRAIN BOOKING OPTIONS", "available-route-title");
+        Label route = label(search.from().displayName() + "  \u2192  " + search.to().displayName(), "available-bus-name");
+        Label details = muted("Journey Date: " + formatJourneyDate(search.date()) + "  |  "
+                + search.passengers() + (search.passengers() == 1 ? " Passenger" : " Passengers"));
+        VBox summary = new VBox(7, smallGold("SELECTED TRAIN JOURNEY"), title, route, details);
+        summary.getStyleClass().add("available-journey-summary");
+        return summary;
+    }
+
+    private VBox trainBookingOptionCard(String icon, String title, String description, String url, JourneySearchState search) {
+        Label optionIcon = new Label(icon);
+        optionIcon.getStyleClass().add("transport-provider-icon");
+        Label route = muted(search.from().name() + " → " + search.to().name());
+        Label date = muted("Date: " + formatJourneyDate(search.date()) + "  |  Passengers: " + search.passengers());
+        Button open = new Button("OPEN OFFICIAL WEBSITE");
+        open.getStyleClass().add("transport-primary-button");
+        open.setOnAction(event -> {
+            openTravelWebsite(url);
+            showInfo("External Train Booking",
+                    "Please enter/search the selected journey details on the opened website:\n"
+                            + search.from().displayName() + " → " + search.to().displayName()
+                            + "\nDate: " + formatJourneyDate(search.date())
+                            + "\nPassengers: " + search.passengers());
+        });
+        VBox copy = new VBox(5, strong(title), paragraph(description), route, date);
+        HBox row = new HBox(12, optionIcon, copy, createSpacer(), open);
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        VBox card = new VBox(row);
+        card.getStyleClass().add("available-bus-card");
+        return card;
     }
 
     private void showFlightSearch() {
-        ComboBox<String> from = cityCombo("Select City/Airport", majorIndianAirports());
-        ComboBox<String> to = cityCombo("Select City/Airport", majorIndianAirports());
-        to.setValue("Nashik / Ozar Airport (ISK)");
-        DatePicker date = transportDatePicker();
-        ComboBox<Integer> passengers = passengerCombo();
-        Button search = new Button("SEARCH FLIGHTS");
-        search.getStyleClass().add("transport-primary-button");
-        VBox results = new VBox(12);
-        search.setOnAction(event -> {
-            if (validJourney(selectedValue(from), selectedValue(to), date.getValue(), passengers.getValue())) {
-                results.getChildren().setAll(officialFlightWebsites(date.getValue()));
-            }
-        });
-        VBox form = transportForm("FLIGHT SEARCH", journeyInput("FROM", from, "\uE707"),
-                journeyInput("TO", to, "\uE707"), journeyInput("DATE", date, "\uE787"),
-                journeyInput("PASSENGERS", passengers, "\uE716"), search);
-        form.getStyleClass().add("transport-flight-form");
-        root.setCenter(scroll(pageShell("Flight Travel", "Search flight travel websites for your journey to Nashik.",
-                transportBackButton("Back to Transport", this::showTransportLanding), form, results)));
+        showFlightSearch(null);
     }
 
-    private VBox officialFlightWebsites(java.time.LocalDate date) {
-        VBox cards = new VBox(10, sectionTitle("Official Flight Travel Websites"));
-        HBox sites = new HBox(12,
-                travelWebsiteCard("✈", "MakeMyTrip", "Search domestic flight options on MakeMyTrip.", "https://www.makemytrip.com/flights/", date),
-                travelWebsiteCard("✈", "Yatra", "Search flights on Yatra.", "https://www.yatra.com/flights", date),
-                travelWebsiteCard("✈", "EaseMyTrip", "Search flights on EaseMyTrip.", "https://www.easemytrip.com/flights.html", date),
-                travelWebsiteCard("✈", "Air India", "Official Air India website.", "https://www.airindia.com/", date));
-        cards.getChildren().addAll(sites, dateEntryNote(date), muted("Live availability, timings, fares and seat information are provided by the respective travel provider."));
-        return cards;
+    private void showFlightSearch(FlightSearchState savedSearch) {
+        if (savedSearch != null) {
+            selectedFlightFrom = savedSearch.from();
+            selectedFlightTo = savedSearch.to();
+        }
+        ObjectProperty<AirportOption> selectedFlightFromProperty = new SimpleObjectProperty<>(selectedFlightFrom);
+        ObjectProperty<AirportOption> selectedFlightToProperty = new SimpleObjectProperty<>(selectedFlightTo);
+        selectedFlightFromProperty.addListener((observable, oldAirport, newAirport) -> selectedFlightFrom = newAirport);
+        selectedFlightToProperty.addListener((observable, oldAirport, newAirport) -> selectedFlightTo = newAirport);
+
+        ComboBox<AirportOption> from = airportCombo("Search airport or city", selectedFlightFromProperty);
+        ComboBox<AirportOption> to = airportCombo("Search airport or city", selectedFlightToProperty);
+        DatePicker date = transportDatePicker();
+        ComboBox<Integer> passengers = passengerCombo();
+        if (selectedFlightFrom != null) {
+            setSelectedAirport(from, selectedFlightFrom, selectedFlightFromProperty);
+        }
+        if (selectedFlightTo != null) {
+            setSelectedAirport(to, selectedFlightTo, selectedFlightToProperty);
+        }
+        if (savedSearch != null) {
+            date.setValue(savedSearch.date());
+            passengers.setValue(savedSearch.passengers());
+        }
+
+        Button swap = new Button("\uE8AB");
+        swap.getStyleClass().add("outside-swap-button");
+        swap.setAccessibleText("Swap flight From and To airports");
+        swap.setOnAction(event -> {
+            AirportOption oldFrom = selectedFlightFrom;
+            AirportOption oldTo = selectedFlightTo;
+            setSelectedAirport(from, oldTo, selectedFlightFromProperty);
+            setSelectedAirport(to, oldFrom, selectedFlightToProperty);
+        });
+
+        Button search = new Button("SEARCH FLIGHTS");
+        search.getStyleClass().add("transport-primary-button");
+        search.setOnAction(event -> {
+            AirportOption fromValue = selectedFlightFrom;
+            AirportOption toValue = selectedFlightTo;
+            if (!validFlightJourney(fromValue, toValue, date.getValue(), passengers.getValue())) {
+                return;
+            }
+            showAvailableFlightBookingOptions(new FlightSearchState(fromValue, toValue, date.getValue(), passengers.getValue()));
+        });
+
+        VBox form = flightJourneySearchForm(from, swap, to, date, passengers, search);
+        form.getStyleClass().add("transport-flight-form");
+        root.setCenter(scroll(pageShell("Plan Your Flight Journey",
+                "Search your journey and continue to trusted flight booking platforms.",
+                transportBackButton("Back to Transport", this::showTransportLanding),
+                flightJourneyHero(), form, flightTravelNotice())));
+    }
+
+    private VBox flightJourneySearchForm(ComboBox<AirportOption> from, Button swap, ComboBox<AirportOption> to,
+            DatePicker date, ComboBox<Integer> passengers, Button search) {
+        VBox fromBox = journeyInput("From Airport / City", from, "\uE709");
+        VBox toBox = journeyInput("To Airport / City", to, "\uE709");
+        VBox dateBox = journeyInput("Journey Date", date, "\uE787");
+        VBox passengerBox = journeyInput("Passengers", passengers, "\uE716");
+
+        HBox fields = new HBox(10, fromBox, swap, toBox, dateBox, passengerBox, search);
+        fields.setAlignment(Pos.BOTTOM_LEFT);
+        fields.getStyleClass().add("outside-journey-search-row");
+
+        VBox form = new VBox(12, sectionTitle("Flight Search"), fields);
+        form.getStyleClass().addAll("journey-planner", "outside-journey-form");
+        fromBox.setMinWidth(0);
+        toBox.setMinWidth(0);
+        dateBox.setMinWidth(0);
+        passengerBox.setMinWidth(0);
+        fromBox.prefWidthProperty().bind(form.widthProperty().multiply(0.23));
+        toBox.prefWidthProperty().bind(form.widthProperty().multiply(0.23));
+        dateBox.prefWidthProperty().bind(form.widthProperty().multiply(0.18));
+        passengerBox.prefWidthProperty().bind(form.widthProperty().multiply(0.12));
+        search.prefWidthProperty().bind(form.widthProperty().multiply(0.12));
+        search.setMaxWidth(Double.MAX_VALUE);
+        return form;
+    }
+
+    private StackPane flightJourneyHero() {
+        ImageView image = createImage("/images/transport-flight-reference.png", 1100, 130, 0.5, 0.5);
+        image.getStyleClass().add("outside-journey-hero-image");
+        VBox text = new VBox(4, smallGold("TRUSTED FLIGHT BOOKING"), label("Plan Your Flight Journey", "outside-journey-hero-title"),
+                muted("Select airports, choose a date and continue to trusted flight booking platforms."));
+        text.setPadding(new Insets(18, 28, 18, 28));
+        StackPane.setAlignment(text, Pos.CENTER_LEFT);
+        StackPane hero = new StackPane(image, text);
+        hero.getStyleClass().addAll("outside-journey-hero", "flight-journey-hero");
+        return hero;
+    }
+
+    private HBox flightTravelNotice() {
+        HBox notice = new HBox(12,
+                journeyBenefit("\uE709", "Airport search", "Search by city, airport name or airport code"),
+                journeyBenefit("\uE787", "Plan ahead", "Use your selected journey date on the opened website"),
+                journeyBenefit("\uE8C7", "External payment", "Complete booking and payment only on trusted provider sites"));
+        notice.getStyleClass().add("outside-journey-benefits");
+        return notice;
+    }
+
+    private void showAvailableFlightBookingOptions(FlightSearchState search) {
+        VBox optionCards = new VBox(12,
+                flightBookingOptionCard("✈", "MakeMyTrip Flights",
+                        "Trusted domestic and international flight booking platform.",
+                        "https://www.makemytrip.com/flights/", search),
+                flightBookingOptionCard("✈", "Yatra Flights",
+                        "Search and book flight journeys on Yatra.",
+                        "https://www.yatra.com/flights", search),
+                flightBookingOptionCard("✈", "EaseMyTrip Flights",
+                        "Flight booking platform for domestic and international routes.",
+                        "https://www.easemytrip.com/flights.html", search),
+                flightBookingOptionCard("✈", "Air India Official",
+                        "Official Air India booking website.",
+                        "https://www.airindia.com/", search),
+                flightBookingOptionCard("✈", "IndiGo Official",
+                        "Official IndiGo flight booking website.",
+                        "https://www.goindigo.in/", search));
+
+        root.setCenter(scroll(pageShell("Available Flight Booking Options",
+                "Open official/trusted platforms and complete flight booking externally.",
+                transportBackButton("Back to Flight Search", () -> showFlightSearch(search)),
+                flightJourneySummaryCard(search), optionCards,
+                muted("Simhastha Connect does not show fake live flight availability and does not collect flight payment details."))));
+    }
+
+    private VBox flightJourneySummaryCard(FlightSearchState search) {
+        Label title = label("AVAILABLE FLIGHT BOOKING OPTIONS", "available-route-title");
+        Label route = label(search.from().shortDisplay() + "  \u2192  " + search.to().shortDisplay(), "available-bus-name");
+        Label details = muted("Journey Date: " + formatJourneyDate(search.date()) + "  |  "
+                + search.passengers() + (search.passengers() == 1 ? " Passenger" : " Passengers"));
+        VBox summary = new VBox(7, smallGold("SELECTED FLIGHT JOURNEY"), title, route, details);
+        summary.getStyleClass().add("available-journey-summary");
+        return summary;
+    }
+
+    private VBox flightBookingOptionCard(String icon, String title, String description, String url, FlightSearchState search) {
+        Label optionIcon = new Label(icon);
+        optionIcon.getStyleClass().add("transport-provider-icon");
+        Label route = muted(search.from().city() + " (" + search.from().code() + ") → "
+                + search.to().city() + " (" + search.to().code() + ")");
+        Label date = muted("Date: " + formatJourneyDate(search.date()) + "  |  Passengers: " + search.passengers());
+        Button open = new Button("OPEN WEBSITE");
+        open.getStyleClass().add("transport-primary-button");
+        open.setOnAction(event -> {
+            openTravelWebsite(url);
+            showInfo("External Flight Booking",
+                    "Please enter/search the selected journey details on the opened website:\n"
+                            + search.from().displayName() + " → " + search.to().displayName()
+                            + "\nDate: " + formatJourneyDate(search.date())
+                            + "\nPassengers: " + search.passengers());
+        });
+        VBox copy = new VBox(5, strong(title), paragraph(description), route, date);
+        HBox row = new HBox(12, optionIcon, copy, createSpacer(), open);
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        VBox card = new VBox(row);
+        card.getStyleClass().add("available-bus-card");
+        return card;
     }
 
     private VBox datedTravelWebsiteCard(String name, String url, java.time.LocalDate date, String icon) {
@@ -1998,42 +2268,420 @@ public class DashboardPage {
                 + ". These websites are opened for manual search because date transfer is not confirmed.");
     }
 
+    private ComboBox<AirportOption> airportCombo(String prompt, ObjectProperty<AirportOption> selectedAirportProperty) {
+        ComboBox<AirportOption> combo = new ComboBox<>();
+        combo.setEditable(true);
+        combo.setPromptText(prompt);
+        combo.getEditor().setPromptText("Type airport, city or code");
+        combo.setVisibleRowCount(8);
+        combo.setMaxWidth(Double.MAX_VALUE);
+        combo.getStyleClass().addAll("journey-combo", "location-autocomplete", "airport-autocomplete");
+        combo.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(AirportOption airport) {
+                return airport == null ? "" : airport.displayName();
+            }
+
+            @Override
+            public AirportOption fromString(String text) {
+                return null;
+            }
+        });
+        Label noResults = new Label("No matching airport found");
+        noResults.getStyleClass().add("city-search-empty");
+        combo.setPlaceholder(noResults);
+        combo.setCellFactory(list -> new ListCell<>() {
+            @Override
+            protected void updateItem(AirportOption airport, boolean empty) {
+                super.updateItem(airport, empty);
+                if (empty || airport == null) {
+                    setGraphic(null);
+                    setText(null);
+                    return;
+                }
+                Label icon = new Label("\uE709");
+                icon.getStyleClass().add("location-result-pin");
+                Label name = new Label(airport.airportName());
+                name.getStyleClass().add("location-result-name");
+                Label detail = new Label(airport.code() + " • " + airport.city() + ", " + airport.region());
+                detail.getStyleClass().add("location-result-detail");
+                HBox row = new HBox(8, icon, new VBox(1, name, detail));
+                row.getStyleClass().add("location-search-result");
+                row.setAlignment(Pos.CENTER_LEFT);
+                setGraphic(row);
+                setText(null);
+            }
+        });
+        combo.setButtonCell(new ListCell<>() {
+            @Override
+            protected void updateItem(AirportOption airport, boolean empty) {
+                super.updateItem(airport, empty);
+                setText(empty || airport == null ? "" : airport.displayName());
+            }
+        });
+        combo.valueProperty().addListener((observable, oldAirport, newAirport) -> {
+            if (Boolean.TRUE.equals(combo.getProperties().get("airportSelectionInProgress"))) {
+                return;
+            }
+            if (newAirport != null) {
+                selectedAirportProperty.set(newAirport);
+                combo.getProperties().put("airportSelectionInProgress", true);
+                try {
+                    combo.getEditor().setText(newAirport.displayName());
+                    combo.getEditor().positionCaret(combo.getEditor().getText().length());
+                } finally {
+                    combo.getProperties().remove("airportSelectionInProgress");
+                    combo.getProperties().remove("airportUserTyping");
+                }
+                System.out.println("AIRPORT SELECTED: " + newAirport.displayName());
+                javafx.application.Platform.runLater(combo::hide);
+            }
+        });
+
+        java.util.function.Consumer<String> filter = text -> {
+            String query = text == null ? "" : text.trim().toLowerCase(java.util.Locale.ROOT);
+            java.util.stream.Stream<AirportOption> airports = query.isBlank()
+                    ? INDIA_AIRPORT_OPTIONS.stream().limit(12)
+                    : INDIA_AIRPORT_OPTIONS.stream().filter(airport -> airport.matches(query));
+            AirportOption selected = selectedAirportProperty.get();
+            java.util.List<AirportOption> matches = airports.limit(LOCATION_SEARCH_LIMIT)
+                    .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+            if (selected != null && !matches.contains(selected)) {
+                matches.add(0, selected);
+            }
+            combo.getProperties().put("airportSelectionInProgress", true);
+            try {
+                combo.getItems().setAll(matches);
+                if (selected != null) {
+                    combo.setValue(selected);
+                    combo.getSelectionModel().select(selected);
+                }
+            } finally {
+                combo.getProperties().remove("airportSelectionInProgress");
+            }
+        };
+        combo.getEditor().addEventFilter(javafx.scene.input.KeyEvent.KEY_TYPED, event ->
+                combo.getProperties().put("airportUserTyping", true));
+        combo.getEditor().textProperty().addListener((observable, previous, text) -> {
+            if (Boolean.TRUE.equals(combo.getProperties().get("airportSelectionInProgress"))) {
+                return;
+            }
+            AirportOption selected = selectedAirportProperty.get();
+            boolean userTyping = Boolean.TRUE.equals(combo.getProperties().get("airportUserTyping"));
+            if (userTyping && selected != null && !selected.displayName().equals(text)) {
+                selectedAirportProperty.set(null);
+            }
+            filter.accept(text);
+            if (combo.isFocused() && !combo.isShowing()
+                    && !Boolean.TRUE.equals(combo.getProperties().get("airportRefreshingForShow"))) {
+                combo.show();
+            }
+        });
+        combo.setOnShowing(event -> {
+            combo.getProperties().put("airportRefreshingForShow", true);
+            try {
+                filter.accept(combo.getEditor().getText());
+            } finally {
+                combo.getProperties().remove("airportRefreshingForShow");
+            }
+        });
+        combo.getEditor().setOnMouseClicked(event -> {
+            filter.accept(combo.getEditor().getText());
+            if (!combo.isShowing()) {
+                combo.show();
+            }
+        });
+        combo.focusedProperty().addListener((observable, wasFocused, isFocused) -> {
+            if (!isFocused) {
+                AirportOption selected = selectedAirportProperty.get();
+                if (selected != null) {
+                    setSelectedAirport(combo, selected, selectedAirportProperty);
+                }
+            }
+        });
+        combo.getEditor().setOnKeyPressed(event -> {
+            switch (event.getCode()) {
+                case ESCAPE -> {
+                    combo.hide();
+                    event.consume();
+                }
+                case ENTER -> {
+                    if (combo.isShowing() && !combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.setValue(combo.getItems().get(index < 0 ? 0 : index));
+                        event.consume();
+                    }
+                }
+                case DOWN -> {
+                    combo.show();
+                    if (!combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.getSelectionModel().select(Math.min(index + 1, combo.getItems().size() - 1));
+                    }
+                    event.consume();
+                }
+                case UP -> {
+                    combo.show();
+                    if (!combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.getSelectionModel().select(index <= 0 ? 0 : index - 1);
+                    }
+                    event.consume();
+                }
+                default -> { }
+            }
+        });
+        filter.accept("");
+        return combo;
+    }
+
+    private void setSelectedAirport(ComboBox<AirportOption> combo, AirportOption airport,
+            ObjectProperty<AirportOption> selectedAirportProperty) {
+        combo.getProperties().put("airportSelectionInProgress", true);
+        try {
+            selectedAirportProperty.set(airport);
+            if (airport == null) {
+                combo.setValue(null);
+                combo.getEditor().clear();
+                return;
+            }
+            if (!combo.getItems().contains(airport)) {
+                combo.getItems().setAll(INDIA_AIRPORT_OPTIONS.stream()
+                        .filter(option -> option.matches(airport.code()) || option.equals(airport))
+                        .limit(LOCATION_SEARCH_LIMIT)
+                        .toList());
+            }
+            combo.getSelectionModel().select(airport);
+            combo.setValue(airport);
+            combo.getEditor().setText(airport.displayName());
+            combo.getEditor().positionCaret(combo.getEditor().getText().length());
+        } finally {
+            combo.getProperties().remove("airportSelectionInProgress");
+            combo.getProperties().remove("airportUserTyping");
+        }
+    }
+
+    private boolean validFlightJourney(AirportOption from, AirportOption to, java.time.LocalDate date, Integer passengers) {
+        if (from == null) {
+            showInfo("Search details required", "Please select From Airport / City from the search results.");
+            return false;
+        }
+        if (to == null) {
+            showInfo("Search details required", "Please select To Airport / City from the search results.");
+            return false;
+        }
+        if (from.displayName().equalsIgnoreCase(to.displayName())) {
+            showInfo("Search details required", "From Airport / City and To Airport / City cannot be the same.");
+            return false;
+        }
+        if (date == null || date.isBefore(java.time.LocalDate.now())) {
+            showInfo("Search details required", "Please select a valid journey date.");
+            return false;
+        }
+        if (passengers == null || passengers < 1) {
+            showInfo("Search details required", "Please select a valid passenger count.");
+            return false;
+        }
+        return true;
+    }
+
     private String formatJourneyDate(java.time.LocalDate date) {
         return date.format(java.time.format.DateTimeFormatter.ofPattern("dd MMM uuuu"));
     }
 
     private void showLocalTransport() {
-        ComboBox<String> from = cityCombo("Select starting point", "Nashik CBS", "Nashik Road Railway Station", "Panchavati", "Tapovan", "Ramkund", "Mahamarg Bus Stand");
-        ComboBox<String> to = cityCombo("Select destination", "Ramkund", "Panchavati", "Tapovan", "Trimbakeshwar", "Kalaram Mandir");
+        showLocalTransport(null);
+    }
+
+    private void showLocalTransport(LocalJourneyState savedSearch) {
+        if (savedSearch != null) {
+            selectedLocalFrom = savedSearch.from();
+            selectedLocalTo = savedSearch.to();
+            selectedLocalDate = savedSearch.date();
+        }
+        ObjectProperty<LocationOption> selectedLocalFromProperty = new SimpleObjectProperty<>(selectedLocalFrom);
+        ObjectProperty<LocationOption> selectedLocalToProperty = new SimpleObjectProperty<>(selectedLocalTo);
+        selectedLocalFromProperty.addListener((observable, oldLocation, newLocation) -> selectedLocalFrom = newLocation);
+        selectedLocalToProperty.addListener((observable, oldLocation, newLocation) -> selectedLocalTo = newLocation);
+
+        ComboBox<LocationOption> from = localLocationCombo("Search local location", selectedLocalFromProperty);
+        ComboBox<LocationOption> to = localLocationCombo("Search local destination", selectedLocalToProperty);
+        if (selectedLocalFrom != null) {
+            setSelectedLocation(from, selectedLocalFrom, selectedLocalFromProperty);
+        }
+        if (selectedLocalTo != null) {
+            setSelectedLocation(to, selectedLocalTo, selectedLocalToProperty);
+        }
         DatePicker date = transportDatePicker();
-        VBox results = new VBox(12);
+        if (selectedLocalDate != null) {
+            date.setValue(selectedLocalDate);
+        }
+
+        Button swap = new Button("\uE8AB");
+        swap.getStyleClass().add("outside-swap-button");
+        swap.setAccessibleText("Swap local From and To locations");
+        swap.setOnAction(event -> {
+            LocationOption oldFrom = selectedLocalFrom;
+            LocationOption oldTo = selectedLocalTo;
+            setSelectedLocation(from, oldTo, selectedLocalFromProperty);
+            setSelectedLocation(to, oldFrom, selectedLocalToProperty);
+        });
+
         Button search = new Button("SEARCH LOCAL TRANSPORT");
         search.getStyleClass().add("transport-primary-button");
         search.setOnAction(event -> {
-            if (from.getValue() == null || from.getValue().isBlank() || to.getValue() == null || to.getValue().isBlank() || date.getValue() == null) {
-                showInfo("Missing details", "Select From, To and a valid date before searching local transport.");
+            LocationOption fromValue = selectedLocalFrom;
+            LocationOption toValue = selectedLocalTo;
+            java.time.LocalDate dateValue = date.getValue();
+            if (!validLocalJourney(fromValue, toValue, dateValue)) {
                 return;
             }
-            results.getChildren().setAll(localRouteCards(from.getValue(), to.getValue()));
+            selectedLocalDate = dateValue;
+            showAvailableLocalTransport(new LocalJourneyState(fromValue, toValue, dateValue));
         });
-        VBox form = transportForm("Nashik Local & Kumbh Transport", journeyInput("FROM", from, "\uE707"),
-                journeyInput("TO", to, "\uE707"), journeyInput("DATE", date, "\uE787"), search);
-        root.setCenter(scroll(pageShell("Nashik Local & Kumbh Transport", "Route information only. Live GPS and ETA are not shown when no verified live source is connected.",
-                transportBackButton("Back to Bus Transport", this::showBusOptions), form, results)));
+
+        VBox form = localJourneySearchForm(from, swap, to, date, search);
+        root.setCenter(scroll(pageShell("Nashik Local Travel",
+                "Find convenient transport options to travel within Nashik.",
+                transportBackButton("Back to Bus Options", this::showBusOptions),
+                localJourneyHero(), form, localTravelNotice())));
     }
 
-    private VBox localRouteCards(String from, String to) {
-        VBox routes = new VBox(10, sectionTitle("Local Transport Routes"));
-        routes.getChildren().addAll(localRouteCard("Kumbh Shuttle", from + " → " + to, "Check the official boarding point on arrival."),
-                localRouteCard("Nashik City Bus", from + " → CBS / Citylink → " + to, "Route diversions may apply on crowd-control days."));
-        return routes;
+    private VBox localJourneySearchForm(ComboBox<LocationOption> from, Button swap,
+            ComboBox<LocationOption> to, DatePicker date, Button search) {
+        VBox fromBox = journeyInput("From Location", from, "\uE707");
+        VBox toBox = journeyInput("To Location", to, "\uE774");
+        VBox dateBox = journeyInput("Travel Date", date, "\uE787");
+        HBox fields = new HBox(10, fromBox, swap, toBox, dateBox, search);
+        fields.setAlignment(Pos.BOTTOM_LEFT);
+        fields.getStyleClass().add("outside-journey-search-row");
+
+        VBox form = new VBox(12, sectionTitle("Inside Traveller / Nashik Local Transport"), fields);
+        form.getStyleClass().addAll("journey-planner", "outside-journey-form", "local-journey-form");
+        fromBox.setMinWidth(0);
+        toBox.setMinWidth(0);
+        dateBox.setMinWidth(0);
+        fromBox.prefWidthProperty().bind(form.widthProperty().multiply(0.28));
+        toBox.prefWidthProperty().bind(form.widthProperty().multiply(0.28));
+        dateBox.prefWidthProperty().bind(form.widthProperty().multiply(0.18));
+        search.prefWidthProperty().bind(form.widthProperty().multiply(0.16));
+        search.setMaxWidth(Double.MAX_VALUE);
+        return form;
     }
 
-    private VBox localRouteCard(String bus, String route, String nextStop) {
-        VBox card = new VBox(6, new HBox(10, moduleIcon("transport", "pilgrim-card-icon"), strong(bus)),
-                muted("Route: " + route), muted("Next stop: " + nextStop), badge("Live tracking unavailable"));
-        card.getStyleClass().add("transport-route-card");
+    private StackPane localJourneyHero() {
+        ImageView image = createImage("/images/bus-local-reference.png", 1100, 130, 0.5, 0.5);
+        image.getStyleClass().add("outside-journey-hero-image");
+        VBox text = new VBox(4, smallGold("NASHIK LOCAL TRAVEL"), label("Find local transport around Nashik Kumbh", "outside-journey-hero-title"),
+                muted("Search local landmarks, stations, ghats, temples and important pilgrim zones."));
+        text.setPadding(new Insets(18, 28, 18, 28));
+        StackPane.setAlignment(text, Pos.CENTER_LEFT);
+        StackPane hero = new StackPane(image, text);
+        hero.getStyleClass().addAll("outside-journey-hero", "local-journey-hero");
+        return hero;
+    }
+
+    private HBox localTravelNotice() {
+        HBox notice = new HBox(12,
+                journeyBenefit("\uE707", "Nashik locations", "Stations, bus stands, ghats, temples and city areas"),
+                journeyBenefit("\uE806", "Local options", "Bus, shuttle, cab, auto and walking route guidance"),
+                journeyBenefit("\uE8A5", "Official sources", "Open maps or trusted information websites externally"));
+        notice.getStyleClass().add("outside-journey-benefits");
+        return notice;
+    }
+
+    private ComboBox<LocationOption> localLocationCombo(String prompt, ObjectProperty<LocationOption> selectedLocationProperty) {
+        return locationCombo(prompt, selectedLocationProperty, NASHIK_LOCAL_OPTIONS,
+                NASHIK_LOCAL_OPTIONS.stream().limit(12).toList(),
+                "Type Nashik location", "No matching Nashik location found");
+    }
+
+    private boolean validLocalJourney(LocationOption from, LocationOption to, java.time.LocalDate date) {
+        if (from == null) {
+            showInfo("Search details required", "Please select From Location from the search results.");
+            return false;
+        }
+        if (to == null) {
+            showInfo("Search details required", "Please select To Location from the search results.");
+            return false;
+        }
+        if (from.displayName().equalsIgnoreCase(to.displayName())) {
+            showInfo("Search details required", "From Location and To Location cannot be the same.");
+            return false;
+        }
+        if (date == null || date.isBefore(java.time.LocalDate.now())) {
+            showInfo("Search details required", "Please select a valid travel date.");
+            return false;
+        }
+        return true;
+    }
+
+    private void showAvailableLocalTransport(LocalJourneyState search) {
+        VBox options = new VBox(12,
+                localTransportOptionCard("🚌", "Local Bus",
+                        "Travel between selected locations using Nashik local bus services.",
+                        "VIEW ROUTE", () -> openLocalMap(search)),
+                localTransportOptionCard("🚐", "Official Shuttle Service",
+                        "Official shuttle transport guidance for authorized Simhastha locations.",
+                        "VIEW DETAILS", () -> openTravelWebsite("https://citilinc.nmc.gov.in/")),
+                localTransportOptionCard("🚖", "Cab / Taxi",
+                        "Find a suitable cab option. Complete any booking only on trusted external platforms.",
+                        "OPEN BOOKING WEBSITE", () -> openTravelWebsite("https://www.google.com/search?q=Nashik+cab+taxi+booking")),
+                localTransportOptionCard("🛺", "Auto Rickshaw",
+                        "Use local auto rickshaw stands and approved pickup/drop zones around crowd areas.",
+                        "VIEW ON MAP", () -> openLocalMap(search)),
+                localTransportOptionCard("🚶", "Walking Route",
+                        "View walking/navigation guidance for nearby locations.",
+                        "VIEW ON MAP", () -> openLocalMap(search)));
+
+        root.setCenter(scroll(pageShell("Available Local Transport",
+                "Choose a local transport option and open route details externally.",
+                transportBackButton("Back to Local Travel Search", () -> showLocalTransport(search)),
+                localJourneySummaryCard(search), options,
+                localTravelInformation(search),
+                muted("Live GPS/ETA is not shown unless an official live source is connected."))));
+    }
+
+    private VBox localJourneySummaryCard(LocalJourneyState search) {
+        VBox summary = new VBox(7,
+                smallGold("YOUR LOCAL JOURNEY"),
+                label("📍 From: " + search.from().displayName(), "available-bus-name"),
+                label("↓", "available-route-title"),
+                label("🎯 To: " + search.to().displayName(), "available-bus-name"),
+                muted("📅 Date: " + formatJourneyDate(search.date())));
+        summary.getStyleClass().add("available-journey-summary");
+        return summary;
+    }
+
+    private VBox localTransportOptionCard(String icon, String title, String description, String actionText, Runnable action) {
+        Label optionIcon = new Label(icon);
+        optionIcon.getStyleClass().add("transport-provider-icon");
+        Button actionButton = new Button(actionText);
+        actionButton.getStyleClass().add("transport-primary-button");
+        actionButton.setOnAction(event -> action.run());
+        VBox copy = new VBox(5, strong(title), paragraph(description), badge("Live tracking unavailable"));
+        HBox row = new HBox(12, optionIcon, copy, createSpacer(), actionButton);
+        row.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(copy, Priority.ALWAYS);
+        VBox card = new VBox(row);
+        card.getStyleClass().add("available-bus-card");
         return card;
+    }
+
+    private HBox localTravelInformation(LocalJourneyState search) {
+        HBox info = new HBox(12,
+                journeyBenefit("\uE707", "Journey Route", search.from().name() + " → " + search.to().name()),
+                journeyBenefit("\uE8A5", "Navigation", "Use Google Maps for route and navigation guidance."),
+                journeyBenefit("\uE7BA", "Important Notice",
+                        "Routes may change due to crowd management, traffic restrictions or official instructions."));
+        info.getStyleClass().add("outside-journey-benefits");
+        return info;
+    }
+
+    private void openLocalMap(LocalJourneyState search) {
+        String route = search.from().displayName() + " Nashik to " + search.to().displayName() + " Nashik";
+        String encoded = java.net.URLEncoder.encode(route, java.nio.charset.StandardCharsets.UTF_8);
+        openTravelWebsite("https://www.google.com/maps/search/?api=1&query=" + encoded);
     }
 
     private VBox transportForm(String title, Node... nodes) {
@@ -2077,12 +2725,20 @@ public class DashboardPage {
     }
 
     private ComboBox<LocationOption> locationCombo(String prompt, ObjectProperty<LocationOption> selectedLocationProperty) {
+        return locationCombo(prompt, selectedLocationProperty, INDIA_LOCATION_OPTIONS, suggestedJourneyLocations(),
+                "Type city name", "No matching city found");
+    }
+
+    private ComboBox<LocationOption> locationCombo(String prompt, ObjectProperty<LocationOption> selectedLocationProperty,
+            java.util.List<LocationOption> sourceOptions, java.util.List<LocationOption> suggestedOptions,
+            String editorPrompt, String emptyMessage) {
         ComboBox<LocationOption> combo = new ComboBox<>();
         combo.setEditable(true);
         combo.setPromptText(prompt);
-        combo.getEditor().setPromptText("Type village / gaon name");
+        combo.getEditor().setPromptText(editorPrompt);
         combo.setVisibleRowCount(8);
         combo.setMaxWidth(Double.MAX_VALUE);
+        combo.getProperties().put("locationOptions", sourceOptions);
         combo.getStyleClass().addAll("journey-combo", "location-autocomplete");
         combo.setConverter(new StringConverter<>() {
             @Override
@@ -2095,7 +2751,7 @@ public class DashboardPage {
                 return null;
             }
         });
-        Label noResults = new Label("No village / location found");
+        Label noResults = new Label(emptyMessage);
         noResults.getStyleClass().add("city-search-empty");
         combo.setPlaceholder(noResults);
         combo.setCellFactory(list -> new ListCell<>() {
@@ -2141,6 +2797,7 @@ public class DashboardPage {
                     combo.getEditor().positionCaret(combo.getEditor().getText().length());
                 } finally {
                     combo.getProperties().remove("locationSelectionInProgress");
+                    combo.getProperties().remove("locationUserTyping");
                 }
                 javafx.application.Platform.runLater(combo::hide);
             }
@@ -2151,22 +2808,26 @@ public class DashboardPage {
             int requestId = nextLocationRequestId(combo);
             LOCATION_SEARCH_EXECUTOR.execute(() -> {
                 java.util.stream.Stream<LocationOption> locations = query.isBlank()
-                        ? suggestedJourneyLocations().stream()
-                        : INDIA_LOCATION_OPTIONS.stream().filter(location -> location.matches(query));
+                        ? suggestedOptions.stream()
+                        : sourceOptions.stream().filter(location -> location.matches(query));
                 java.util.List<LocationOption> matches = locations.limit(LOCATION_SEARCH_LIMIT).toList();
                 javafx.application.Platform.runLater(() -> {
                     if (currentLocationRequestId(combo) == requestId) {
-                        setLocationItemsPreservingSelection(combo, matches, selectedLocationProperty);
+                        setLocationItemsPreservingSelection(combo, matches, selectedLocationProperty,
+                                combo.getEditor().getText());
                     }
                 });
             });
         };
+        combo.getEditor().addEventFilter(javafx.scene.input.KeyEvent.KEY_TYPED, event ->
+                combo.getProperties().put("locationUserTyping", true));
         combo.getEditor().textProperty().addListener((observable, previous, text) -> {
             if (Boolean.TRUE.equals(combo.getProperties().get("locationSelectionInProgress"))) {
                 return;
             }
             LocationOption selected = selectedLocationProperty.get();
-            if (selected != null && !selected.displayName().equals(text)) {
+            boolean userTyping = Boolean.TRUE.equals(combo.getProperties().get("locationUserTyping"));
+            if (userTyping && selected != null && !selected.displayName().equals(text)) {
                 clearSelectedLocation(combo, selectedLocationProperty);
             }
             filter.accept(text);
@@ -2187,6 +2848,7 @@ public class DashboardPage {
                         combo.getEditor().positionCaret(combo.getEditor().getText().length());
                     } finally {
                         combo.getProperties().remove("locationSelectionInProgress");
+                        combo.getProperties().remove("locationUserTyping");
                     }
                 }
             }
@@ -2227,11 +2889,14 @@ public class DashboardPage {
         return combo;
     }
 
-    private void setLocationItemsPreservingSelection(ComboBox<LocationOption> combo, java.util.List<LocationOption> matches,
-            ObjectProperty<LocationOption> selectedLocationProperty) {
+    private void setLocationItemsPreservingSelection(ComboBox<LocationOption> combo,
+            java.util.List<LocationOption> matches, ObjectProperty<LocationOption> selectedLocationProperty,
+            String editorText) {
         LocationOption selected = selectedLocationProperty.get();
+        boolean editorStillShowsSelection = selected != null && selected.displayName().equals(editorText);
+        boolean shouldRestoreSelection = selected != null && (editorStillShowsSelection || !combo.isFocused());
         java.util.List<LocationOption> items = new java.util.ArrayList<>(matches);
-        if (selected != null && !items.contains(selected)) {
+        if (shouldRestoreSelection && !items.contains(selected)) {
             items.add(0, selected);
             if (items.size() > LOCATION_SEARCH_LIMIT) {
                 items = new java.util.ArrayList<>(items.subList(0, LOCATION_SEARCH_LIMIT));
@@ -2240,13 +2905,14 @@ public class DashboardPage {
         combo.getProperties().put("locationSelectionInProgress", true);
         try {
             combo.getItems().setAll(items);
-            if (selected != null) {
+            if (shouldRestoreSelection) {
                 combo.setValue(selected);
                 combo.getEditor().setText(selected.displayName());
                 combo.getEditor().positionCaret(combo.getEditor().getText().length());
             }
         } finally {
             combo.getProperties().remove("locationSelectionInProgress");
+            combo.getProperties().remove("locationUserTyping");
         }
     }
 
@@ -2271,7 +2937,8 @@ public class DashboardPage {
             }
             selectedLocationProperty.set(location);
             if (!combo.getItems().contains(location)) {
-                combo.getItems().setAll(INDIA_LOCATION_OPTIONS.stream()
+                java.util.List<LocationOption> sourceOptions = locationSourceOptions(combo);
+                combo.getItems().setAll(sourceOptions.stream()
                         .filter(option -> option.matches(location.name()) || option.equals(location))
                         .limit(LOCATION_SEARCH_LIMIT)
                         .toList());
@@ -2289,6 +2956,15 @@ public class DashboardPage {
         selectedLocationProperty.set(null);
     }
 
+    @SuppressWarnings("unchecked")
+    private java.util.List<LocationOption> locationSourceOptions(ComboBox<LocationOption> combo) {
+        Object source = combo.getProperties().get("locationOptions");
+        if (source instanceof java.util.List<?>) {
+            return (java.util.List<LocationOption>) source;
+        }
+        return INDIA_LOCATION_OPTIONS;
+    }
+
     private boolean validSelectedJourney(LocationOption from, LocationOption to, java.time.LocalDate date, Integer passengers) {
         if (from == null || to == null) {
             showInfo("Search details required", "Please select a valid location from the search results.");
@@ -2300,7 +2976,6 @@ public class DashboardPage {
     private ComboBox<String> cityCombo(String prompt, String... values) {
         ComboBox<String> combo = new ComboBox<>();
         combo.setPromptText(prompt);
-        combo.getItems().addAll(values);
         combo.setEditable(true);
         combo.setVisibleRowCount(12);
         combo.getEditor().setPromptText("Type to search city / taluka");
@@ -2318,39 +2993,133 @@ public class DashboardPage {
                 }
             }
         });
-        java.util.List<String> allValues = java.util.List.of(values);
-        combo.getEditor().textProperty().addListener((observable, oldText, text) -> {
+        java.util.List<String> allValues = java.util.Arrays.stream(values)
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .toList();
+        combo.getItems().setAll(allValues.stream().limit(40).toList());
+
+        java.util.function.Consumer<String> filterValues = text -> {
             String query = text == null ? "" : text.trim().toLowerCase();
-            combo.getItems().setAll(allValues.stream()
+            String selected = combo.getValue();
+            java.util.List<String> matches = allValues.stream()
                     .filter(value -> value.toLowerCase().contains(query))
-                    .toList());
-            if (!query.isEmpty() && !combo.isShowing()) {
+                    .limit(40)
+                    .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new));
+            if (selected != null && !matches.contains(selected)) {
+                matches.add(0, selected);
+            }
+            combo.getProperties().put("citySelectionInProgress", true);
+            try {
+                combo.getItems().setAll(matches);
+                if (selected != null) {
+                    combo.setValue(selected);
+                    combo.getSelectionModel().select(selected);
+                }
+            } finally {
+                combo.getProperties().remove("citySelectionInProgress");
+            }
+            if (combo.isFocused() && !combo.isShowing()
+                    && !Boolean.TRUE.equals(combo.getProperties().get("cityRefreshingForShow"))) {
+                combo.show();
+            }
+        };
+
+        combo.valueProperty().addListener((observable, oldValue, newValue) -> {
+            if (Boolean.TRUE.equals(combo.getProperties().get("citySelectionInProgress"))) {
+                return;
+            }
+            if (newValue != null) {
+                combo.getProperties().put("citySelectionInProgress", true);
+                try {
+                    combo.getProperties().put("cityUserTyping", false);
+                    combo.getEditor().setText(newValue);
+                    combo.getEditor().positionCaret(combo.getEditor().getText().length());
+                } finally {
+                    combo.getProperties().remove("citySelectionInProgress");
+                }
+                javafx.application.Platform.runLater(combo::hide);
+            }
+        });
+
+        combo.getEditor().addEventFilter(javafx.scene.input.KeyEvent.KEY_TYPED, event ->
+                combo.getProperties().put("cityUserTyping", true));
+        combo.getEditor().textProperty().addListener((observable, oldText, text) -> {
+            if (Boolean.TRUE.equals(combo.getProperties().get("citySelectionInProgress"))) {
+                return;
+            }
+            String selected = combo.getValue();
+            boolean userTyping = Boolean.TRUE.equals(combo.getProperties().get("cityUserTyping"));
+            if (userTyping && selected != null && !selected.equals(text)) {
+                combo.getSelectionModel().clearSelection();
+                combo.setValue(null);
+            }
+            filterValues.accept(text);
+        });
+        combo.setOnShowing(event -> {
+            combo.getProperties().put("cityRefreshingForShow", true);
+            try {
+                filterValues.accept(combo.getEditor().getText());
+            } finally {
+                combo.getProperties().remove("cityRefreshingForShow");
+            }
+        });
+        combo.getEditor().setOnMouseClicked(event -> {
+            filterValues.accept(combo.getEditor().getText());
+            if (!combo.isShowing()) {
                 combo.show();
             }
         });
-        combo.setOnShowing(event -> {
-            String query = combo.getEditor().getText() == null ? "" : combo.getEditor().getText().trim().toLowerCase();
-            if ("nashik".equals(query) && "nashik".equalsIgnoreCase(combo.getValue())) {
-                query = "";
-            }
-            final String searchQuery = query;
-            combo.getItems().setAll(allValues.stream()
-                    .filter(value -> value.toLowerCase().contains(searchQuery))
-                    .toList());
-        });
-        combo.getEditor().setOnMouseClicked(event -> combo.show());
-        combo.getEditor().setOnKeyReleased(event -> {
-            String query = combo.getEditor().getText() == null ? "" : combo.getEditor().getText().trim().toLowerCase();
-            combo.getItems().setAll(allValues.stream()
-                    .filter(value -> value.toLowerCase().contains(query))
-                    .toList());
-            combo.show();
-        });
-        combo.setOnAction(event -> {
+        combo.focusedProperty().addListener((observable, wasFocused, isFocused) -> {
             String selected = combo.getValue();
-            if (selected != null) {
-                combo.getEditor().setText(selected);
-                combo.hide();
+            if (!isFocused && selected != null) {
+                combo.getProperties().put("citySelectionInProgress", true);
+                try {
+                    combo.getProperties().put("cityUserTyping", false);
+                    combo.getEditor().setText(selected);
+                    combo.getEditor().positionCaret(combo.getEditor().getText().length());
+                } finally {
+                    combo.getProperties().remove("citySelectionInProgress");
+                }
+            }
+        });
+        combo.getEditor().setOnKeyPressed(event -> {
+            if (event.getCode() == javafx.scene.input.KeyCode.BACK_SPACE || event.getCode() == javafx.scene.input.KeyCode.DELETE) {
+                combo.getProperties().put("cityUserTyping", true);
+            }
+            switch (event.getCode()) {
+                case ESCAPE -> {
+                    combo.hide();
+                    event.consume();
+                }
+                case ENTER -> {
+                    if (combo.isShowing() && !combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.setValue(combo.getItems().get(index < 0 ? 0 : index));
+                        event.consume();
+                    }
+                }
+                case DOWN -> {
+                    if (!combo.isShowing()) {
+                        combo.show();
+                    }
+                    if (!combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.getSelectionModel().select(Math.min(index + 1, combo.getItems().size() - 1));
+                    }
+                    event.consume();
+                }
+                case UP -> {
+                    if (!combo.isShowing()) {
+                        combo.show();
+                    }
+                    if (!combo.getItems().isEmpty()) {
+                        int index = combo.getSelectionModel().getSelectedIndex();
+                        combo.getSelectionModel().select(index <= 0 ? 0 : index - 1);
+                    }
+                    event.consume();
+                }
+                default -> { }
             }
         });
         combo.getStyleClass().add("journey-combo");
@@ -2467,6 +3236,120 @@ public class DashboardPage {
     }
 
     private record JourneySearchState(LocationOption from, LocationOption to, java.time.LocalDate date, int passengers) { }
+
+    private record LocalJourneyState(LocationOption from, LocationOption to, java.time.LocalDate date) { }
+
+    private record FlightSearchState(AirportOption from, AirportOption to, java.time.LocalDate date, int passengers) { }
+
+    private record AirportOption(String airportName, String code, String city, String region) {
+        private String displayName() {
+            return city + " (" + code + ") - " + airportName;
+        }
+
+        private String shortDisplay() {
+            return city + " (" + code + ")";
+        }
+
+        private boolean matches(String query) {
+            if (query == null || query.isBlank()) {
+                return true;
+            }
+            String searchable = (airportName + " " + code + " " + city + " " + region).toLowerCase(java.util.Locale.ROOT);
+            return searchable.contains(query.toLowerCase(java.util.Locale.ROOT));
+        }
+    }
+
+    private static java.util.List<AirportOption> loadIndiaAirportOptions() {
+        java.util.LinkedHashMap<String, AirportOption> options = new java.util.LinkedHashMap<>();
+        java.util.List<AirportOption> airports = java.util.List.of(
+                new AirportOption("Ozar / Nashik Airport", "ISK", "Nashik", "Maharashtra"),
+                new AirportOption("Chhatrapati Shivaji Maharaj International Airport", "BOM", "Mumbai", "Maharashtra"),
+                new AirportOption("Pune Airport", "PNQ", "Pune", "Maharashtra"),
+                new AirportOption("Dr. Babasaheb Ambedkar International Airport", "NAG", "Nagpur", "Maharashtra"),
+                new AirportOption("Chhatrapati Sambhajinagar Airport", "IXU", "Aurangabad", "Maharashtra"),
+                new AirportOption("Shirdi Airport", "SAG", "Shirdi", "Maharashtra"),
+                new AirportOption("Indira Gandhi International Airport", "DEL", "New Delhi", "Delhi"),
+                new AirportOption("Kempegowda International Airport", "BLR", "Bengaluru", "Karnataka"),
+                new AirportOption("Rajiv Gandhi International Airport", "HYD", "Hyderabad", "Telangana"),
+                new AirportOption("Chennai International Airport", "MAA", "Chennai", "Tamil Nadu"),
+                new AirportOption("Netaji Subhas Chandra Bose International Airport", "CCU", "Kolkata", "West Bengal"),
+                new AirportOption("Sardar Vallabhbhai Patel International Airport", "AMD", "Ahmedabad", "Gujarat"),
+                new AirportOption("Surat Airport", "STV", "Surat", "Gujarat"),
+                new AirportOption("Vadodara Airport", "BDQ", "Vadodara", "Gujarat"),
+                new AirportOption("Devi Ahilya Bai Holkar Airport", "IDR", "Indore", "Madhya Pradesh"),
+                new AirportOption("Raja Bhoj Airport", "BHO", "Bhopal", "Madhya Pradesh"),
+                new AirportOption("Jaipur International Airport", "JAI", "Jaipur", "Rajasthan"),
+                new AirportOption("Maharana Pratap Airport", "UDR", "Udaipur", "Rajasthan"),
+                new AirportOption("Chaudhary Charan Singh International Airport", "LKO", "Lucknow", "Uttar Pradesh"),
+                new AirportOption("Lal Bahadur Shastri International Airport", "VNS", "Varanasi", "Uttar Pradesh"),
+                new AirportOption("Prayagraj Airport", "IXD", "Prayagraj", "Uttar Pradesh"),
+                new AirportOption("Cochin International Airport", "COK", "Kochi", "Kerala"),
+                new AirportOption("Goa Manohar International Airport", "GOX", "Goa", "Goa"),
+                new AirportOption("Dabolim Airport", "GOI", "Goa", "Goa"),
+                new AirportOption("Biju Patnaik International Airport", "BBI", "Bhubaneswar", "Odisha"),
+                new AirportOption("Jay Prakash Narayan Airport", "PAT", "Patna", "Bihar"),
+                new AirportOption("Shaheed Bhagat Singh International Airport", "IXC", "Chandigarh", "Chandigarh"),
+                new AirportOption("Sri Guru Ram Dass Jee International Airport", "ATQ", "Amritsar", "Punjab"),
+                new AirportOption("Jolly Grant Airport", "DED", "Dehradun", "Uttarakhand"),
+                new AirportOption("Swami Vivekananda Airport", "RPR", "Raipur", "Chhattisgarh"),
+                new AirportOption("Birsa Munda Airport", "IXR", "Ranchi", "Jharkhand"),
+                new AirportOption("Lokpriya Gopinath Bordoloi International Airport", "GAU", "Guwahati", "Assam"),
+                new AirportOption("Sheikh ul-Alam International Airport", "SXR", "Srinagar", "Jammu and Kashmir"),
+                new AirportOption("Veer Savarkar International Airport", "IXZ", "Port Blair", "Andaman and Nicobar Islands"));
+        for (AirportOption airport : airports) {
+            options.putIfAbsent(airport.city().toLowerCase(java.util.Locale.ROOT), airport);
+        }
+        for (String city : baseIndianCities()) {
+            String normalizedCity = city.replaceAll("\\s*\\([^)]*\\)", "").replace(" / ", " ").trim();
+            String key = normalizedCity.toLowerCase(java.util.Locale.ROOT);
+            options.putIfAbsent(key, new AirportOption("City search - choose nearest available airport", citySearchCode(normalizedCity), normalizedCity, "India"));
+        }
+        return options.values().stream()
+                .sorted(java.util.Comparator.comparing(AirportOption::city, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+    }
+
+    private static String citySearchCode(String city) {
+        String letters = city == null ? "CTY" : city.replaceAll("[^A-Za-z]", "").toUpperCase(java.util.Locale.ROOT);
+        if (letters.length() >= 3) {
+            return letters.substring(0, Math.min(5, letters.length()));
+        }
+        return (letters + "CTY").substring(0, 3);
+    }
+
+    private static java.util.List<LocationOption> loadNashikLocalOptions() {
+        java.util.LinkedHashMap<String, LocationOption> options = new java.util.LinkedHashMap<>();
+        String[][] locations = {
+                {"Panchavati", "Kumbh Area"}, {"Ramkund", "Ghat"}, {"Kalaram Mandir", "Temple"}, {"Sita Gufa", "Temple"},
+                {"Kapaleshwar Mandir", "Temple"}, {"Tapovan", "Kumbh Area"}, {"Sadhugram", "Simhastha Zone"}, {"Godavari Ghat", "Ghat"},
+                {"Naroshankar Temple", "Temple"}, {"Sundarnarayan Temple", "Temple"}, {"Muktidham", "Temple"}, {"Nashik Road", "City Area"},
+                {"Nashik Road Railway Station", "Railway Station"}, {"CBS Bus Stand", "Bus Stand"}, {"Thakkar Bazaar", "Bus Stand"},
+                {"Mahatma Nagar", "City Area"}, {"College Road", "City Area"}, {"Gangapur Road", "City Area"}, {"Canada Corner", "City Junction"},
+                {"Sharanpur Road", "City Area"}, {"Indira Nagar", "City Area"}, {"CIDCO", "City Area"}, {"Ambad", "City Area"},
+                {"Satpur", "City Area"}, {"Govind Nagar", "City Area"}, {"Pathardi Phata", "City Junction"}, {"Dwarka", "City Junction"},
+                {"Mumbai Naka", "City Junction"}, {"Trimbak Naka", "City Junction"}, {"Old Nashik", "City Area"}, {"Panchavati Karanja", "City Junction"},
+                {"Adgaon", "City Area"}, {"Makhmalabad", "City Area"}, {"Meru", "Local Area"}, {"Hirawadi", "City Area"},
+                {"Amrutdham", "City Area"}, {"Konark Nagar", "City Area"}, {"Nashik Airport", "Airport"}, {"Ozar Airport", "Airport"},
+                {"Deolali", "City Area"}, {"Deolali Camp", "City Area"}, {"Bhagur", "Town"}, {"Sinnar", "Taluka"},
+                {"Igatpuri", "Taluka"}, {"Trimbakeshwar", "Temple Town"}, {"Trimbakeshwar Jyotirling Mandir", "Temple"}, {"Anjaneri", "Village"},
+                {"Anjaneri Hills", "Tourist Place"}, {"Saptashrungi", "Temple"}, {"Vani", "Town"}, {"Dindori", "Taluka"},
+                {"Niphad", "Taluka"}, {"Yeola", "Taluka"}, {"Malegaon", "City"}, {"Kalwan", "Taluka"}, {"Peth", "Taluka"},
+                {"Peint", "Taluka"}, {"Nandgaon", "Taluka"}, {"Chandwad", "Taluka"}, {"Manmad", "Town"}, {"Lasalgaon", "Town"},
+                {"Ozar", "Town"}, {"Chandori", "Village"}, {"Gangapur Dam", "Tourist Place"}, {"Someshwar Waterfall", "Tourist Place"},
+                {"Pandavleni Caves", "Tourist Place"}, {"Sula Vineyards", "Tourist Place"}, {"Coin Museum", "Tourist Place"},
+                {"Shivaji Nagar", "City Area"}, {"Jail Road", "City Area"}, {"Upnagar", "City Area"}, {"Datta Mandir Road", "City Area"},
+                {"Khutwad Nagar", "City Area"}, {"Wadala Gaon", "Village"}, {"Kamatwade", "City Area"}, {"Untwadi", "City Area"},
+                {"Trimurti Chowk", "City Junction"}, {"Parijat Nagar", "City Area"}, {"Lekha Nagar", "City Area"}, {"Chetana Nagar", "City Area"},
+                {"Rane Nagar", "City Area"}, {"Shinde Gaon", "Village"}
+        };
+        for (String[] location : locations) {
+            String id = "local-" + location[0].toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "-");
+            options.putIfAbsent(id, new LocationOption(id, location[0], location[1], "Nashik", "Maharashtra"));
+        }
+        return options.values().stream()
+                .sorted(java.util.Comparator.comparing(LocationOption::name, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+    }
 
     private record BusOption(String provider, String busName, java.time.LocalTime departureTime, java.time.LocalTime arrivalTime,
             String duration, String busType, int availableSeats, int price, String bookingUrl) {

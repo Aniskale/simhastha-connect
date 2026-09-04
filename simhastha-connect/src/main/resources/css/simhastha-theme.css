@@ -4231,6 +4231,30 @@
     -fx-background-color: transparent;
 }
 
+.journey-combo,
+.journey-combo:focused,
+.journey-combo .text-input,
+.journey-combo .text-field,
+.journey-combo .combo-box-popup .list-view,
+.journey-combo .combo-box-popup .list-cell,
+.location-autocomplete,
+.location-autocomplete:focused,
+.location-autocomplete .text-input,
+.location-autocomplete .text-field {
+    -fx-text-fill: #2b170b;
+    -fx-prompt-text-fill: #8b6b55;
+    -fx-opacity: 1.0;
+}
+
+.location-autocomplete .text-input,
+.location-autocomplete .text-field {
+    -fx-background-color: #fffdf7;
+    -fx-highlight-fill: rgba(244, 163, 34, 0.35);
+    -fx-highlight-text-fill: #2b170b;
+    -fx-display-caret: true;
+    -fx-padding: 0 8px 0 0;
+}
+
 .journey-combo .arrow {
     -fx-background-color: #f4b244;
 }
@@ -6406,8 +6430,14 @@
 
 .theme-dark .journey-field,
 .theme-dark .journey-combo,
-.theme-dark .journey-combo .list-cell {
+.theme-dark .journey-combo .list-cell,
+.theme-dark .journey-combo .text-input,
+.theme-dark .journey-combo .text-field,
+.theme-dark .location-autocomplete,
+.theme-dark .location-autocomplete .text-input,
+.theme-dark .location-autocomplete .text-field {
     -fx-text-fill: #fff4d6;
+    -fx-prompt-text-fill: #d8c79c;
 }
 /* Ghats & Snan: intentionally distinct from the transport journey planner. */
 .ghat-page { -fx-spacing: 12px; }
