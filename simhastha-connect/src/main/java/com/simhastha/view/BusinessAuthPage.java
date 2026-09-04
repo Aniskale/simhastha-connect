@@ -1,5 +1,11 @@
 package com.simhastha.view;
 
+import com.simhastha.controller.BusinessAuthController;
+import com.simhastha.service.AuthService;
+import com.simhastha.util.AppNavigator;
+import com.simhastha.util.NavigationUtil;
+
+import java.io.File;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -15,6 +21,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
@@ -29,6 +36,7 @@ import javafx.stage.Stage;
 
 public class BusinessAuthPage {
 
+    private final BusinessAuthController controller = new BusinessAuthController();
     private static final Map<String, BusinessAccount> registeredBusinesses = new HashMap<>();
 
     private VBox formSlot;
@@ -47,7 +55,7 @@ public class BusinessAuthPage {
         showLoginForm();
         StackPane center = new StackPane(createSplitShell());
         center.setPadding(new Insets(18, 24, 36, 24));
-        page.setCenter(center);
+        page.setCenter(scroll(center));
 
         ThemedBackgroundPane root = new ThemedBackgroundPane(page);
         return AppUi.createScene(root, this);
@@ -71,6 +79,8 @@ public class BusinessAuthPage {
         Label icon = AppUi.symbolIcon("\uE719", "auth-large-icon");
         Label title = new Label("Local Business Portal");
         title.getStyleClass().add("auth-visual-title");
+        title.setWrapText(true);
+        title.setMaxWidth(300);
 
         Label subtitle = new Label("Connect your services with Simhastha pilgrims");
         subtitle.getStyleClass().add("auth-visual-subtitle");
@@ -102,14 +112,15 @@ public class BusinessAuthPage {
         PasswordField password = AppUi.passwordField("Password");
 
         Button loginButton = primaryButton("LOGIN");
+        loginButton.setDefaultButton(true);
         loginButton.setOnAction(event -> {
             String userId = emailMobile.getText().trim().toLowerCase();
             String userPassword = password.getText().trim();
 
             if (userId.isEmpty() || userPassword.isEmpty()) {
                 showInfo("Validation", "Please enter Business Email and Password.");
-            } else if (AuthService.isFirebaseEnabled()) {
-                runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
+            } else if (controller.isFirebaseEnabled()) {
+                runAuth(loginButton, controller.login(userId, userPassword));
             } else if (!registeredBusinesses.containsKey(userId)) {
                 showInfo("Login Failed", "Business account not found. Please create an account first.");
             } else if (!registeredBusinesses.get(userId).password.equals(userPassword)) {
@@ -120,10 +131,13 @@ public class BusinessAuthPage {
                 NavigationUtil.navigate(currentStage, dashboardPage.createScene(currentStage));
             }
         });
+        emailMobile.setOnAction(event -> password.requestFocus());
+        password.setOnAction(event -> loginButton.fire());
 
         Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
         replaceNode(createFormCard("Local Business Login", tabs, emailMobile, AppUi.passwordFieldWithToggle(password),
                 loginButton, forgotButton));
+        focusSoon(emailMobile);
     }
 
     private void showRegisterForm() {
@@ -162,10 +176,44 @@ public class BusinessAuthPage {
         TextField mobile = AppUi.textField("Mobile Number");
         TextField email = AppUi.textField("Email");
         TextField location = AppUi.textField("Location");
+        final File[] logoFile = new File[1];
+        final File[] coverFile = new File[1];
+        Label logoLabel = new Label("No logo selected");
+        logoLabel.getStyleClass().add("description-text");
+        Label coverLabel = new Label("No cover photo selected");
+        coverLabel.getStyleClass().add("description-text");
+        Button logoButton = linkButton("Choose Logo", () -> {
+            File chosen = ImageMediaHelper.chooseImage(formSlot.getScene() == null ? null : formSlot.getScene().getWindow(),
+                    "Choose Business Logo");
+            if (chosen != null) {
+                try {
+                    ImageMediaHelper.validateImage(chosen);
+                    logoFile[0] = chosen;
+                    logoLabel.setText(chosen.getName());
+                } catch (IllegalArgumentException exception) {
+                    showInfo("Business Logo", exception.getMessage());
+                }
+            }
+        });
+        Button coverButton = linkButton("Choose Cover Photo", () -> {
+            File chosen = ImageMediaHelper.chooseImage(formSlot.getScene() == null ? null : formSlot.getScene().getWindow(),
+                    "Choose Business Cover Photo");
+            if (chosen != null) {
+                try {
+                    ImageMediaHelper.validateImage(chosen);
+                    coverFile[0] = chosen;
+                    coverLabel.setText(chosen.getName());
+                } catch (IllegalArgumentException exception) {
+                    showInfo("Business Cover Photo", exception.getMessage());
+                }
+            }
+        });
+        HBox mediaRow = new HBox(10, new VBox(3, logoButton, logoLabel), new VBox(3, coverButton, coverLabel));
         PasswordField password = AppUi.passwordField("Password");
         PasswordField confirmPassword = AppUi.passwordField("Confirm Password");
 
         Button registerButton = primaryButton("REGISTER BUSINESS");
+        registerButton.setDefaultButton(true);
         registerButton.setOnAction(event -> {
             if (isEmpty(ownerName) || isEmpty(businessName) || businessType.getValue() == null || isEmpty(mobile)
                     || isEmpty(email) || isEmpty(location) || isEmpty(password) || isEmpty(confirmPassword)) {
@@ -184,10 +232,12 @@ public class BusinessAuthPage {
                         email.getText().trim(),
                         location.getText().trim(),
                         password.getText().trim());
-                if (AuthService.isFirebaseEnabled()) {
+                account.logoFile = logoFile[0];
+                account.coverFile = coverFile[0];
+                if (controller.isFirebaseEnabled()) {
                     registerButton.setDisable(true);
                     registerButton.setText("SUBMITTING...");
-                    AuthService.registerBusiness(account, password.getText().trim())
+                    controller.registerBusiness(account, password.getText().trim())
                             .whenComplete((result, error) -> Platform.runLater(() -> {
                                 registerButton.setDisable(false);
                                 registerButton.setText("REGISTER BUSINESS");
@@ -208,13 +258,16 @@ public class BusinessAuthPage {
                 }
             }
         });
+        focusChain(businessName, ownerName, mobile, email, location, password, confirmPassword);
+        confirmPassword.setOnAction(event -> registerButton.fire());
 
         GridPane fields = twoColumnFields(
                 businessName, ownerName,
                 businessType, mobile,
                 email, location,
                 AppUi.passwordFieldWithToggle(password), AppUi.passwordFieldWithToggle(confirmPassword));
-        replaceNode(createFormCard("Create Business Account", tabs, fields, registerButton));
+        replaceNode(createFormCard("Create Business Account", tabs, fields, mediaRow, registerButton));
+        focusSoon(businessName);
     }
 
     private VBox createFormCard(String titleText, HBox tabs, javafx.scene.Node... fields) {
@@ -291,12 +344,24 @@ public class BusinessAuthPage {
             showInfo("Forgot Password", "Please enter your email first.");
             return;
         }
-        AuthService.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
+        controller.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
     }
 
     private void replaceNode(javafx.scene.Node node) {
         formSlot.getChildren().setAll(node);
         formSlot.setPadding(new Insets(28, 34, 28, 34));
+    }
+
+    private void focusSoon(TextField field) {
+        Platform.runLater(field::requestFocus);
+    }
+
+    private void focusChain(TextField... fields) {
+        for (int index = 0; index < fields.length - 1; index++) {
+            TextField current = fields[index];
+            TextField next = fields[index + 1];
+            current.setOnAction(event -> next.requestFocus());
+        }
     }
 
     private void runAuth(Button button, java.util.concurrent.CompletableFuture<AuthService.AuthOutcome> action) {
@@ -328,6 +393,14 @@ public class BusinessAuthPage {
         return imageView;
     }
 
+    private ScrollPane scroll(javafx.scene.Node content) {
+        ScrollPane scroll = new ScrollPane(content);
+        scroll.getStyleClass().add("page-scroll");
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        return scroll;
+    }
+
     private void applyCoverViewport(ImageView imageView, Image image, double width, double height) {
         double scale = Math.max(width / image.getWidth(), height / image.getHeight());
         double cropWidth = width / scale;
@@ -342,11 +415,7 @@ public class BusinessAuthPage {
     }
 
     private void showInfo(String title, String message) {
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle(title);
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        alert.showAndWait();
+        AppUi.showInfo(title, message, formSlot == null || formSlot.getScene() == null ? null : formSlot.getScene().getWindow());
     }
 
     public static class BusinessAccount {
@@ -356,8 +425,21 @@ public class BusinessAuthPage {
         public final String mobile;
         public final String email;
         public final String location;
+        public final String address;
+        public final String area;
+        public final String city;
+        public final String latitude;
+        public final String longitude;
+        public final String locationUpdatedAt;
         public final List<String> services = new ArrayList<>();
         public final List<String> bookings = new ArrayList<>();
+        public File logoFile;
+        public File coverFile;
+        public String logoUrl = "";
+        public String logoPublicId = "";
+        public String coverPhotoUrl = "";
+        public String coverPhotoPublicId = "";
+        public final List<com.simhastha.model.CloudImage> galleryImages = new ArrayList<>();
         private final String password;
 
         public BusinessAccount(String businessName, String ownerName, String category, String mobile, String email,
@@ -368,6 +450,12 @@ public class BusinessAuthPage {
             this.mobile = mobile;
             this.email = email;
             this.location = location;
+            this.address = location;
+            this.area = "";
+            this.city = "";
+            this.latitude = "";
+            this.longitude = "";
+            this.locationUpdatedAt = "";
             this.password = password;
         }
     }

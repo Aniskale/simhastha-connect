@@ -1,5 +1,7 @@
 package com.simhastha.view;
 
+import com.simhastha.util.NavigationUtil;
+
 import java.net.URL;
 
 import javafx.geometry.Insets;
@@ -8,9 +10,11 @@ import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
@@ -27,7 +31,7 @@ public class LoginSelectionPage {
             WelcomePage welcomePage = new WelcomePage();
             NavigationUtil.navigate(stage, welcomePage.createScene(stage));
         }));
-        page.setCenter(createPortalOptions(stage));
+        page.setCenter(scroll(createPortalOptions(stage)));
 
         ThemedBackgroundPane root = new ThemedBackgroundPane(page);
         return AppUi.createScene(root, this);
@@ -58,9 +62,7 @@ public class LoginSelectionPage {
             NavigationUtil.navigate(stage, businessPartnerPage.createScene(stage));
         });
 
-        StackPane visual = createScenicFeature();
-
-        HBox showcase = new HBox(24, userCard, visual, businessCard);
+        FlowPane showcase = new FlowPane(28, 24, userCard, businessCard);
         showcase.getStyleClass().add("portal-showcase");
         showcase.setAlignment(Pos.CENTER);
         HBox.setHgrow(userCard, Priority.ALWAYS);
@@ -68,21 +70,29 @@ public class LoginSelectionPage {
 
         VBox cardArea = new VBox(20, showcase, createTrustStrip());
         cardArea.setAlignment(Pos.CENTER);
-        cardArea.setPadding(new Insets(18, 44, 34, 44));
+        cardArea.setPadding(new Insets(18, 44, 30, 44));
         return cardArea;
     }
 
     private VBox createPortalCard(String iconText, String titleText, String descriptionText, String buttonText,
             String variantClass) {
         Label icon = AppUi.symbolIcon(iconText, "portal-card-icon");
+        StackPane iconShell = new StackPane(icon);
+        iconShell.getStyleClass().add("portal-card-icon-shell");
 
         Label title = new Label(titleText);
         title.getStyleClass().add("portal-title");
         title.setWrapText(true);
+        title.setAlignment(Pos.CENTER);
+        title.setMaxWidth(390);
 
         Label description = new Label(descriptionText);
         description.getStyleClass().add("description-text");
         description.setWrapText(true);
+        description.setAlignment(Pos.CENTER);
+        description.setMaxWidth(430);
+
+        HBox features = createPortalFeatureStrip(variantClass);
 
         Button button = new Button(buttonText);
         button.getStyleClass().add("primary-button");
@@ -91,34 +101,39 @@ public class LoginSelectionPage {
         button.setGraphicTextGap(10);
         button.setMaxWidth(Double.MAX_VALUE);
 
-        VBox card = new VBox(16, icon, title, description, AppUi.spacer(), button);
+        VBox card = new VBox(18, iconShell, title, AppUi.createOrnamentLine(), description, features, AppUi.spacer(), button);
         card.getStyleClass().addAll("portal-card", variantClass);
-        card.setAlignment(Pos.CENTER_LEFT);
-        card.setMinWidth(350);
-        card.setMaxWidth(430);
-        card.setMinHeight(292);
+        card.setAlignment(Pos.CENTER);
+        card.setMinWidth(420);
+        card.setPrefWidth(520);
+        card.setMaxWidth(560);
+        card.setMinHeight(390);
         return card;
     }
 
-    private StackPane createScenicFeature() {
-        ImageView image = createImage("/images/ramkund_sunrise.jpg", 300, 310);
-        image.getStyleClass().add("portal-scenic-image");
+    private HBox createPortalFeatureStrip(String variantClass) {
+        boolean partner = variantClass.contains("partner");
+        HBox features = new HBox(0,
+                portalFeature(partner ? "\uE807" : "\uE707", partner ? "Business Directory" : "Ghats & Snan"),
+                portalFeature(partner ? "\uE716" : "\uE806", partner ? "Service Providers" : "Transport Info"),
+                portalFeature(partner ? "\uE7C1" : "\uEC29", partner ? "Transport Operators" : "Puja Services"),
+                portalFeature(partner ? "\uE789" : "\uE95E", partner ? "Official Updates" : "Emergency Help"));
+        features.getStyleClass().add("portal-feature-strip");
+        features.setAlignment(Pos.CENTER);
+        return features;
+    }
 
-        Rectangle clip = new Rectangle(300, 310);
-        clip.setArcWidth(160);
-        clip.setArcHeight(160);
-        image.setClip(clip);
-
-        Label caption = new Label("Ramkund \u2022 Godavari \u2022 Nashik");
-        caption.getStyleClass().add("portal-visual-caption");
-        StackPane.setAlignment(caption, Pos.BOTTOM_CENTER);
-        StackPane.setMargin(caption, new Insets(0, 18, 18, 18));
-
-        StackPane visual = new StackPane(image, caption);
-        visual.getStyleClass().add("portal-center-visual");
-        visual.setMinSize(318, 330);
-        visual.setMaxSize(340, 330);
-        return visual;
+    private VBox portalFeature(String iconText, String titleText) {
+        Label icon = AppUi.symbolIcon(iconText, "portal-feature-icon");
+        Label title = new Label(titleText);
+        title.getStyleClass().add("portal-feature-title");
+        title.setWrapText(true);
+        title.setMaxWidth(90);
+        VBox feature = new VBox(5, icon, title);
+        feature.getStyleClass().add("portal-feature-item");
+        feature.setAlignment(Pos.CENTER);
+        HBox.setHgrow(feature, Priority.ALWAYS);
+        return feature;
     }
 
     private HBox createTrustStrip() {
@@ -158,5 +173,13 @@ public class LoginSelectionPage {
             imageView.setImage(new Image(imageUrl.toExternalForm()));
         }
         return imageView;
+    }
+
+    private ScrollPane scroll(VBox content) {
+        ScrollPane scroll = new ScrollPane(content);
+        scroll.getStyleClass().add("page-scroll");
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        return scroll;
     }
 }

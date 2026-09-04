@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body, #map { width:100%; height:100%; margin:0; padding:0; overflow:hidden; }
+    .selector-marker { width:24px; height:24px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); background:#a64a0c; border:2px solid #fff; box-shadow:0 1px 5px rgba(52,24,8,.48); }
+    .leaflet-tile, .leaflet-tile-container, .leaflet-zoom-animated { opacity:1!important; visibility:visible!important; transition:none!important; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+  (function () {
+    const ramkund = [20.0097, 73.7920];
+    const primary = {url:'https://tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, Tiles style by Humanitarian OpenStreetMap Team'};
+    const fallback = {url:'https://tile.openstreetmap.de/{z}/{x}/{y}.png', attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'};
+    let map, marker, tiles, fallbackActive = false, markerIcon;
+    function valid(lat, lng) { return Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180; }
+    function notify(lat, lng) { if (window.emergencyLocationSelectorBridge) window.emergencyLocationSelectorBridge.locationSelected(lat, lng); }
+    function addTiles(config) {
+      const layer = L.tileLayer(config.url, {maxZoom:19, attribution:config.attribution});
+      layer.on('tileerror', function () {
+        if (!fallbackActive) {
+          fallbackActive = true;
+          if (tiles) map.removeLayer(tiles);
+          tiles = addTiles(fallback);
+        }
+      });
+      return layer.addTo(map);
+    }
+    function setLocation(lat, lng, focus) {
+      lat = Number(lat); lng = Number(lng);
+      if (!valid(lat, lng) || !map) return;
+      if (!marker) {
+        marker = L.marker([lat, lng], {icon:markerIcon, draggable:true}).addTo(map);
+        marker.on('dragend', function () { const point = marker.getLatLng(); notify(point.lat, point.lng); });
+      } else marker.setLatLng([lat, lng]);
+      if (focus) map.setView([lat, lng], 16, {animate:false});
+    }
+    if (!window.L) {
+      document.getElementById('map').textContent = 'Nashik location map unavailable. Enter coordinates manually.';
+      return;
+    }
+    markerIcon = L.divIcon({className:'', iconSize:[28,28], iconAnchor:[14,28], html:'<div class="selector-marker"></div>'});
+    map = L.map('map', {zoomAnimation:false, fadeAnimation:false, markerZoomAnimation:false}).setView(ramkund, 15);
+    if (L.Browser) L.Browser.any3d = false;
+    tiles = addTiles(primary);
+    map.on('click', function (event) { setLocation(event.latlng.lat, event.latlng.lng, false); notify(event.latlng.lat, event.latlng.lng); });
+    window.emergencyLocationSelector = { setLocation:setLocation };
+    window.invalidateEmergencyLocationSelectorSize = function () { map.invalidateSize(true); };
+    window.addEventListener('resize', window.invalidateEmergencyLocationSelectorSize);
+    if (window.ResizeObserver) new ResizeObserver(window.invalidateEmergencyLocationSelectorSize).observe(document.getElementById('map'));
+    requestAnimationFrame(window.invalidateEmergencyLocationSelectorSize);
+  }());
+</script>
+</body>
+</html>

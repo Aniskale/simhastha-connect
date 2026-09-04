@@ -6,12 +6,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import com.simhastha.payment.api.PaymentBackendGateway;
 
 import javafx.stage.Window;
 
 public final class PaymentService {
+    private static final Logger LOGGER = Logger.getLogger(PaymentService.class.getName());
 
     private final PaymentBackendGateway backendGateway;
     private final CheckoutHandler checkoutHandler;
@@ -101,6 +104,7 @@ public final class PaymentService {
 
     private PaymentResult failureResult(Throwable throwable) {
         Throwable cause = unwrap(throwable);
+        LOGGER.log(Level.SEVERE, "Centralized payment flow failed.", cause);
         String message = cause instanceof PaymentException
                 ? cause.getMessage()
                 : "Payment could not be completed. Please try again.";

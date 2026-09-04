@@ -6,6 +6,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 import com.simhastha.payment.PaymentConfig;
 import com.simhastha.payment.PaymentException;
@@ -16,6 +18,7 @@ import com.simhastha.payment.PaymentResult;
 import com.simhastha.payment.PaymentVerificationRequest;
 
 public final class HttpPaymentBackendGateway implements PaymentBackendGateway {
+    private static final Logger LOGGER = Logger.getLogger(HttpPaymentBackendGateway.class.getName());
 
     private final PaymentConfig config;
     private final HttpClient client;
@@ -52,6 +55,8 @@ public final class HttpPaymentBackendGateway implements PaymentBackendGateway {
             }
             return order;
         } catch (IOException exception) {
+            LOGGER.log(Level.SEVERE, "Payment backend order request failed at " + uri
+                    + ". Ensure the ReferencePaymentBackendServer is listening and configured.", exception);
             throw new PaymentException("Payment service is currently unavailable.", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
@@ -125,6 +130,8 @@ public final class HttpPaymentBackendGateway implements PaymentBackendGateway {
             }
             return response.body();
         } catch (IOException exception) {
+            LOGGER.log(Level.SEVERE, "Payment backend request failed at " + request.uri()
+                    + ". Ensure the ReferencePaymentBackendServer is listening and configured.", exception);
             throw new PaymentException("Payment service is currently unavailable.", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();

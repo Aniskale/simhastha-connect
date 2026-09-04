@@ -1,5 +1,7 @@
 package com.simhastha.view;
 
+import com.simhastha.util.NavigationUtil;
+
 import java.net.URL;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -15,9 +17,11 @@ import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.Label;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -51,7 +55,7 @@ public class WelcomePage {
         BorderPane page = new BorderPane();
         page.getStyleClass().add("welcome-page");
         page.setTop(createHeader());
-        page.setCenter(createMainContent(stage));
+        page.setCenter(scroll(createMainContent(stage)));
 
         root.getChildren().addAll(backgroundImage, createHeroOverlay(), page);
 
@@ -151,7 +155,7 @@ public class WelcomePage {
                 createUtilityItem("\uE81D", location),
                 createUtilitySeparator(),
                 createThemeToggle(),
-                createTopIconButton("\uE7F4", "3", "Notifications"),
+                createTopIconButton(AppUi.notificationBellGlyph(), "3", "Notifications"),
                 createTopIconButton("\uE77B", null, "Profile"));
         bar.getStyleClass().add("utility-bar");
         bar.setAlignment(Pos.CENTER_RIGHT);
@@ -198,7 +202,7 @@ public class WelcomePage {
     private VBox createMainContent(Stage stage) {
         HBox hero = createHeroContent(stage);
         HBox sectionTitle = createSectionTitle("EXPLORE WHAT WE OFFER");
-        HBox modules = createModuleStrip(stage);
+        FlowPane modules = createModuleStrip(stage);
         HBox updates = createUpdatesSection(stage);
         HBox trust = createTrustStrip();
 
@@ -221,6 +225,8 @@ public class WelcomePage {
 
         Label description = new Label("Your Digital Companion for a Safe,\nSmooth & Divine Simhastha Experience");
         description.getStyleClass().add("welcome-description");
+        description.setWrapText(true);
+        description.setMaxWidth(380);
 
         Button exploreButton = new Button("EXPLORE SIMHASTHA");
         exploreButton.getStyleClass().add("primary-cta");
@@ -264,8 +270,8 @@ public class WelcomePage {
         return titleRow;
     }
 
-    private HBox createModuleStrip(Stage stage) {
-        HBox modules = new HBox(12,
+    private FlowPane createModuleStrip(Stage stage) {
+        FlowPane modules = new FlowPane(12, 12,
                 createModuleCard(stage, "\uE806", "Transport", "Routes, Timings &\nTravel Information"),
                 createModuleCard(stage, "\uEC29", "Puja Services", "Book Puja, Pandit &\nReligious Services"),
                 createModuleCard(stage, "\uE9A6", "Ghats & Snan", "Ghat Information &\nSnan Guide"),
@@ -576,6 +582,14 @@ public class WelcomePage {
         HBox.setHgrow(spacer, Priority.ALWAYS);
         VBox.setVgrow(spacer, Priority.ALWAYS);
         return spacer;
+    }
+
+    private ScrollPane scroll(VBox content) {
+        ScrollPane scroll = new ScrollPane(content);
+        scroll.getStyleClass().add("welcome-scroll");
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        return scroll;
     }
 
     private void openLoginSelection(Stage stage) {
