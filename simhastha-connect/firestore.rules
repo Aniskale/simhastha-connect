@@ -57,6 +57,15 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
     }
 
+    function isPublicBusiness(businessId) {
+      return exists(/databases/$(database)/documents/businesses/$(businessId))
+        && (
+          get(/databases/$(database)/documents/businesses/$(businessId)).data.approved == true
+          || get(/databases/$(database)/documents/businesses/$(businessId)).data.status == "approved"
+          || get(/databases/$(database)/documents/businesses/$(businessId)).data.status == "active"
+        );
+    }
+
     // ================= USERS =================
 
     match /users/{uid} {
@@ -198,18 +207,8 @@ service cloud.firestore {
             && request.resource.data.bookingStatus == 'COMPLETED')
         );
 
-      allow update: if isSignedIn()
-        && resource.data.userId == request.auth.uid
-        && request.resource.data.userId == resource.data.userId
-        && request.resource.data.businessId == resource.data.businessId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'bookingStatus', 'paymentStatus', 'updatedAt', 'internalPaymentId', 'razorpayPaymentId'
-        ])
-        && request.resource.data.paymentStatus in ['PENDING', 'PAID', 'FAILED', 'CANCELLED', 'NOT_REQUIRED']
-        && request.resource.data.bookingStatus in [
-          'PENDING', 'PENDING_PAYMENT', 'PAYMENT_PROCESSING', 'CONFIRMED',
-          'PAYMENT_FAILED', 'CANCELLED', 'PAY_AT_LOCATION'
-        ];
+      // A signed-in customer can never set payment verification or confirmation
+      // state. Those transitions are performed by the trusted backend/admin path.
 
       allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid
@@ -218,9 +217,7 @@ service cloud.firestore {
         && (
           request.resource.data.moduleType != 'BUSINESS'
           || (
-            exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
-            && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.approved == true
-            && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.status in ['approved', 'active']
+            isPublicBusiness(request.resource.data.businessId)
           )
         )
         && (!('razorpayPaymentId' in request.resource.data) || request.resource.data.razorpayPaymentId == '')

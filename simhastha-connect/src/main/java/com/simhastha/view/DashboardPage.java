@@ -6071,21 +6071,11 @@ public class DashboardPage {
             showInfo("Login required", "Please login before creating a booking.");
             return;
         }
-        Dialog<ButtonType> dialog = new Dialog<>();
-        dialog.setTitle("Book " + (item.name() == null ? "Service" : item.name()));
-        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
-        TextField quantity = new TextField("1");
-        quantity.setPromptText("Quantity");
-        DatePicker date = new DatePicker(LocalDate.now().plusDays(1));
-        VBox form = new VBox(10,
-                label("Service", "business-overview-key"), label(item.name(), "pilgrim-card-title"),
-                label("Quantity", "business-overview-key"), quantity,
-                label("Booking date", "business-overview-key"), date,
-                label("Amount: " + amountText(item, quantity.getText())
-                        + " | Payment at location", "marketplace-card-detail"));
-        dialog.getDialogPane().setContent(form);
-        dialog.setResultConverter(button -> button == ButtonType.OK ? ButtonType.OK : null);
-        dialog.showAndWait().ifPresent(ignored -> saveBusinessBooking(business, item, user, quantity.getText(), date.getValue()));
+        BusinessBookingFlowPage flow = new BusinessBookingFlowPage(business, item,
+                () -> openBusinessDetails(business), selection -> paymentCoordinator.startPaidBooking(
+                        root.getScene() == null ? null : root.getScene().getWindow(), item.itemId(),
+                        selection.quantity(), selection.nights()));
+        root.setCenter(scroll(flow.createContent()));
     }
 
     private void saveBusinessBooking(PublicBusinessListing business, PublicBusinessItem item, AppSession.User user,
