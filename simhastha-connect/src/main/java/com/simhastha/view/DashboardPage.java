@@ -78,8 +78,7 @@ public class DashboardPage {
                 nav("schedule", "All Day Schedule", false),
                 nav("business", "Business", false),
                 nav("bookings", "My Bookings", false),
-                nav("announcement", "Announcement", false),
-                nav("about", "About Us", false));
+                nav("announcement", "Announcement", false));
 
         VBox support = new VBox(4, smallGold("24/7 Support"), muted("Emergency help and official information"));
         support.getStyleClass().add("pilgrim-support-box");
@@ -332,18 +331,8 @@ public class DashboardPage {
     }
 
     private VBox packagesPage() {
-        if (!AppDataStore.items("packages").isEmpty()) {
-            return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
-                    adminControlledGrid("packages", "Pay Securely"));
-        }
-        return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
-                twoColumnGrid(
-                        paidCard("packages", "Divine Nashik Package",
-                                "Ramkund, Trimbakeshwar and guided darshan support\nTraveller pass generated after verified payment.",
-                                "Pay Securely", "package-divine-nashik", 1, 1),
-                        paidCard("packages", "Family Seva Package",
-                                "Family assistance, route help and puja desk coordination\nIncludes a reusable booking pass.",
-                                "Pay Securely", "package-family-seva", 1, 1)));
+        // Part 1 catalogue discovery deliberately remains separate from payment and booking flows.
+        return (VBox) new KumbhPackagesPage(page -> root.setCenter(scroll(page)), () -> showModulePage("bookings")).create();
     }
 
     private VBox transportJourneyPlanner() {
@@ -877,6 +866,8 @@ public class DashboardPage {
                 rows.getChildren().add(bookingRow(booking));
             }
         }
+        rows.getChildren().add(new PackageBookingMyBookingsPane(page -> root.setCenter(scroll(page)),
+                () -> showModulePage("bookings")).create());
         return pageShell("My Bookings & Payments", "Your real booking records, payment status and tickets.", rows);
     }
 
