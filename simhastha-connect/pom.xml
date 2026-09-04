@@ -12,31 +12,53 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
+        <javafx.version>21.0.12</javafx.version>
     </properties>
     <dependencies>
 
     <dependency>
         <groupId>org.openjfx</groupId>
         <artifactId>javafx-controls</artifactId>
-        <version>21.0.2</version>
+        <version>${javafx.version}</version>
+    </dependency>
+
+    <!-- Backend-only. Never initialize this dependency from the JavaFX client. -->
+    <dependency>
+        <groupId>com.google.firebase</groupId>
+        <artifactId>firebase-admin</artifactId>
+        <version>9.4.3</version>
     </dependency>
 
     <dependency>
         <groupId>org.openjfx</groupId>
         <artifactId>javafx-fxml</artifactId>
-        <version>21.0.2</version>
+        <version>${javafx.version}</version>
     </dependency>
 
     <dependency>
         <groupId>org.openjfx</groupId>
         <artifactId>javafx-media</artifactId>
-        <version>21.0.2</version>
+        <version>${javafx.version}</version>
     </dependency>
 
     <dependency>
         <groupId>org.openjfx</groupId>
         <artifactId>javafx-web</artifactId>
-        <version>21.0.2</version>
+        <version>${javafx.version}</version>
+    </dependency>
+
+    <dependency>
+    <groupId>com.cloudinary</groupId>
+    <artifactId>cloudinary-http5</artifactId>
+    <version>2.3.2</version>
+    <scope>compile</scope>
+</dependency>
+
+    <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <version>5.10.2</version>
+        <scope>test</scope>
     </dependency>
 
 </dependencies>

@@ -1,5 +1,11 @@
 package com.simhastha.view;
 
+import com.simhastha.controller.UserAuthController;
+import com.simhastha.service.AuthService;
+import com.simhastha.util.AppNavigator;
+import com.simhastha.util.NavigationUtil;
+
+import java.io.File;
 import java.net.URL;
 
 import javafx.application.Platform;
@@ -23,6 +29,7 @@ import javafx.stage.Stage;
 
 public class UserAuthPage {
 
+    private final UserAuthController controller = new UserAuthController();
     private VBox formSlot;
     private Stage currentStage;
 
@@ -79,6 +86,7 @@ public class UserAuthPage {
         PasswordField password = AppUi.passwordField("Password");
 
         Button loginButton = primaryButton("LOGIN");
+        loginButton.setDefaultButton(true);
         loginButton.setOnAction(event -> {
             String userId = emailMobile.getText().trim();
             String userPassword = password.getText().trim();
@@ -86,14 +94,17 @@ public class UserAuthPage {
                 showInfo("Validation", "Please enter email and password.");
                 return;
             }
-            runAuth(loginButton, AuthService.login(userId, userPassword, "any"));
+            runAuth(loginButton, controller.login(userId, userPassword));
         });
+        emailMobile.setOnAction(event -> password.requestFocus());
+        password.setOnAction(event -> loginButton.fire());
 
         Button forgotButton = linkButton("Forgot Password?", () -> sendReset(emailMobile));
         Button createAccount = linkButton("Don't have an account? Create Account", this::showCreateAccountForm);
 
         replaceForm(createFormCard("Pilgrim / User Login", tabs, emailMobile, AppUi.passwordFieldWithToggle(password),
                 loginButton, forgotButton, createAccount));
+        focusSoon(emailMobile);
     }
 
     private void showCreateAccountForm() {
@@ -104,10 +115,27 @@ public class UserAuthPage {
         TextField fullName = AppUi.textField("Full Name");
         TextField mobile = AppUi.textField("Mobile Number");
         TextField email = AppUi.textField("Email");
+        final File[] profileFile = new File[1];
+        Label photoLabel = new Label("No profile photo selected");
+        photoLabel.getStyleClass().add("description-text");
+        Button photoButton = linkButton("Choose Profile Photo", () -> {
+            File chosen = ImageMediaHelper.chooseImage(formSlot.getScene() == null ? null : formSlot.getScene().getWindow(),
+                    "Choose Profile Photo");
+            if (chosen != null) {
+                try {
+                    ImageMediaHelper.validateImage(chosen);
+                    profileFile[0] = chosen;
+                    photoLabel.setText(chosen.getName());
+                } catch (IllegalArgumentException exception) {
+                    showInfo("Profile Photo", exception.getMessage());
+                }
+            }
+        });
         PasswordField password = AppUi.passwordField("Password");
         PasswordField confirmPassword = AppUi.passwordField("Confirm Password");
 
         Button createButton = primaryButton("CREATE ACCOUNT");
+        createButton.setDefaultButton(true);
         createButton.setOnAction(event -> {
             if (isEmpty(fullName) || isEmpty(email) || isEmpty(mobile) || isEmpty(password) || isEmpty(confirmPassword)) {
                 showInfo("Validation", "Please fill all fields before creating an account.");
@@ -116,8 +144,8 @@ public class UserAuthPage {
             } else {
                 createButton.setDisable(true);
                 createButton.setText("CREATING...");
-                AuthService.registerUser(fullName.getText().trim(), mobile.getText().trim(), email.getText().trim(),
-                        password.getText().trim()).whenComplete((result, error) -> Platform.runLater(() -> {
+                controller.registerUser(fullName.getText().trim(), mobile.getText().trim(), email.getText().trim(),
+                        password.getText().trim(), profileFile[0]).whenComplete((result, error) -> Platform.runLater(() -> {
                             createButton.setDisable(false);
                             createButton.setText("CREATE ACCOUNT");
                             if (error != null || result == null || !result.success()) {
@@ -128,15 +156,18 @@ public class UserAuthPage {
                         }));
             }
         });
+        focusChain(fullName, mobile, email, password, confirmPassword);
+        confirmPassword.setOnAction(event -> createButton.fire());
 
         Button loginLink = linkButton("Already registered? Login", this::showLoginForm);
         ScrollPane formScroll = new ScrollPane(createFormCard("Create Pilgrim Account", tabs, fullName, mobile, email,
-                AppUi.passwordFieldWithToggle(password), AppUi.passwordFieldWithToggle(confirmPassword), createButton,
-                loginLink));
+                new VBox(3, photoButton, photoLabel), AppUi.passwordFieldWithToggle(password),
+                AppUi.passwordFieldWithToggle(confirmPassword), createButton, loginLink));
         formScroll.getStyleClass().add("form-card-scroll");
         formScroll.setFitToWidth(true);
         formScroll.setMaxHeight(455);
         replaceNode(formScroll);
+        focusSoon(fullName);
     }
 
     private VBox createFormCard(String titleText, HBox tabs, javafx.scene.Node... fields) {
@@ -248,7 +279,7 @@ public class UserAuthPage {
             showInfo("Forgot Password", "Please enter your email first.");
             return;
         }
-        AuthService.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
+        controller.resetPassword(email).thenAccept(message -> Platform.runLater(() -> showInfo("Forgot Password", message)));
     }
 
     private void replaceForm(VBox form) {
@@ -258,6 +289,18 @@ public class UserAuthPage {
     private void replaceNode(javafx.scene.Node node) {
         formSlot.getChildren().setAll(node);
         formSlot.setPadding(new Insets(28, 34, 28, 34));
+    }
+
+    private void focusSoon(TextField field) {
+        Platform.runLater(field::requestFocus);
+    }
+
+    private void focusChain(TextField... fields) {
+        for (int index = 0; index < fields.length - 1; index++) {
+            TextField current = fields[index];
+            TextField next = fields[index + 1];
+            current.setOnAction(event -> next.requestFocus());
+        }
     }
 
     private ImageView createImage(String path, double width, double height) {
@@ -277,10 +320,6 @@ public class UserAuthPage {
     }
 
     private void showInfo(String title, String message) {
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle(title);
-        alert.setHeaderText(null);
-        alert.setContentText(message);
-        alert.showAndWait();
+        AppUi.showInfo(title, message, formSlot == null || formSlot.getScene() == null ? null : formSlot.getScene().getWindow());
     }
 }

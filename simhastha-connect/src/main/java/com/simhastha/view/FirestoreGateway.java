@@ -1,5 +1,6 @@
 package com.simhastha.view;
 
+import com.simhastha.packages.*;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -9,14 +10,19 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.logging.Logger;
 
 public final class FirestoreGateway {
 
     private static final String ROOT = "https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents";
+    private static final Logger LOGGER = Logger.getLogger(FirestoreGateway.class.getName());
     private static final Pattern DOCUMENT_PATTERN = Pattern.compile("\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\".*?\"fields\"\\s*:\\s*\\{(.*?)\\}\\s*(?:,\\s*\"createTime\"|,\\s*\"updateTime\"|\\})", Pattern.DOTALL);
     private static final Pattern STRING_FIELD_PATTERN = Pattern.compile("\"%s\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"(.*?)\"\\s*\\}", Pattern.DOTALL);
 
@@ -459,6 +465,59 @@ public final class FirestoreGateway {
             target.add(new AppDataStore.ServiceItem(document.id, module, title, publicDetail(fields), fallbackCategory));
         }
     }
+
+    private PackageBooking packageBookingFrom(Document document) {
+        String fields = document.fields;
+        PrimaryContact contact = new PrimaryContact(field(fields, "primaryContactName"),
+                field(fields, "primaryContactMobile"), field(fields, "primaryContactEmail"));
+        return new PackageBooking(valueOr(document.id, field(fields, "bookingId")), field(fields, "userId"),
+                field(fields, "packageId"), field(fields, "packageName"), field(fields, "route"), field(fields, "duration"),
+                contact, decodeTravellers(field(fields, "travellers")), decodeStringMap(field(fields, "selections")),
+                decodeIntegerMap(field(fields, "componentPrices")), parseInt(numberField(fields, "baseAmount"), 0),
+                parseInt(numberField(fields, "finalAmount"), 0), firstNonBlank(field(fields, "currency"), "INR"),
+                field(fields, "paymentMode"), field(fields, "paymentStatus"), field(fields, "bookingStatus"),
+                firstNonBlank(field(fields, "applicationReference"), field(fields, "bookingId")), field(fields, "createdAt"));
+    }
+
+    private String encodeStringMap(Map<String, String> values) {
+        return values.entrySet().stream().map(entry -> encode(entry.getKey()) + ":" + encode(entry.getValue()))
+                .collect(java.util.stream.Collectors.joining(";"));
+    }
+
+    private Map<String, String> decodeStringMap(String value) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (value == null || value.isBlank()) return result;
+        for (String entry : value.split(";")) { String[] pair = entry.split(":", 2); if (pair.length == 2) result.put(decode(pair[0]), decode(pair[1])); }
+        return result;
+    }
+
+    private String encodeIntegerMap(Map<String, Integer> values) {
+        return values.entrySet().stream().map(entry -> encode(entry.getKey()) + ":" + entry.getValue())
+                .collect(java.util.stream.Collectors.joining(";"));
+    }
+
+    private Map<String, Integer> decodeIntegerMap(String value) {
+        Map<String, Integer> result = new LinkedHashMap<>();
+        if (value == null || value.isBlank()) return result;
+        for (String entry : value.split(";")) { String[] pair = entry.split(":", 2); if (pair.length == 2) result.put(decode(pair[0]), parseInt(pair[1], 0)); }
+        return result;
+    }
+
+    private String encodeTravellers(List<PackageBooking.BookingTraveller> travellers) {
+        return travellers.stream().map(traveller -> String.join(":", encode(traveller.fullName()), Integer.toString(traveller.age()),
+                encode(traveller.gender()), encode(traveller.idType()), encode(traveller.maskedId())))
+                .collect(java.util.stream.Collectors.joining(";"));
+    }
+
+    private List<PackageBooking.BookingTraveller> decodeTravellers(String value) {
+        List<PackageBooking.BookingTraveller> result = new ArrayList<>();
+        if (value == null || value.isBlank()) return result;
+        for (String entry : value.split(";")) { String[] parts = entry.split(":", -1); if (parts.length == 5) result.add(new PackageBooking.BookingTraveller(decode(parts[0]), parseInt(parts[1], 0), decode(parts[2]), decode(parts[3]), decode(parts[4]))); }
+        return result;
+    }
+
+    private String encode(String value) { return Base64.getUrlEncoder().withoutPadding().encodeToString((value == null ? "" : value).getBytes(StandardCharsets.UTF_8)); }
+    private String decode(String value) { try { return new String(Base64.getUrlDecoder().decode(value), StandardCharsets.UTF_8); } catch (IllegalArgumentException ignored) { return ""; } }
 
     private AppDataStore.BookingRecord bookingFrom(Document document) {
         String fields = document.fields;
@@ -906,6 +965,57 @@ public final class FirestoreGateway {
         sendAuthorizedPatch(documentUri("bookings", booking.bookingId), json, idToken);
     }
 
+    /** Kumbh-package confirmations have their own collection and never share the generic bookings schema. */
+    public void savePackageBooking(PackageBooking booking, String idToken) throws IOException, InterruptedException {
+        String json = fieldsJson(
+                fieldJson("bookingId", booking.bookingId()), fieldJson("userId", booking.userId()),
+                fieldJson("packageId", booking.packageId()), fieldJson("packageName", booking.packageName()),
+                fieldJson("route", booking.route()), fieldJson("duration", booking.duration()),
+                fieldJson("primaryContactName", booking.primaryContact().fullName()),
+                fieldJson("primaryContactMobile", booking.primaryContact().mobileNumber()),
+                fieldJson("primaryContactEmail", booking.primaryContact().emailAddress()),
+                numberFieldJson("travellerCount", booking.travellers().size()),
+                fieldJson("travellers", encodeTravellers(booking.travellers())),
+                fieldJson("selections", encodeStringMap(booking.selections())),
+                fieldJson("componentPrices", encodeIntegerMap(booking.componentPrices())),
+                numberFieldJson("baseAmount", booking.baseAmount()), numberFieldJson("finalAmount", booking.finalAmount()),
+                fieldJson("currency", booking.currency()), fieldJson("paymentMode", booking.paymentMode()),
+                fieldJson("paymentStatus", booking.paymentStatus()), fieldJson("bookingStatus", booking.bookingStatus()),
+                fieldJson("applicationReference", booking.demoReference()), fieldJson("createdAt", booking.createdAt()));
+        URI uri = documentUri("package_bookings", booking.bookingId());
+        String path = "package_bookings/" + booking.bookingId();
+        boolean tokenPresent = idToken != null && !idToken.isBlank();
+        LOGGER.info(() -> "Kumbh package booking Firestore CREATE: bookingId=" + booking.bookingId()
+                + ", ownerUid=" + booking.userId() + ", packageId=" + booking.packageId()
+                + ", path=" + path + ", operation=CREATE, authTokenPresent=" + tokenPresent);
+        HttpResponse<String> response = client.send(authorizedBuilder(uri, idToken)
+                .timeout(Duration.ofSeconds(8))
+                .header("Content-Type", "application/json")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(json))
+                .build(), HttpResponse.BodyHandlers.ofString());
+        String firestoreMessage = firestoreErrorMessage(response.body());
+        if (response.statusCode() >= 400) {
+            LOGGER.warning(() -> "Kumbh package booking Firestore CREATE failed: bookingId=" + booking.bookingId()
+                    + ", ownerUid=" + booking.userId() + ", path=" + path + ", operation=CREATE, httpStatus="
+                    + response.statusCode() + ", firestoreError=" + firestoreMessage);
+            throw new FirestoreWriteException(response.statusCode(), firestoreMessage);
+        }
+        LOGGER.info(() -> "Kumbh package booking Firestore CREATE succeeded: bookingId=" + booking.bookingId()
+                + ", ownerUid=" + booking.userId() + ", path=" + path + ", operation=CREATE, httpStatus="
+                + response.statusCode());
+    }
+
+    public List<PackageBooking> loadPackageBookingsForUser(String userId, String idToken)
+            throws IOException, InterruptedException {
+        String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"package_bookings\"}],"
+                + "\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"userId\"},\"op\":\"EQUAL\","
+                + "\"value\":{\"stringValue\":\"" + escape(userId) + "\"}}}}}";
+        String json = post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())), query, idToken);
+        List<PackageBooking> records = new ArrayList<>();
+        for (Document document : parseDocuments(json)) records.add(packageBookingFrom(document));
+        return records;
+    }
+
     public void saveTransportRoute(AppDataStore.RouteRecord route, String idToken)
             throws IOException, InterruptedException {
         String adminUid = AppSession.currentUser() == null ? "" : AppSession.currentUser().uid();
@@ -1174,6 +1284,37 @@ public final class FirestoreGateway {
         patch(documentUrl("appItems", item.id), itemJson(module, item));
     }
 
+    /** Package documents are intentionally a dedicated collection rather than generic operational items. */
+    public List<ManagedKumbhPackage> loadKumbhPackages(String idToken) throws IOException, InterruptedException {
+        List<ManagedKumbhPackage> result = new ArrayList<>();
+        List<Document> documents;
+        if (idToken == null || idToken.isBlank()) {
+            String query = "{\"structuredQuery\":{\"from\":[{\"collectionId\":\"kumbh_packages\"}],\"where\":{\"fieldFilter\":{\"field\":{\"fieldPath\":\"status\"},\"op\":\"EQUAL\",\"value\":{\"stringValue\":\"PUBLISHED\"}}}}}";
+            documents = parseDocuments(post(URI.create(String.format(ROOT, enc(config.projectId())) + ":runQuery?key=" + enc(config.apiKey())), query, ""));
+        } else {
+            documents = loadCollectionDocuments("kumbh_packages", idToken);
+        }
+        for (Document document : documents) {
+            String fields = document.fields;
+            List<String> activities = splitLines(field(fields, "itineraryActivities"));
+            List<KumbhPackage.Item> items = new ArrayList<>();
+            for (String activity : activities) items.add(new KumbhPackage.Item(ItineraryItemType.OTHER, activity, ""));
+            List<KumbhPackage.Day> itinerary = items.isEmpty() ? List.of() : List.of(new KumbhPackage.Day(valueOr("Day 1 — Journey", field(fields, "itineraryDayTitle")), items));
+            Map<String, String> policies = new LinkedHashMap<>();
+            for (String policy : splitLines(field(fields, "policies"))) { int split = policy.indexOf(':'); policies.put(split < 0 ? "Policy" : policy.substring(0, split).trim(), split < 0 ? policy : policy.substring(split + 1).trim()); }
+            result.add(new ManagedKumbhPackage(document.id, field(fields, "packageCode"), field(fields, "name"), category(field(fields, "category")), field(fields, "theme"), field(fields, "badge"), field(fields, "origin"), valueOr("Nashik – Simhastha 2027", field(fields, "destination")), integer(fields, "days"), integer(fields, "nights"), field(fields, "shortDescription"), field(fields, "description"), splitLines(field(fields, "travelOptions")), splitLines(field(fields, "stayOptions")), splitLines(field(fields, "mealOptions")), splitLines(field(fields, "facilities")), splitLines(field(fields, "touristPlaces")), itinerary, integer(fields, "basePrice"), integer(fields, "startingPrice"), integer(fields, "originalPrice"), integer(fields, "discount"), splitLines(field(fields, "inclusions")), splitLines(field(fields, "exclusions")), policies, field(fields, "availableFrom"), field(fields, "availableUntil"), field(fields, "departureDates"), integer(fields, "maximumCapacity"), integer(fields, "minimumTravellers"), status(field(fields, "status")), field(fields, "createdBy"), field(fields, "createdAt"), field(fields, "updatedAt"), field(fields, "publishedAt"), media(field(fields, "coverImage"), PackageMediaType.COVER), media(field(fields, "heroImage"), PackageMediaType.HERO), gallery(field(fields, "gallery"))));
+        }
+        return result;
+    }
+
+    public void saveKumbhPackage(ManagedKumbhPackage p, String idToken) throws IOException, InterruptedException {
+        String itineraryTitle = p.itinerary().isEmpty() ? "" : p.itinerary().get(0).title();
+        String itineraryActivities = p.itinerary().isEmpty() ? "" : p.itinerary().stream().flatMap(day -> day.items().stream()).map(KumbhPackage.Item::text).collect(java.util.stream.Collectors.joining("\n"));
+        String policies = p.policies().entrySet().stream().map(e -> e.getKey() + ": " + e.getValue()).collect(java.util.stream.Collectors.joining("\n"));
+        String json = fieldsJson(fieldJson("packageId", p.packageId()), fieldJson("packageCode", p.packageCode()), fieldJson("name", p.name()), fieldJson("category", p.category().name()), fieldJson("theme", p.theme()), fieldJson("badge", p.badge()), fieldJson("origin", p.origin()), fieldJson("destination", p.destination()), numberFieldJson("days", p.days()), numberFieldJson("nights", p.nights()), fieldJson("shortDescription", p.shortDescription()), fieldJson("description", p.description()), fieldJson("travelOptions", joinLines(p.travelOptions())), fieldJson("stayOptions", joinLines(p.stayOptions())), fieldJson("mealOptions", joinLines(p.mealOptions())), fieldJson("facilities", joinLines(p.facilities())), fieldJson("touristPlaces", joinLines(p.touristPlaces())), fieldJson("itineraryDayTitle", itineraryTitle), fieldJson("itineraryActivities", itineraryActivities), numberFieldJson("basePrice", p.basePrice()), numberFieldJson("startingPrice", p.startingPrice()), numberFieldJson("originalPrice", p.originalPrice()), numberFieldJson("discount", p.discount()), fieldJson("inclusions", joinLines(p.inclusions())), fieldJson("exclusions", joinLines(p.exclusions())), fieldJson("policies", policies), fieldJson("availableFrom", p.availableFrom()), fieldJson("availableUntil", p.availableUntil()), fieldJson("departureDates", p.departureDates()), numberFieldJson("maximumCapacity", p.maximumCapacity()), numberFieldJson("minimumTravellers", p.minimumTravellers()), fieldJson("status", p.status().name()), fieldJson("createdBy", p.createdBy()), fieldJson("createdAt", p.createdAt()), fieldJson("updatedAt", p.updatedAt()), fieldJson("publishedAt", p.publishedAt()), fieldJson("coverImage", mediaValue(p.coverImage())), fieldJson("heroImage", mediaValue(p.heroImage())), fieldJson("gallery", galleryValue(p.gallery())));
+        sendAuthorizedPatch(documentUri("kumbh_packages", p.packageId()), json, idToken);
+    }
+
     public void saveItem(String module, AppDataStore.ServiceItem item, String idToken) throws IOException, InterruptedException {
         sendAuthorizedPatch(documentUri("appItems", item.id), itemJson(module, item), idToken);
     }
@@ -1331,6 +1472,20 @@ public final class FirestoreGateway {
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())));
     }
 
+    private String firestoreErrorMessage(String body) {
+        Matcher matcher = Pattern.compile("\\\"message\\\"\\s*:\\s*\\\"(.*?)\\\"", Pattern.DOTALL)
+                .matcher(body == null ? "" : body);
+        if (matcher.find()) return unescape(matcher.group(1)).replaceAll("[\\r\\n]+", " ").trim();
+        String compact = (body == null ? "" : body).replaceAll("[\\r\\n]+", " ").trim();
+        return compact.isBlank() ? "No Firestore error message returned." : compact.substring(0, Math.min(600, compact.length()));
+    }
+
+    private static final class FirestoreWriteException extends IOException {
+        private FirestoreWriteException(int status, String message) {
+            super("Firestore write failed: HTTP " + status + " — " + message);
+        }
+    }
+
     private String fieldsJson(String... fields) {
         return "{\"fields\":{" + String.join(",", fields) + "}}";
     }
@@ -1397,6 +1552,24 @@ public final class FirestoreGateway {
             return fallback;
         }
     }
+
+    private int integer(String fields, String name) { return parseInt(numberField(fields, name), 0); }
+    private PackageCategory category(String value) { try { return PackageCategory.valueOf(value); } catch (Exception ignored) { return PackageCategory.STANDARD; } }
+    private PackageStatus status(String value) { try { return PackageStatus.valueOf(value); } catch (Exception ignored) { return PackageStatus.DRAFT; } }
+    private List<String> splitLines(String value) { return java.util.Arrays.stream(value == null ? new String[0] : value.split("\\r?\\n")).map(String::trim).filter(v -> !v.isEmpty()).toList(); }
+    private String joinLines(List<String> values) { return String.join("\n", values == null ? List.of() : values); }
+    // Compact escaped metadata string; no image bytes/base64 are persisted in Firestore.
+    private PackageMedia media(String value, PackageMediaType fallbackType) {
+        if (value == null || value.isBlank()) return null;
+        String[] parts = value.split("\\|", -1);
+        try { return new PackageMedia(part(parts, 0), part(parts, 1), part(parts, 2), part(parts, 3), PackageMediaType.valueOf(part(parts, 4, fallbackType.name())), parseInt(part(parts, 5, "0"), 0), Boolean.parseBoolean(part(parts, 6, "false")), part(parts, 7)); } catch (Exception ignored) { return null; }
+    }
+    private List<PackageMedia> gallery(String value) { List<PackageMedia> result = new ArrayList<>(); for (String line : splitLines(value)) { PackageMedia media = media(line, PackageMediaType.GALLERY); if (media != null) result.add(media); } return result.stream().sorted(java.util.Comparator.comparingInt(PackageMedia::sortOrder)).toList(); }
+    private String mediaValue(PackageMedia media) { return media == null ? "" : String.join("|", safe(media.mediaId()), safe(media.url()), safe(media.publicId()), safe(media.caption()), media.mediaType().name(), String.valueOf(media.sortOrder()), String.valueOf(media.primary()), safe(media.createdAt())); }
+    private String galleryValue(List<PackageMedia> media) { return media == null ? "" : media.stream().sorted(java.util.Comparator.comparingInt(PackageMedia::sortOrder)).map(this::mediaValue).collect(java.util.stream.Collectors.joining("\n")); }
+    private String part(String[] value, int index) { return part(value, index, ""); }
+    private String part(String[] value, int index, String fallback) { return index < value.length ? value[index] : fallback; }
+    private String safe(String value) { return value == null ? "" : value.replace("|", " ").replace("\n", " ").replace("\r", " "); }
 
     private List<Document> loadOptionalCollectionDocuments(String collection, String idToken) {
         try {
@@ -1566,11 +1739,11 @@ public final class FirestoreGateway {
     }
 
     private String escape(String value) {
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+        return value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\r", "\\r").replace("\n", "\\n");
     }
 
     private String unescape(String value) {
-        return value.replace("\\\"", "\"").replace("\\\\", "\\");
+        return value.replace("\\n", "\n").replace("\\r", "\r").replace("\\\"", "\"").replace("\\\\", "\\");
     }
 
     private record Document(String id, String fields) {
