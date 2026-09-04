@@ -267,9 +267,7 @@ public class DashboardPage {
                 nav("schedule", "All Day Schedule", false),
                 nav("business", "Business", false),
                 nav("bookings", "My Bookings", false),
-                nav("announcement", "Announcement", false),
-                nav("faq", "FAQs / Help Center", false),
-                nav("about", "About Us", false));
+                nav("announcement", "Announcement", false));
 
         Button logout = sidebarAction("logout", "Logout");
         logout.setOnAction(eventAction -> {
@@ -2622,18 +2620,8 @@ public class DashboardPage {
     }
 
     private VBox packagesPage() {
-        if (!AppDataStore.items("packages").isEmpty()) {
-            return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
-                    adminControlledGrid("packages", "Pay Securely"));
-        }
-        return pageShell("Kumbh Packages", "Approved paid packages connected to the centralized payment system.",
-                twoColumnGrid(
-                        paidCard("packages", "Divine Nashik Package",
-                                "Ramkund, Trimbakeshwar and guided darshan support\nTraveller pass generated after verified payment.",
-                                "Pay Securely", "package-divine-nashik", 1, 1),
-                        paidCard("packages", "Family Seva Package",
-                                "Family assistance, route help and puja desk coordination\nIncludes a reusable booking pass.",
-                                "Pay Securely", "package-family-seva", 1, 1)));
+        // Part 1 catalogue discovery deliberately remains separate from payment and booking flows.
+        return (VBox) new KumbhPackagesPage(page -> root.setCenter(scroll(page)), () -> showModulePage("bookings")).create();
     }
 
     private VBox transportJourneyPlanner() {
@@ -6266,13 +6254,9 @@ public class DashboardPage {
             filters.put(category, filter);
             filterBar.getChildren().add(filter);
         }
-        filters.get("All").getStyleClass().add("booking-filter-active");
-        search.textProperty().addListener((observable, oldValue, newValue) -> refresh.run());
-        HBox controls = new HBox(12, filterBar, createSpacer(), search);
-        controls.setAlignment(Pos.CENTER_LEFT); controls.getStyleClass().add("booking-filter-bar");
-        HBox.setHgrow(search, Priority.ALWAYS); search.setMaxWidth(300);
-        refresh.run();
-        return pageShell("My Bookings", "View and manage all your Simhastha bookings in one place.", summary, controls, results);
+        rows.getChildren().add(new PackageBookingMyBookingsPane(page -> root.setCenter(scroll(page)),
+                () -> showModulePage("bookings")).create());
+        return pageShell("My Bookings & Payments", "Your real booking records, payment status and tickets.", rows);
     }
 
     private VBox bookingMetric(String title, long count, String detail) {

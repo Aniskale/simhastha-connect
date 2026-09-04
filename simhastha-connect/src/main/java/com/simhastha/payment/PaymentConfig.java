@@ -51,6 +51,17 @@ public final class PaymentConfig {
         return enabled;
     }
 
+    /** Safe diagnostic only; never includes backend credentials or Razorpay secrets. */
+    public String configurationIssue() {
+        if (enabled) {
+            return "";
+        }
+        if (backendBaseUri == null) {
+            return "PAYMENTS_BACKEND_BASE_URL / payments.backendBaseUrl is missing.";
+        }
+        return "PAYMENTS_ENABLED / payments.enabled must be set to true.";
+    }
+
     public URI backendBaseUri() {
         return backendBaseUri;
     }

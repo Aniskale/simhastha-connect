@@ -227,6 +227,21 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Kumbh-package confirmations are isolated from generic service bookings.
+    // A pilgrim can create and read only their own immutable test-payment snapshot.
+    match /package_bookings/{bookingId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.paymentMode == 'TEST'
+        && request.resource.data.paymentStatus == 'PAYMENT_NOT_VERIFIED'
+        && request.resource.data.bookingStatus == 'CONFIRMED_TEST';
+
+      allow update, delete: if isAdmin();
+    }
+
     match /tickets/{id} {
 
       allow read: if isAdmin()
@@ -349,6 +364,15 @@ service cloud.firestore {
           ]));
 
       allow delete: if isAdmin();
+    }
+
+    // ================= KUMBH PACKAGE CATALOGUE =================
+
+    // Admin is the sole authoring authority. Pilgrims can read only currently
+    // published records; drafts, paused and archived records remain private.
+    match /kumbh_packages/{packageId} {
+      allow read: if isAdmin() || resource.data.status == "PUBLISHED";
+      allow create, update, delete: if isAdmin();
     }
 
     // ================= PUBLIC MODULES =================

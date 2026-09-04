@@ -1,24 +1,9 @@
 package com.simhastha.view;
 
-import com.simhastha.util.AppSession;
-import com.simhastha.util.NavigationUtil;
-
-import com.simhastha.config.CloudinaryFolders;
-import com.simhastha.gateway.firebase.FirebaseConfig;
-import com.simhastha.gateway.firebase.FirestoreGateway;
-import com.simhastha.model.CloudinaryUploadResult;
-import com.simhastha.service.CloudinaryService;
-
-import com.simhastha.model.EmergencyDevelopmentServices;
-import com.simhastha.model.EmergencyReport;
-import com.simhastha.model.EmergencyService;
-import com.simhastha.model.Ghat;
-import com.simhastha.model.GhatOperationalState;
-import com.simhastha.service.GhatCatalogueService;
-import com.simhastha.service.GhatImageService;
-import com.simhastha.service.GhatService;
+import com.simhastha.packages.*;
 import java.net.URL;
-import java.time.Instant;
+import java.io.File;
+import java.util.ArrayList;
 import java.time.LocalDateTime;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -30,12 +15,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.HashSet;
-import java.util.ArrayDeque;
-import java.util.Deque;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.Optional;
+import java.util.EnumMap;
+import java.util.EnumSet;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -49,12 +31,12 @@ import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.CheckBox;
-import javafx.scene.control.DatePicker;
-import javafx.scene.control.Dialog;
+import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.TextArea;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
@@ -65,12 +47,7 @@ import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
-import javafx.stage.Window;
-
-import com.simhastha.schedule.ScheduleCategory;
-import com.simhastha.schedule.ScheduleEvent;
-import com.simhastha.schedule.ScheduleAlert;
-import com.simhastha.schedule.ScheduleService;
+import javafx.stage.FileChooser;
 
 public class AdminDashboardPage {
 
@@ -1028,12 +1005,58 @@ public class AdminDashboardPage {
     }
 
     private VBox packagesPage() {
-        VBox form = structuredForm("Package Name", "Package Type", "Source City", "Destination", "Duration",
-                "Start Date", "End Date", "Price", "Seats / Capacity", "Hotel / Stay", "Itinerary", "Highlights");
-        return pageShell("Kumbh Packages", "Manage published pilgrimage packages and booking readiness.",
-                infoPanel("Package Manager", form, actionRow("packages", form, "Add", "Edit", "Publish", "Disable")),
-                listPanel("Published Kumbh Packages", "packages", "No Kumbh packages published yet.", form));
+        List<ManagedKumbhPackage> packages;
+        try {
+            // Always load afresh from the same source used by Save Draft.
+            packages = PackageRepository.adminSource().getAllPackagesForAdmin(adminToken());
+        } catch (Exception exception) {
+            return pageShell("Kumbh Packages", "Package catalogue could not be reloaded.",
+                    infoPanel("Firestore package load failed", "No package count is shown because the source could not be read. "
+                            + actionablePackageError(exception)));
+        }
+        HBox stats = new HBox(12,
+                metric(String.valueOf(packages.size()), "Total Packages"),
+                metric(String.valueOf(countPackages(packages, PackageStatus.PUBLISHED)), "Published"),
+                metric(String.valueOf(countPackages(packages, PackageStatus.DRAFT)), "Draft"),
+                metric(String.valueOf(countPackages(packages, PackageStatus.PAUSED)), "Paused"),
+                metric(String.valueOf(countPackages(packages, PackageStatus.ARCHIVED)), "Archived"));
+        Button create = smallButton("+ Create New Package"); create.getStyleClass().add("admin-success-action"); create.setOnAction(e -> showPackageEditor(null));
+        VBox rows = new VBox(10);
+        if (packages.isEmpty()) rows.getChildren().add(infoPanel("No admin-created packages", "Create a draft, then publish it when the catalogue information is ready."));
+        else packages.forEach(p -> rows.getChildren().add(packageAdminRow(p)));
+        return pageShell("Kumbh Packages", "Admin-owned package catalogue. Only published packages are visible to pilgrims.", stats, create, infoPanel("Package Catalogue", rows));
     }
+
+    private long countPackages(List<ManagedKumbhPackage> packages, PackageStatus status) { return packages.stream().filter(p -> p.status() == status).count(); }
+    private String adminToken() { return AppSession.currentUser() == null ? "" : AppSession.currentUser().idToken(); }
+    private HBox packageAdminRow(ManagedKumbhPackage p) {
+        Button view = smallButton("View"); view.setOnAction(e -> showPackagePreview(p)); Button edit = smallButton("Edit"); edit.setOnAction(e -> showPackageEditor(p));
+        Button lifecycle = smallButton(p.status() == PackageStatus.PUBLISHED ? "Unpublish" : "Publish"); lifecycle.setOnAction(e -> changePackageStatus(p, p.status() == PackageStatus.PUBLISHED ? PackageStatus.PAUSED : PackageStatus.PUBLISHED));
+        Button archive = smallButton("Archive"); archive.setOnAction(e -> changePackageStatus(p, PackageStatus.ARCHIVED));
+        VBox info = new VBox(2, strong(p.name()), muted(p.packageCode() + " | " + p.origin() + " → " + p.destination() + " | " + p.days() + "D / " + p.nights() + "N | ₹" + String.format("%,d", p.startingPrice()) + " | " + p.travelOptions().stream().findFirst().orElse("Travel not set")), muted("Status: " + p.status() + " | Updated: " + valueOr("Not yet", p.updatedAt())));
+        HBox row = new HBox(10, moduleIcon("Kumbh Packages", "pilgrim-row-icon"), info, createSpacer(), badge(p.category().name()), statusBadge(p.status().name()), view, edit, lifecycle, archive); row.setAlignment(Pos.CENTER_LEFT); row.getStyleClass().add("pilgrim-data-row"); return row;
+    }
+    private void changePackageStatus(ManagedKumbhPackage p, PackageStatus status) {
+        try { if (status == PackageStatus.PUBLISHED && !validForPublishing(p)) { showInfo("Cannot publish", "Add a package name, origin, duration, starting price and at least one itinerary activity before publishing."); return; }
+            if (status == PackageStatus.PUBLISHED) PackageRepository.adminSource().publishPackage(p, adminToken()); else if (status == PackageStatus.PAUSED) PackageRepository.adminSource().pausePackage(p, adminToken()); else PackageRepository.adminSource().archivePackage(p, adminToken()); showSection("Kumbh Packages");
+        } catch (Exception ex) { showInfo("Package update failed", ex.getMessage() == null ? "Could not save package status." : ex.getMessage()); }
+    }
+    private boolean validForPublishing(ManagedKumbhPackage p) { return !p.name().isBlank() && !p.origin().isBlank() && p.days() > 0 && p.startingPrice() > 0 && !p.itinerary().isEmpty(); }
+
+    private void showPackageEditor(ManagedKumbhPackage existing) { root.setCenter(scroll(packageEditorPage(existing))); }
+    private VBox packageEditorPage(ManagedKumbhPackage existing) {
+        PackageEditor editor = new PackageEditor(existing); Button back = smallButton("← Back to package list"); back.setOnAction(e -> showSection("Kumbh Packages")); Button preview = smallButton("Preview Package"); preview.setOnAction(e -> showPackagePreview(editor.toPackage(existing == null ? PackageStatus.DRAFT : existing.status()))); Button draft = smallButton("Save Draft"); draft.setOnAction(e -> savePackage(editor, PackageStatus.DRAFT)); Button publish = smallButton("Publish Package"); publish.getStyleClass().add("admin-success-action"); publish.setOnAction(e -> savePackage(editor, PackageStatus.PUBLISHED));
+        HBox actions = new HBox(10, back, createSpacer(), preview, draft, publish); actions.setAlignment(Pos.CENTER_LEFT);
+        return pageShell(existing == null ? "Create Kumbh Package" : "Edit Kumbh Package", "Connection A package configuration. Photos and booking settings are intentionally excluded.", actions,
+                infoPanel("Basic Information", editor.basic()), infoPanel("Travel", editor.travel()), infoPanel("Stay Options", editor.stay()), infoPanel("Meals", editor.meals()), infoPanel("Kumbh Experience", editor.experience()), infoPanel("Nashik Sightseeing", editor.sightseeing()), infoPanel("Itinerary", editor.itinerary()), infoPanel("Pricing", editor.pricing()), infoPanel("Inclusions / Exclusions", editor.inclusions()), infoPanel("Policies", editor.policies()), infoPanel("Availability", editor.availability()), infoPanel("Photos & Gallery", editor.media()), infoPanel("Preview & Publish", muted("Save Draft keeps the package admin-only. Publish validates the core catalogue details and makes it visible to users.")));
+    }
+    private void savePackage(PackageEditor editor, PackageStatus status) {
+        ManagedKumbhPackage item = editor.toPackage(status); if (status == PackageStatus.PUBLISHED && !validForPublishing(item)) { showInfo("Cannot publish", "Package Name, Origin, Days, Starting Price and at least one itinerary activity are required."); return; }
+        try { PackageRepository.adminSource().saveAndReload(item, adminToken()); showInfo(status == PackageStatus.PUBLISHED ? "Package published" : "Draft saved", status == PackageStatus.PUBLISHED ? "The package will appear on a pilgrim's next catalogue refresh." : "Draft " + item.packageCode() + " is persisted and appears in Admin Package Management."); showSection("Kumbh Packages"); } catch (Exception ex) { showInfo("Package save failed", actionablePackageError(ex)); }
+    }
+    private String actionablePackageError(Exception exception) { String message = exception.getMessage(); return (message == null || message.isBlank() ? "Could not read or write the kumbh_packages collection." : message) + " Verify Firebase is enabled, the admin user profile has role = admin, the ID token is current, and Firestore rules are deployed."; }
+    private void showPackagePreview(ManagedKumbhPackage p) { Button back = smallButton("← Back to package list"); back.setOnAction(e -> showSection("Kumbh Packages")); VBox gallery = new VBox(8); if (p.gallery().isEmpty()) gallery.getChildren().add(muted("No gallery images selected.")); else { HBox thumbs = new HBox(8); p.gallery().stream().limit(5).forEach(media -> thumbs.getChildren().add(adminMediaPreview(media, 120, 76))); gallery.getChildren().add(thumbs); } root.setCenter(scroll(pageShell("Package Preview", "Preview uses the same package media metadata that published users receive.", back, infoPanel("Hero / Cover", adminMediaPreview(p.heroImage() == null ? p.coverImage() : p.heroImage(), 760, 210)), infoPanel("Gallery", gallery), infoPanel("Package Summary", paragraph(p.name() + "\n" + p.category() + " • " + p.origin() + " → " + p.destination() + " • " + p.days() + "D / " + p.nights() + "N\nStarting ₹" + String.format("%,d", p.startingPrice()) + "\n\nTravel: " + String.join(", ", p.travelOptions()) + "\nStay: " + String.join(", ", p.stayOptions()) + "\nMeals: " + String.join(", ", p.mealOptions()) + "\nFacilities: " + String.join(", ", p.facilities())))))); }
+    private StackPane adminMediaPreview(PackageMedia media, double width, double height) { StackPane frame = new StackPane(); frame.setPrefSize(width, height); frame.setMaxSize(width, height); frame.getStyleClass().add("package-gallery-main"); if (media == null || !PackageMediaService.temporary().isUsable(media)) { frame.getChildren().add(muted("No image selected")); return frame; } try { Image image = new Image(PackageMediaService.temporary().resolveReference(media), false); ImageView view = new ImageView(image); view.setFitWidth(width); view.setFitHeight(height); view.setPreserveRatio(true); frame.getChildren().add(view); } catch (Exception ignored) { frame.getChildren().add(muted("Image unavailable")); } return frame; }
 
     private VBox pujaServicesPage() {
         VBox form = structuredForm("Puja Name", "Temple / Ghat", "Puja Type", "Price", "Available Slots",
@@ -3076,4 +3099,65 @@ public class AdminDashboardPage {
         return AppUi.confirm(title, message, root == null || root.getScene() == null ? null : root.getScene().getWindow());
     }
 
+    /** Connection A editor: line-based repeatable configuration keeps every item data-driven without modal dialogs. */
+    private final class PackageEditor {
+        final TextField name = AppUi.textField("Package Name");
+        final ComboBox<String> category = select("Package Category", "Premium", "Standard", "Budget");
+        final TextField theme = AppUi.textField("Package Theme");
+        final TextField badge = AppUi.textField("Optional Badge (Best Value / Popular / Family Choice)");
+        final TextField origin = AppUi.textField("Origin City");
+        final TextField destination = AppUi.textField("Destination");
+        final TextField days = AppUi.textField("Days"); final TextField nights = AppUi.textField("Nights");
+        final TextArea shortDescription = area("Short Description"); final TextArea description = area("Full Description");
+        final TextArea travelOptions = area("One travel option per line — e.g. Flight | Delhi to Nashik | Included | Pickup/Drop");
+        final CheckBox selfTravelEnabled = new CheckBox("Enable Self Travel"); final CheckBox simhasthaTravelEnabled = new CheckBox("Enable Simhastha Connect Travel"); final CheckBox flightEnabled = new CheckBox("Enable Flight");
+        final TextField defaultOriginAirport = AppUi.textField("Default Origin Airport (IATA, e.g. IXU)"); final TextField destinationAirport = AppUi.textField("Destination Airport (IATA, e.g. ISK)");
+        final CheckBox economyEnabled = new CheckBox("Economy"); final CheckBox premiumEconomyEnabled = new CheckBox("Premium Economy"); final CheckBox businessEnabled = new CheckBox("Business"); final CheckBox firstClassEnabled = new CheckBox("First Class");
+        final TextField economyCharge = AppUi.textField("Economy package charge (INR)"); final TextField premiumEconomyCharge = AppUi.textField("Premium Economy package charge (INR)"); final TextField businessCharge = AppUi.textField("Business package charge (INR)"); final TextField firstClassCharge = AppUi.textField("First Class package charge (INR)");
+        final TextField preferredAirlines = AppUi.textField("Preferred airlines (optional)"); final CheckBox flightAssistance = new CheckBox("Flight assistance included"); final CheckBox airportPickup = new CheckBox("Airport pickup included"); final TextField baggageNote = AppUi.textField("Baggage note"); final TextField travelInstructions = AppUi.textField("Travel instructions");
+        final TextArea stayOptions = area("One stay option per line — e.g. Premium Hotel | 4 nights | Nashik | Included");
+        final TextArea mealOptions = area("One meal option per line — e.g. Breakfast + Dinner | Included");
+        final TextArea facilities = area("One facility per line — e.g. Ramkund Snan | Included");
+        final TextArea touristPlaces = area("One tourist place per line — e.g. Trimbakeshwar | Included");
+        final TextField itineraryDayTitle = AppUi.textField("Day Title — e.g. Day 1 — Arrival");
+        final TextArea itineraryActivities = area("One activity per line — e.g. TRAVEL: Arrival in Nashik");
+        final TextField basePrice = AppUi.textField("Base Package Price (INR)"); final TextField startingPrice = AppUi.textField("Starting Price (INR)");
+        final TextField originalPrice = AppUi.textField("Original Price, if any (INR)"); final TextField discount = AppUi.textField("Discount %, if configured");
+        final TextArea inclusions = area("One inclusion per line"); final TextArea exclusions = area("One exclusion per line"); final TextArea policies = area("One policy per line — e.g. Cancellation: Terms shared during booking");
+        final TextField availableFrom = AppUi.textField("Available From (YYYY-MM-DD)"); final TextField availableUntil = AppUi.textField("Available Until (YYYY-MM-DD)"); final TextField departureDates = AppUi.textField("Possible Departure Dates"); final TextField maximumCapacity = AppUi.textField("Maximum Capacity"); final TextField minimumTravellers = AppUi.textField("Minimum Travellers");
+        PackageMedia cover; PackageMedia hero; final List<PackageMedia> gallery = new ArrayList<>(); final VBox mediaRows = new VBox(8);
+        final String id; final String code; final String createdBy; final String createdAt;
+
+        PackageEditor(ManagedKumbhPackage p) {
+            id = p == null ? java.util.UUID.randomUUID().toString() : p.packageId(); code = p == null ? "KPKG-2027-" + java.util.UUID.randomUUID().toString().substring(0, 5).toUpperCase() : p.packageCode(); createdBy = p == null ? (AppSession.currentUser() == null ? "" : AppSession.currentUser().uid()) : p.createdBy(); createdAt = p == null ? String.valueOf(System.currentTimeMillis()) : p.createdAt();
+            destination.setText("Nashik – Simhastha 2027"); applyTravelConfig(PackageTravelConfig.defaults(""));
+            if (p != null) populate(p);
+        }
+        Node basic() { return grid(name, category, theme, badge, origin, destination, days, nights, shortDescription, description); }
+        Node travel() { return new VBox(10, travelOptions, muted("Simhastha Connect flight configuration — controls package upgrade charges, not live airline fares."), new HBox(12,selfTravelEnabled,simhasthaTravelEnabled,flightEnabled), grid(defaultOriginAirport,destinationAirport), new HBox(12,economyEnabled,premiumEconomyEnabled,businessEnabled,firstClassEnabled), grid(economyCharge,premiumEconomyCharge,businessCharge,firstClassCharge), preferredAirlines, new HBox(12,flightAssistance,airportPickup), baggageNote,travelInstructions); } Node stay() { return stayOptions; } Node meals() { return mealOptions; } Node experience() { return facilities; } Node sightseeing() { return touristPlaces; }
+        Node itinerary() { return new VBox(9, itineraryDayTitle, itineraryActivities, muted("Use activity types such as TRAVEL, PICKUP, DROP, STAY, MEAL, GHAT, SNAN, TEMPLE, PUJA, TOURIST_PLACE, EVENT, FREE_TIME, or OTHER.")); }
+        Node pricing() { return grid(basePrice, startingPrice, originalPrice, discount, muted("Currency: INR. Optional component prices are recorded in the relevant Travel, Stay, Meals, Experience and Sightseeing entries.")); }
+        Node inclusions() { return new VBox(9, inclusions, exclusions); } Node policies() { return policies; } Node availability() { return grid(availableFrom, availableUntil, departureDates, maximumCapacity, minimumTravellers); }
+        Node media() { Button coverButton = smallButton("Change Cover Image"); coverButton.setOnAction(e -> chooseMedia(PackageMediaType.COVER)); Button heroButton = smallButton("Change Hero Image"); heroButton.setOnAction(e -> chooseMedia(PackageMediaType.HERO)); Button add = smallButton("+ Add Photo"); add.setOnAction(e -> chooseMedia(PackageMediaType.GALLERY)); refreshMediaRows(); return new VBox(10, muted("Temporary local image references only (JPG, JPEG, PNG). Cloudinary upload is intentionally not enabled."), new HBox(8, coverButton, heroButton, add), mediaRows); }
+        private void chooseMedia(PackageMediaType type) { FileChooser chooser = new FileChooser(); chooser.setTitle("Select " + type + " Image"); chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("Images", "*.jpg", "*.jpeg", "*.png")); File selected = chooser.showOpenDialog(stage); if (selected == null) return; PackageMedia candidate = new PackageMedia(java.util.UUID.randomUUID().toString(), selected.getAbsolutePath(), "", "", type, gallery.size(), type != PackageMediaType.GALLERY, String.valueOf(System.currentTimeMillis())); Optional<String> issue = PackageMediaService.temporary().validateReference(candidate.url()); if (issue.isPresent()) { showInfo("Image not added", issue.get()); return; } if (type == PackageMediaType.COVER) cover = candidate; else if (type == PackageMediaType.HERO) hero = candidate; else { if (gallery.size() >= 10) { showInfo("Gallery limit", "A package can have up to 10 gallery images."); return; } if (gallery.stream().anyMatch(m -> m.url().equals(candidate.url()))) { showInfo("Duplicate image", "This photo is already in the gallery."); return; } gallery.add(candidate); } refreshMediaRows(); }
+        private void refreshMediaRows() { mediaRows.getChildren().clear(); addMediaRow("Cover Image", cover, PackageMediaType.COVER); addMediaRow("Hero Image", hero, PackageMediaType.HERO); for (int i = 0; i < gallery.size(); i++) addGalleryRow(i); }
+        private void addMediaRow(String label, PackageMedia media, PackageMediaType type) { HBox row = new HBox(9, muted(label + ": " + (media == null ? "Not selected" : new File(media.url()).getName()))); if (media != null) { Button remove = smallButton("Remove"); remove.setOnAction(e -> { if (type == PackageMediaType.COVER) cover = null; else hero = null; refreshMediaRows(); }); row.getChildren().add(remove); } row.getStyleClass().add("package-media-admin-row"); mediaRows.getChildren().add(row); }
+        private void addGalleryRow(int index) { PackageMedia media = gallery.get(index); TextField caption = AppUi.textField("Caption"); caption.setText(media.caption()); caption.textProperty().addListener((o, a, value) -> gallery.set(index, new PackageMedia(media.mediaId(), media.url(), media.publicId(), value, media.mediaType(), media.sortOrder(), false, media.createdAt()))); Button up = smallButton("↑"); up.setDisable(index == 0); up.setOnAction(e -> { java.util.Collections.swap(gallery, index, index - 1); normalizeGallery(); refreshMediaRows(); }); Button down = smallButton("↓"); down.setDisable(index == gallery.size() - 1); down.setOnAction(e -> { java.util.Collections.swap(gallery, index, index + 1); normalizeGallery(); refreshMediaRows(); }); Button remove = smallButton("Remove"); remove.setOnAction(e -> { gallery.remove(index); normalizeGallery(); refreshMediaRows(); }); HBox row = new HBox(8, muted((index + 1) + ". " + new File(media.url()).getName()), caption, up, down, remove); HBox.setHgrow(caption, Priority.ALWAYS); row.getStyleClass().add("package-media-admin-row"); mediaRows.getChildren().add(row); }
+        private void normalizeGallery() { for (int i = 0; i < gallery.size(); i++) { PackageMedia m = gallery.get(i); gallery.set(i, new PackageMedia(m.mediaId(),m.url(),m.publicId(),m.caption(),PackageMediaType.GALLERY,i,false,m.createdAt())); } }
+        private void populate(ManagedKumbhPackage p) { name.setText(p.name()); category.setValue(cap(p.category().name())); theme.setText(p.theme()); badge.setText(p.badge()); origin.setText(p.origin()); destination.setText(p.destination()); days.setText(String.valueOf(p.days())); nights.setText(String.valueOf(p.nights())); shortDescription.setText(p.shortDescription()); description.setText(p.description()); travelOptions.setText(lines(p.travelOptions().stream().filter(value -> !value.startsWith(PackageTravelConfig.PREFIX)).toList())); applyTravelConfig(PackageTravelConfig.fromTravelOptions(p.travelOptions(),p.origin())); stayOptions.setText(lines(p.stayOptions())); mealOptions.setText(lines(p.mealOptions())); facilities.setText(lines(p.facilities())); touristPlaces.setText(lines(p.touristPlaces())); if (!p.itinerary().isEmpty()) { itineraryDayTitle.setText(p.itinerary().get(0).title()); itineraryActivities.setText(p.itinerary().stream().flatMap(d -> d.items().stream()).map(KumbhPackage.Item::text).collect(java.util.stream.Collectors.joining("\n"))); } basePrice.setText(String.valueOf(p.basePrice())); startingPrice.setText(String.valueOf(p.startingPrice())); originalPrice.setText(p.originalPrice() == 0 ? "" : String.valueOf(p.originalPrice())); discount.setText(p.discount() == 0 ? "" : String.valueOf(p.discount())); inclusions.setText(lines(p.inclusions())); exclusions.setText(lines(p.exclusions())); policies.setText(p.policies().entrySet().stream().map(e -> e.getKey() + ": " + e.getValue()).collect(java.util.stream.Collectors.joining("\n"))); availableFrom.setText(p.availableFrom()); availableUntil.setText(p.availableUntil()); departureDates.setText(p.departureDates()); maximumCapacity.setText(String.valueOf(p.maximumCapacity())); minimumTravellers.setText(String.valueOf(p.minimumTravellers())); cover=p.coverImage(); hero=p.heroImage(); gallery.addAll(p.gallery()); }
+        ManagedKumbhPackage toPackage(PackageStatus status) { List<KumbhPackage.Item> activities = linesList(itineraryActivities.getText()).stream().map(value -> new KumbhPackage.Item(activityType(value), value, "")).toList(); List<KumbhPackage.Day> itinerary = activities.isEmpty() ? List.of() : List.of(new KumbhPackage.Day(valueOr("Day 1 — Journey", itineraryDayTitle.getText()), activities)); Map<String,String> policyMap = new LinkedHashMap<>(); for(String value : linesList(policies.getText())) { int divider = value.indexOf(':'); policyMap.put(divider < 0 ? "Policy" : value.substring(0, divider).trim(), divider < 0 ? value : value.substring(divider + 1).trim()); } String now = String.valueOf(System.currentTimeMillis()); return new ManagedKumbhPackage(id, code, name.getText().trim(), PackageCategory.valueOf(category.getValue().toUpperCase()), theme.getText().trim(), badge.getText().trim(), origin.getText().trim(), valueOr("Nashik – Simhastha 2027", destination.getText().trim()), number(days), number(nights), shortDescription.getText().trim(), description.getText().trim(), configuredTravelOptions(), linesList(stayOptions.getText()), linesList(mealOptions.getText()), linesList(facilities.getText()), linesList(touristPlaces.getText()), itinerary, number(basePrice), number(startingPrice), number(originalPrice), number(discount), linesList(inclusions.getText()), linesList(exclusions.getText()), policyMap, availableFrom.getText().trim(), availableUntil.getText().trim(), departureDates.getText().trim(), number(maximumCapacity), number(minimumTravellers), status, createdBy, createdAt, now, status == PackageStatus.PUBLISHED ? now : "", cover, hero, List.copyOf(gallery)); }
+        private void applyTravelConfig(PackageTravelConfig config) { selfTravelEnabled.setSelected(config.selfTravelEnabled());simhasthaTravelEnabled.setSelected(config.simhasthaConnectEnabled());flightEnabled.setSelected(config.flightEnabled());defaultOriginAirport.setText(config.defaultOriginAirport());destinationAirport.setText(config.destinationAirport());economyEnabled.setSelected(config.allowedCabins().contains(CabinClass.ECONOMY));premiumEconomyEnabled.setSelected(config.allowedCabins().contains(CabinClass.PREMIUM_ECONOMY));businessEnabled.setSelected(config.allowedCabins().contains(CabinClass.BUSINESS));firstClassEnabled.setSelected(config.allowedCabins().contains(CabinClass.FIRST_CLASS));economyCharge.setText(String.valueOf(config.charge(CabinClass.ECONOMY)));premiumEconomyCharge.setText(String.valueOf(config.charge(CabinClass.PREMIUM_ECONOMY)));businessCharge.setText(String.valueOf(config.charge(CabinClass.BUSINESS)));firstClassCharge.setText(String.valueOf(config.charge(CabinClass.FIRST_CLASS)));preferredAirlines.setText(config.preferredAirlines());flightAssistance.setSelected(config.flightAssistanceIncluded());airportPickup.setSelected(config.airportPickupIncluded());baggageNote.setText(config.baggageNote());travelInstructions.setText(config.travelInstructions()); }
+        private List<String> configuredTravelOptions() { Set<CabinClass> cabins=EnumSet.noneOf(CabinClass.class);if(economyEnabled.isSelected())cabins.add(CabinClass.ECONOMY);if(premiumEconomyEnabled.isSelected())cabins.add(CabinClass.PREMIUM_ECONOMY);if(businessEnabled.isSelected())cabins.add(CabinClass.BUSINESS);if(firstClassEnabled.isSelected())cabins.add(CabinClass.FIRST_CLASS);Map<CabinClass,Integer> charges=new EnumMap<>(CabinClass.class);charges.put(CabinClass.ECONOMY,number(economyCharge));charges.put(CabinClass.PREMIUM_ECONOMY,number(premiumEconomyCharge));charges.put(CabinClass.BUSINESS,number(businessCharge));charges.put(CabinClass.FIRST_CLASS,number(firstClassCharge));PackageTravelConfig config=new PackageTravelConfig(selfTravelEnabled.isSelected(),simhasthaTravelEnabled.isSelected(),flightEnabled.isSelected(),defaultOriginAirport.getText().trim(),destinationAirport.getText().trim(),cabins,charges,preferredAirlines.getText().trim(),flightAssistance.isSelected(),airportPickup.isSelected(),baggageNote.getText().trim(),travelInstructions.getText().trim());List<String> values=new ArrayList<>(linesList(travelOptions.getText()));values.removeIf(value->value.startsWith(PackageTravelConfig.PREFIX));values.add(config.encode());return List.copyOf(values); }
+    }
+    private ComboBox<String> select(String prompt, String... values) { ComboBox<String> combo = new ComboBox<>(); combo.getItems().addAll(values); combo.setValue(values[0]); combo.setPromptText(prompt); combo.getStyleClass().add("input-combo"); return combo; }
+    private TextArea area(String prompt) { TextArea field = new TextArea(); field.setPromptText(prompt); field.setPrefRowCount(3); field.setWrapText(true); field.getStyleClass().add("input-field"); return field; }
+    private Node grid(Node... nodes) { GridPane grid = new GridPane(); grid.setHgap(10); grid.setVgap(10); for (int i = 0; i < nodes.length; i++) { grid.add(nodes[i], i % 2, i / 2); GridPane.setHgrow(nodes[i], Priority.ALWAYS); } return grid; }
+    private List<String> linesList(String value) { return java.util.Arrays.stream(value == null ? new String[0] : value.split("\\r?\\n")).map(String::trim).filter(s -> !s.isBlank()).toList(); }
+    private String lines(List<String> values) { return String.join("\n", values); }
+    private int number(TextField field) { try { return Integer.parseInt(field.getText().trim()); } catch (Exception e) { return 0; } }
+    private ItineraryItemType activityType(String value) { String key = value == null ? "" : value.trim().toUpperCase().split("[: -]", 2)[0]; try { return ItineraryItemType.valueOf(key); } catch (Exception e) { return ItineraryItemType.OTHER; } }
+    private String cap(String value) { return value.substring(0, 1) + value.substring(1).toLowerCase(); }
+
+    private record AdminNotification(String id, String title, String detail, String targetSection) {
+    }
 }
