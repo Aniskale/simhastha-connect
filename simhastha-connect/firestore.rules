@@ -356,6 +356,25 @@ service cloud.firestore {
 
     // ================= PUBLIC MODULES =================
 
+    // Official schedule content is readable to authenticated pilgrims but editable only by admins.
+    match /schedule_events/{eventId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /schedule_alerts/{alertId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    // ================= GHATS =================
+
+match /ghats/{ghatId} {
+  allow read: if isAdmin()
+    || (isSignedIn() && approvedPublic());
+
+  allow create, update, delete: if isAdmin();
+}
+
     match /{collection}/{id} {
 
       allow read: if collection in [

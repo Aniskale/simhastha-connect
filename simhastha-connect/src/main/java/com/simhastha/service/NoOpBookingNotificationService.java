@@ -6,6 +6,11 @@ public final class NoOpBookingNotificationService implements BookingNotification
 
     @Override
     public void bookingConfirmed(AppDataStore.BookingRecord booking, AppDataStore.TicketRecord ticket) {
-        // Future SMS, WhatsApp, and email integrations can subscribe here.
+        AppDataStore.saveOperationalItem("announcement", new AppDataStore.ServiceItem(
+                "booking-notification-" + booking.bookingId,
+                "announcement",
+                "Booking confirmed",
+                booking.title + " confirmed for " + booking.customerName + ". Ticket " + ticket.ticketId + " issued.",
+                "Booking"));
     }
 }

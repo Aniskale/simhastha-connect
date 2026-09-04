@@ -3,6 +3,7 @@ package com.simhastha.dao;
 import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.model.BusinessLocation;
 import com.simhastha.model.BusinessProfileUpdate;
+import com.simhastha.model.CloudImage;
 import com.simhastha.view.AppDataStore;
 import com.simhastha.view.BusinessAuthPage;
 
@@ -36,5 +37,9 @@ public interface BusinessDao {
             throws IOException, InterruptedException;
 
     void updateLocation(String businessId, BusinessLocation location, String idToken)
+            throws IOException, InterruptedException;
+
+    void updateMedia(String businessId, String logoUrl, String logoPublicId, String coverPhotoUrl,
+            String coverPhotoPublicId, List<CloudImage> galleryImages, String idToken)
             throws IOException, InterruptedException;
 }

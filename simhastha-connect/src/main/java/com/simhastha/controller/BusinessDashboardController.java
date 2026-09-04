@@ -3,6 +3,7 @@ package com.simhastha.controller;
 import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.model.BusinessLocation;
 import com.simhastha.model.BusinessProfileUpdate;
+import com.simhastha.model.CloudImage;
 import com.simhastha.service.BusinessDashboardService;
 import com.simhastha.view.AppDataStore;
 
@@ -41,6 +42,13 @@ public final class BusinessDashboardController {
     public void updateBusinessLocation(String businessId, BusinessLocation location, String idToken)
             throws IOException, InterruptedException {
         service.updateBusinessLocation(businessId, location, idToken);
+    }
+
+    public void updateBusinessMedia(String businessId, String logoUrl, String logoPublicId, String coverPhotoUrl,
+            String coverPhotoPublicId, List<CloudImage> galleryImages, String idToken)
+            throws IOException, InterruptedException {
+        service.updateBusinessMedia(businessId, logoUrl, logoPublicId, coverPhotoUrl, coverPhotoPublicId,
+                galleryImages, idToken);
     }
 
     public List<AppDataStore.BookingRecord> findBookingsForBusiness(String businessId, String idToken)

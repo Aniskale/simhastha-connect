@@ -16,11 +16,16 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 public class OperatorDashboardPage {
 
     private final OperatorAuthPage.OperatorAccount account;
+    private final Set<String> readNotifications = new java.util.HashSet<>();
+    private BorderPane page;
     private VBox scheduleList;
 
     public OperatorDashboardPage(OperatorAuthPage.OperatorAccount account) {
@@ -28,7 +33,7 @@ public class OperatorDashboardPage {
     }
 
     public Scene createScene(Stage stage) {
-        BorderPane page = new BorderPane();
+        page = new BorderPane();
         page.getStyleClass().add("management-page");
         page.setTop(createHeader(stage));
         page.setCenter(createScrollableDashboard());
@@ -58,11 +63,56 @@ public class OperatorDashboardPage {
             NavigationUtil.navigate(stage, authPage.createScene(stage));
         });
 
-        HBox header = new HBox(18, titleBox, AppUi.spacer(), AppUi.createThemeToggle(), logout);
+        HBox header = new HBox(18, titleBox, AppUi.spacer(), AppUi.createThemeToggle(), notificationBell(),
+                AppUi.createProfileChip(account.contactPerson,
+                        () -> AppUi.showInfo("Transport Profile",
+                                account.contactPerson + "\n" + account.organizationName,
+                                page.getScene() == null ? null : page.getScene().getWindow())),
+                logout);
         header.getStyleClass().add("management-header");
         header.setAlignment(Pos.CENTER_LEFT);
         header.setPadding(new Insets(22, 42, 10, 42));
         return header;
+    }
+
+    private javafx.scene.layout.StackPane notificationBell() {
+        List<NotificationCenter.NotificationItem> items = operatorNotifications();
+        int unread = (int) items.stream().filter(item -> !readNotifications.contains(item.id())).count();
+        return NotificationCenter.bell(unread, this::showNotificationDrawer);
+    }
+
+    private void showNotificationDrawer() {
+        NotificationCenter.show(page.getScene() == null ? null : page.getScene().getWindow(),
+                "Transport Notifications", "Seat requests, route status and operations",
+                operatorNotifications(), readNotifications, this::openNotificationTarget);
+    }
+
+    private void openNotificationTarget(String target) {
+        page.setCenter(createScrollableDashboard());
+    }
+
+    private List<NotificationCenter.NotificationItem> operatorNotifications() {
+        List<NotificationCenter.NotificationItem> items = new ArrayList<>();
+        for (String booking : account.bookings) {
+            items.add(new NotificationCenter.NotificationItem("operator-booking-" + booking.hashCode(),
+                    "Seat request update", booking, "Booking", "pending", "bookings"));
+        }
+        for (String schedule : account.schedules) {
+            items.add(new NotificationCenter.NotificationItem("operator-schedule-" + schedule.hashCode(),
+                    "Route schedule active", schedule, "Schedule", "confirmed", "schedules"));
+        }
+        AppSession.User user = AppSession.currentUser();
+        String operatorId = user == null || user.uid() == null || user.uid().isBlank() ? account.email : user.uid();
+        AppDataStore.transportRoutes().stream()
+                .filter(route -> operatorId.equals(route.operatorId))
+                .forEach(route -> items.add(new NotificationCenter.NotificationItem("operator-route-" + route.routeId,
+                        route.published ? "Route published" : "Route awaiting admin publish",
+                        route.routeName + " | " + route.via, "Route", route.published ? "confirmed" : "pending",
+                        "routes")));
+        items.add(new NotificationCenter.NotificationItem("operator-delay-guidance",
+                "Delay alerts ready", "Use transport operations to notify pilgrims about traffic or crowd impact.",
+                "Operations", "info", "operations"));
+        return items.stream().limit(12).toList();
     }
 
     private ScrollPane createScrollableDashboard() {

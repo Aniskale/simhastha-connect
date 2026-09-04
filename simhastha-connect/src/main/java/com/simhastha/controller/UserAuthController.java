@@ -15,6 +15,11 @@ public final class UserAuthController {
         return AuthService.registerUser(name, mobile, email, password);
     }
 
+    public CompletableFuture<AuthService.AuthOutcome> registerUser(
+            String name, String mobile, String email, String password, java.io.File profilePhotoFile) {
+        return AuthService.registerUser(name, mobile, email, password, profilePhotoFile);
+    }
+
     public CompletableFuture<String> resetPassword(String email) {
         return AuthService.resetPassword(email);
     }

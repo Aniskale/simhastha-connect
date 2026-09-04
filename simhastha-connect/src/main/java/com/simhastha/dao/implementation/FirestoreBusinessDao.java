@@ -4,6 +4,7 @@ import com.simhastha.dao.BusinessDao;
 import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.model.BusinessLocation;
 import com.simhastha.model.BusinessProfileUpdate;
+import com.simhastha.model.CloudImage;
 import com.simhastha.view.AppDataStore;
 import com.simhastha.view.BusinessAuthPage;
 
@@ -74,5 +75,13 @@ public final class FirestoreBusinessDao implements BusinessDao {
     public void updateLocation(String businessId, BusinessLocation location, String idToken)
             throws IOException, InterruptedException {
         gateway.updateBusinessLocation(businessId, location, idToken);
+    }
+
+    @Override
+    public void updateMedia(String businessId, String logoUrl, String logoPublicId, String coverPhotoUrl,
+            String coverPhotoPublicId, List<CloudImage> galleryImages, String idToken)
+            throws IOException, InterruptedException {
+        gateway.updateBusinessMedia(businessId, logoUrl, logoPublicId, coverPhotoUrl, coverPhotoPublicId,
+                galleryImages, idToken);
     }
 }
