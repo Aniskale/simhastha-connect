@@ -13,6 +13,25 @@ public final class FirestorePackageRepository {
 
     public boolean hasProductionSource() { return config.isEnabled() || !local.isEmpty(); }
 
+    /** Seeds the offline admin catalogue without overwriting an existing admin edit. */
+    public void seedLegacyPackages(List<ManagedKumbhPackage> packages) {
+        if (config.isEnabled() || packages == null) return;
+        for (ManagedKumbhPackage item : packages) local.putIfAbsent(item.packageId(), item);
+    }
+
+    /** Imports legacy catalogue records into the same source used by Admin Package Management. */
+    public List<ManagedKumbhPackage> importLegacyPackages(List<KumbhPackage> packages, String token)
+            throws IOException, InterruptedException {
+        if (packages == null || packages.isEmpty()) return getAllPackagesForAdmin(token);
+        List<ManagedKumbhPackage> imported = new ArrayList<>();
+        for (KumbhPackage source : packages) {
+            ManagedKumbhPackage item = ManagedKumbhPackage.fromCatalogue(source, "legacy-migration");
+            saveAndReload(item, token);
+            imported.add(item);
+        }
+        return getAllPackagesForAdmin(token);
+    }
+
     public List<ManagedKumbhPackage> getAllPackagesForAdmin(String token) throws IOException, InterruptedException {
         if (!config.isEnabled()) return List.copyOf(local.values());
         if (token == null || token.isBlank()) throw new IOException("An authenticated admin token is required to load Kumbh Packages.");

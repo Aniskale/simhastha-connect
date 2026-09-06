@@ -1,6 +1,15 @@
 {
     "java.configuration.updateBuildConfiguration": "automatic",
     "java.debug.settings.onBuildFailureProceed": true,
+    "java.project.sourcePaths": [
+        "simhastha-connect/src/main/java",
+        "simhastha-connect/src/test/java"
+    ],
+    "java.project.outputPath": "simhastha-connect/target/classes",
+    "java.project.resourceFilters": [
+        "node_modules",
+        "\\.git"
+    ],
     "css.lint.vendorPrefix": "ignore",
     "css.lint.compatibleVendorPrefixes": "ignore"
 }

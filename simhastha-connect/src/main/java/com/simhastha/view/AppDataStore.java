@@ -57,15 +57,18 @@ public final class AppDataStore {
     private static final List<RouteRecord> transportRoutes = new ArrayList<>();
     private static final List<FaqRecord> faqs = new ArrayList<>();
     private static final Set<String> remoteModules = new HashSet<>();
+    // Puja-specific data remains on the legacy adapter until it is migrated.
+    // Accounts, Admin user lists, business approvals and generic bookings use
+    // the canonical gateway below, so every role resolves its profile from users/{uid}.
     private static final FirestoreGateway firestore = new FirestoreGateway(FirebaseConfig.load());
-    private static final com.simhastha.gateway.firebase.FirestoreGateway daoFirestore =
+    private static final com.simhastha.gateway.firebase.FirestoreGateway canonicalFirestore =
             new com.simhastha.gateway.firebase.FirestoreGateway(FirebaseConfig.load());
-    private static final UserDao userDao = new FirestoreUserDao(daoFirestore);
-    private static final BusinessDao businessDao = new FirestoreBusinessDao(daoFirestore);
-    private static final OperatorDao operatorDao = new FirestoreOperatorDao(daoFirestore);
-    private static final ApprovalDao approvalDao = new FirestoreApprovalDao(daoFirestore);
-    private static final BookingDao bookingDao = new FirestoreBookingDao(daoFirestore);
-    private static final OperationalDataDao operationalDataDao = new FirestoreOperationalDataDao(daoFirestore);
+    private static final UserDao userDao = new FirestoreUserDao(canonicalFirestore);
+    private static final BusinessDao businessDao = new FirestoreBusinessDao(canonicalFirestore);
+    private static final OperatorDao operatorDao = new FirestoreOperatorDao(canonicalFirestore);
+    private static final ApprovalDao approvalDao = new FirestoreApprovalDao(canonicalFirestore);
+    private static final BookingDao bookingDao = new FirestoreBookingDao(canonicalFirestore);
+    private static final OperationalDataDao operationalDataDao = new FirestoreOperationalDataDao(canonicalFirestore);
     private static AdminOverview adminOverview = AdminOverview.empty();
 
     static {
@@ -291,9 +294,9 @@ public final class AppDataStore {
         if (!updated) {
             faqs.add(faq);
         }
-        if (daoFirestore.isEnabled()) {
+        if (canonicalFirestore.isEnabled()) {
             try {
-                daoFirestore.saveFaq(faq, currentToken());
+                canonicalFirestore.saveFaq(faq, currentToken());
             } catch (Exception ignored) {
                 // Local FAQ changes stay available even if the remote sync is temporarily unavailable.
             }
@@ -302,9 +305,9 @@ public final class AppDataStore {
 
     public static void deleteFaq(String id) {
         faqs.removeIf(faq -> faq.id.equals(id));
-        if (daoFirestore.isEnabled()) {
+        if (canonicalFirestore.isEnabled()) {
             try {
-                daoFirestore.deleteFaq(id, currentToken());
+                canonicalFirestore.deleteFaq(id, currentToken());
             } catch (Exception ignored) {
                 // Keep the admin UI responsive if the remote delete fails.
             }
@@ -1781,7 +1784,7 @@ public final class AppDataStore {
                 // Keep the last known user snapshot if user listing is temporarily unavailable.
             }
             try {
-                List<FaqRecord> remoteFaqs = daoFirestore.loadFaqs(idToken);
+                List<FaqRecord> remoteFaqs = canonicalFirestore.loadFaqs(idToken);
                 if (!remoteFaqs.isEmpty()) {
                     mergeFaqs(remoteFaqs);
                 }

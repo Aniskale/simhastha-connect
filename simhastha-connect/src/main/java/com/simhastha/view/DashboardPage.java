@@ -6146,7 +6146,8 @@ public class DashboardPage {
     }
     private void loadEmergencyAlertsAsync() {
         AppSession.User user = AppSession.currentUser();
-        if (emergencyAlertsLoading || user == null || !emergencyFirestore.isEnabled()) return;
+        if (emergencyAlertsLoading || user == null || user.idToken() == null || user.idToken().isBlank()
+                || !emergencyFirestore.isEnabled()) return;
         emergencyAlertsLoading = true;
         java.util.concurrent.CompletableFuture.supplyAsync(() -> {
             try {
@@ -6407,7 +6408,9 @@ public class DashboardPage {
         }).thenAccept(records -> Platform.runLater(() -> {
             emergencyStateLoading = false;
             if (records == null) {
-                emergencyFeedback = "Emergency status cannot be loaded because Firestore access was denied. Please contact the administrator.";
+                // Keep the emergency screen usable when Firebase rules/token are unavailable.
+                // The local report state is intentionally not presented as a confirmed live status.
+                emergencyFeedback = "Live status sync is unavailable right now. Local emergency guidance remains available.";
                 stopEmergencyRefresh();
                 if (emergencyPageActive) refreshEmergencyPage();
                 return;

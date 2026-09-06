@@ -40,6 +40,10 @@ import java.util.logging.Logger;
 import com.simhastha.schedule.ScheduleAlert;
 import com.simhastha.schedule.ScheduleCategory;
 import com.simhastha.schedule.ScheduleEvent;
+import static com.simhastha.gateway.firebase.FirestoreCollections.BOOKINGS;
+import static com.simhastha.gateway.firebase.FirestoreCollections.BUSINESSES;
+import static com.simhastha.gateway.firebase.FirestoreCollections.TRANSPORT_OPERATORS;
+import static com.simhastha.gateway.firebase.FirestoreCollections.USERS;
 
 public final class FirestoreGateway implements GhatRepository {
 
@@ -334,7 +338,7 @@ public final class FirestoreGateway implements GhatRepository {
 
     public List<AppDataStore.UserRecord> loadUsers(String idToken) throws IOException, InterruptedException {
         List<AppDataStore.UserRecord> records = new ArrayList<>();
-        for (Document document : loadCollectionDocuments("users", idToken)) {
+        for (Document document : loadCollectionDocuments(USERS, idToken)) {
             String fields = document.fields;
             records.add(new AppDataStore.UserRecord(
                     valueOr(document.id, field(fields, "uid")),
@@ -944,12 +948,12 @@ public final class FirestoreGateway implements GhatRepository {
     }
 
     public AppDataStore.AdminOverview loadAdminOverview(String idToken) throws IOException, InterruptedException {
-        List<Document> users = loadCollectionDocuments("users", idToken);
-        List<Document> businesses = loadOptionalCollectionDocuments("businesses", idToken);
-        List<Document> operators = loadOptionalCollectionDocuments("transportOperators", idToken);
+        List<Document> users = loadCollectionDocuments(USERS, idToken);
+        List<Document> businesses = loadOptionalCollectionDocuments(BUSINESSES, idToken);
+        List<Document> operators = loadOptionalCollectionDocuments(TRANSPORT_OPERATORS, idToken);
         List<Document> appItems = loadOptionalCollectionDocuments("appItems", idToken);
         List<Document> routes = loadOptionalCollectionDocuments("transportRoutes", idToken);
-        List<Document> bookings = loadOptionalCollectionDocuments("bookings", idToken);
+        List<Document> bookings = loadOptionalCollectionDocuments(BOOKINGS, idToken);
         List<Document> lostFoundReports = loadOptionalCollectionDocuments("lostFoundReports", idToken);
 
         int approvedBusinesses = countMatching(businesses, document ->
@@ -990,7 +994,7 @@ public final class FirestoreGateway implements GhatRepository {
         if (!notBlank(uid)) {
             throw new MalformedProfileException("Firebase authentication succeeded but did not return a UID.");
         }
-        HttpRequest request = authorizedBuilder(documentUri("users", uid), idToken)
+        HttpRequest request = authorizedBuilder(documentUri(USERS, uid), idToken)
                 .timeout(Duration.ofSeconds(8))
                 .GET()
                 .build();
@@ -999,7 +1003,7 @@ public final class FirestoreGateway implements GhatRepository {
             return null;
         }
         if (response.statusCode() == 401 || response.statusCode() == 403) {
-            throw new PermissionDeniedException("Firestore permission denied while reading users/" + uid + ".");
+            throw new PermissionDeniedException("Firestore permission denied while reading " + USERS + "/" + uid + ".");
         }
         if (response.statusCode() >= 400) {
             throw new IOException("Firestore profile read failed: " + response.statusCode());
@@ -1043,7 +1047,7 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("profilePhotoPublicId", profile.profilePhotoPublicId()),
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())),
                 fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(documentUri("users", profile.uid()), json, idToken);
+        sendAuthorizedPatch(documentUri(USERS, profile.uid()), json, idToken);
     }
 
     public void saveBusinessProfile(String uid, BusinessAuthPage.BusinessAccount account, String idToken)
@@ -1074,7 +1078,7 @@ public final class FirestoreGateway implements GhatRepository {
                 boolFieldJson("approved", false),
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())),
                 fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(documentUri("businesses", uid), json, idToken);
+        sendAuthorizedPatch(documentUri(BUSINESSES, uid), json, idToken);
     }
 
     /**
@@ -1086,7 +1090,7 @@ public final class FirestoreGateway implements GhatRepository {
         if (!notBlank(ownerId)) {
             return null;
         }
-        HttpRequest request = authorizedBuilder(documentUri("businesses", ownerId), idToken)
+        HttpRequest request = authorizedBuilder(documentUri(BUSINESSES, ownerId), idToken)
                 .timeout(Duration.ofSeconds(8)).GET().build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() == 404) {
@@ -1265,14 +1269,14 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("status", "active"),
                 boolFieldJson("approved", true),
                 fieldJson("createdAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(documentUri("transportOperators", uid), json, idToken);
+        sendAuthorizedPatch(documentUri(TRANSPORT_OPERATORS, uid), json, idToken);
     }
 
     public void updateUserStatus(String uid, String status, String idToken) throws IOException, InterruptedException {
         String json = fieldsJson(
                 fieldJson("status", status),
                 fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(URI.create(documentUrl("users", uid)
+        sendAuthorizedPatch(URI.create(documentUrl(USERS, uid)
                 + "&updateMask.fieldPaths=status&updateMask.fieldPaths=updatedAt"), json, idToken);
     }
 
@@ -1286,7 +1290,7 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("gender", gender),
                 fieldJson("address", address),
                 fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(URI.create(documentUrl("users", uid)
+        sendAuthorizedPatch(URI.create(documentUrl(USERS, uid)
                 + "&updateMask.fieldPaths=name"
                 + "&updateMask.fieldPaths=email"
                 + "&updateMask.fieldPaths=mobile"
@@ -1310,7 +1314,7 @@ public final class FirestoreGateway implements GhatRepository {
     );
 
     sendAuthorizedPatch(
-            URI.create(documentUrl("users", uid)
+            URI.create(documentUrl(USERS, uid)
                     + "&updateMask.fieldPaths=profilePhotoUrl"
                     + "&updateMask.fieldPaths=profilePhotoPublicId"
                     + "&updateMask.fieldPaths=updatedAt"),
@@ -1393,7 +1397,7 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("bookingStatus", bookingStatus),
                 fieldJson("paymentStatus", paymentStatus),
                 fieldJson("updatedAt", String.valueOf(System.currentTimeMillis())));
-        sendAuthorizedPatch(URI.create(documentUrl("bookings", bookingId)
+        sendAuthorizedPatch(URI.create(documentUrl(BOOKINGS, bookingId)
                         + "&updateMask.fieldPaths=bookingStatus&updateMask.fieldPaths=paymentStatus&updateMask.fieldPaths=updatedAt"),
                 json, idToken);
     }
@@ -1421,7 +1425,7 @@ public final class FirestoreGateway implements GhatRepository {
                 fieldJson("razorpayPaymentId", booking.razorpayPaymentId),
                 fieldJson("createdAt", booking.createdAt),
                 fieldJson("updatedAt", booking.updatedAt));
-        sendAuthorizedPatch(documentUri("bookings", booking.bookingId), json, idToken);
+        sendAuthorizedPatch(documentUri(BOOKINGS, booking.bookingId), json, idToken);
     }
 
     /** Kumbh-package confirmations have their own collection and never share the generic bookings schema. */

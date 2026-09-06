@@ -6,6 +6,9 @@ import static com.simhastha.packages.ItineraryItemType.*;
 /** In-memory development catalogue for Part 1; replaceable by a future provider-backed repository. */
 public final class PackageRepository {
     private static final FirestorePackageRepository ADMIN_SOURCE = new FirestorePackageRepository();
+    static {
+        ADMIN_SOURCE.seedLegacyPackages(legacyAdminPackages());
+    }
     private PackageRepository() { }
     public static final List<String> CITIES = List.of("Mumbai", "Pune", "Delhi", "Nagpur", "Ahmedabad", "Surat", "Indore", "Bhopal", "Jaipur", "Hyderabad", "Bengaluru", "Chennai", "Kolkata", "Lucknow", "Varanasi", "Patna", "Raipur", "Goa", "Kochi", "Chandigarh", "Amritsar", "Chhatrapati Sambhajinagar", "Nanded");
     /**
@@ -26,6 +29,10 @@ public final class PackageRepository {
         }
     }
     public static FirestorePackageRepository adminSource() { return ADMIN_SOURCE; }
+    public static List<KumbhPackage> legacyPackages() { return developmentPackages(); }
+    public static List<ManagedKumbhPackage> legacyAdminPackages() {
+        return developmentPackages().stream().map(item -> ManagedKumbhPackage.fromCatalogue(item, "legacy-migration")).toList();
+    }
     private static List<KumbhPackage> developmentPackages() { return List.of(
         p("delhi-premium", "Delhi to Nashik Premium Simhastha Experience", "Delhi", PackageCategory.PREMIUM, 5, 4, 39999, "Flight + Private Vehicle", "Premium Hotel", "Breakfast + Lunch + Dinner", "Premium Experience", "Ramkund Snan", "Ghat Darshan", "Temple Darshan", "Trimbakeshwar", "Panchavati", "Nashik Sightseeing", "Puja Assistance"),
         p("mumbai-premium", "Mumbai to Nashik Divine Premium Journey", "Mumbai", PackageCategory.PREMIUM, 4, 3, 28999, "Private AC Vehicle", "Premium Hotel", "Full Meals", "Simhastha Special", "Ramkund Snan", "Ghat Darshan", "Kumbh Assistance", "Panchavati", "Nashik Sightseeing", "Senior Citizen Assistance"),

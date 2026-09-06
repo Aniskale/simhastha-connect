@@ -1,6 +1,8 @@
 package com.simhastha.view;
 
 import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Objects;
 import java.util.function.Consumer;
 
@@ -162,6 +164,24 @@ public final class EmergencyMapView {
             failed.setVisible(false);
             failed.setManaged(false);
             URL resource = EmergencyMapView.class.getResource("/maps/emergency-nashik-map.html");
+            // IDE/debug launches may run stale target/classes without copying resources.
+            // Resolve the checked-in resource as a safe local fallback before failing.
+            if (resource == null) {
+                Path[] candidates = {
+                        Path.of("src", "main", "resources", "maps", "emergency-nashik-map.html"),
+                        Path.of("simhastha-connect", "src", "main", "resources", "maps", "emergency-nashik-map.html")
+                };
+                for (Path candidate : candidates) {
+                    if (Files.isRegularFile(candidate)) {
+                        try {
+                            resource = candidate.toAbsolutePath().toUri().toURL();
+                            break;
+                        } catch (java.net.MalformedURLException ignored) {
+                            // Try the next known workspace location.
+                        }
+                    }
+                }
+            }
             System.out.println("EMERGENCY_MAP_DIAGNOSTIC resourceFound=" + (resource != null) + " resourceUrl=" + resource);
             if (resource == null) { showFailure("RESOURCE", null); return; }
             engine.load(resource.toExternalForm());

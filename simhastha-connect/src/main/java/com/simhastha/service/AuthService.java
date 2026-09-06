@@ -10,6 +10,7 @@ import com.simhastha.dao.implementation.FirestoreOperatorDao;
 import com.simhastha.dao.implementation.FirestoreUserDao;
 import com.simhastha.gateway.firebase.FirebaseAuthGateway;
 import com.simhastha.gateway.firebase.FirebaseConfig;
+import com.simhastha.gateway.firebase.FirestoreCollections;
 import com.simhastha.gateway.firebase.FirestoreGateway;
 import com.simhastha.model.UserProfile;
 import com.simhastha.util.AppSession;
@@ -57,7 +58,8 @@ public final class AuthService {
 
                 UserProfile profile = USER_DAO.findProfile(auth.uid, auth.idToken).orElse(null);
                 if (profile == null) {
-                    return AuthOutcome.failure("No Firestore profile was found at users/" + auth.uid + ". Please contact admin.");
+                    return AuthOutcome.failure("No Firestore profile was found at " + FirestoreCollections.USERS + "/"
+                            + auth.uid + ". Please contact admin.");
                 }
                 if (!VALID_ROLES.contains(profile.role())) {
                     return AuthOutcome.failure("Your account role is not valid. Expected one of: user, business, transport_operator, admin.");

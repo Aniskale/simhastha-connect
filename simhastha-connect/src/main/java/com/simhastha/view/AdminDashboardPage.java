@@ -1117,10 +1117,22 @@ public class AdminDashboardPage {
                 metric(String.valueOf(countPackages(packages, PackageStatus.PAUSED)), "Paused"),
                 metric(String.valueOf(countPackages(packages, PackageStatus.ARCHIVED)), "Archived"));
         Button create = smallButton("+ Create New Package"); create.getStyleClass().add("admin-success-action"); create.setOnAction(e -> showPackageEditor(null));
+        Button importLegacy = smallButton("Import Old Kumbh Packages"); importLegacy.setOnAction(e -> importLegacyPackages());
         VBox rows = new VBox(10);
         if (packages.isEmpty()) rows.getChildren().add(infoPanel("No admin-created packages", "Create a draft, then publish it when the catalogue information is ready."));
         else packages.forEach(p -> rows.getChildren().add(packageAdminRow(p)));
-        return pageShell("Kumbh Packages", "Admin-owned package catalogue. Only published packages are visible to pilgrims.", stats, create, infoPanel("Package Catalogue", rows));
+        return pageShell("Kumbh Packages", "Admin-owned package catalogue. Only published packages are visible to pilgrims.", stats, new HBox(8, create, importLegacy), infoPanel("Package Catalogue", rows));
+    }
+
+    private void importLegacyPackages() {
+        try {
+            List<ManagedKumbhPackage> imported = PackageRepository.adminSource()
+                    .importLegacyPackages(PackageRepository.legacyPackages(), adminToken());
+            showInfo("Old packages imported", imported.size() + " Kumbh packages are now available in Admin Package Management and the user catalogue.");
+            showSection("Kumbh Packages");
+        } catch (Exception ex) {
+            showInfo("Package import failed", actionablePackageError(ex));
+        }
     }
 
     private long countPackages(List<ManagedKumbhPackage> packages, PackageStatus status) { return packages.stream().filter(p -> p.status() == status).count(); }
