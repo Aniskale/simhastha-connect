@@ -85,6 +85,7 @@ class DashboardPageGhatRenderingTest {
 
     @Test
     void heroKeepsTheLightControlsLayerCompactAboveTheBackgroundImage() throws Exception {
+        startupError.set(null);
         CountDownLatch inspected = new CountDownLatch(1);
         Platform.runLater(() -> {
             try {

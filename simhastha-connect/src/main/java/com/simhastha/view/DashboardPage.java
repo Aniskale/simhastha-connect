@@ -283,7 +283,9 @@ public class DashboardPage {
                 nav("schedule", "All Day Schedule", false),
                 nav("business", "Business", false),
                 nav("bookings", "My Bookings", false),
-                nav("announcement", "Announcement", false));
+                nav("announcement", "Announcement", false),
+                nav("faq", "FAQs / Help Center", false),
+                nav("about", "About Us", false));
 
         Button logout = sidebarAction("logout", "Logout");
         logout.setOnAction(eventAction -> {
@@ -291,7 +293,13 @@ public class DashboardPage {
             NavigationUtil.navigate(stage, new UserAuthPage().createScene(stage));
         });
 
-        VBox sidebar = new VBox(12, brand, menu, createSpacer(), supportPanel(), logout);
+        ScrollPane menuScroll = new ScrollPane(menu);
+        menuScroll.setFitToWidth(true);
+        menuScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        menuScroll.setMinHeight(0);
+        menuScroll.getStyleClass().add("pilgrim-sidebar-scroll");
+        VBox.setVgrow(menuScroll, Priority.ALWAYS);
+        VBox sidebar = new VBox(12, brand, menuScroll, supportPanel(), logout);
         sidebar.getStyleClass().add("pilgrim-sidebar");
         sidebar.setPadding(new Insets(15, 13, 14, 13));
         sidebar.setPrefWidth(238);
@@ -5203,8 +5211,14 @@ public class DashboardPage {
         return hero;
     }
 
+    /** Backward-compatible reflection/test entry point; production uses the page search field overload. */
+    @SuppressWarnings("unused")
+    private StackPane ghatHero() {
+        return ghatHero(new TextField());
+    }
+
     private HBox ghatTopControls(TextField pageSearch) {
-        Label weather = label("27°C   Nashik", "ghat-weather-pill");
+        Label weather = label("Weather unavailable", "ghat-weather-pill");
         Button search = roundButton("\uE721", "Search ghats");
         search.setOnAction(event -> pageSearch.requestFocus());
         HBox controls = new HBox(8, AppUi.createThemeToggle(), weather, search, notificationBell(), profileButton());
@@ -5924,11 +5938,14 @@ public class DashboardPage {
 
     private StackPane emergencyMapFallback() {
         Label title = label("Nashik Emergency Map unavailable", "emergency-map-failure-title");
-        Label detail = label("Check internet connection or retry.", "emergency-map-failure-detail");
+        Label detail = label("The embedded map could not load. You can retry or open the live map in your browser.", "emergency-map-failure-detail");
         Button retry = new Button("RETRY MAP");
         retry.getStyleClass().add("emergency-secondary-button");
         retry.setOnAction(event -> { emergencyMapView = null; refreshEmergencyPage(); });
-        VBox fallback = new VBox(7, title, detail, retry);
+        Button browser = new Button("OPEN LIVE MAP");
+        browser.getStyleClass().add("emergency-primary-button");
+        browser.setOnAction(event -> openUrl("https://www.openstreetmap.org/#map=13/20.0059/73.7890"));
+        VBox fallback = new VBox(9, title, detail, new HBox(8, retry, browser));
         fallback.setAlignment(Pos.CENTER);
         StackPane map = new StackPane(fallback);
         map.getStyleClass().addAll("emergency-map-shell", "emergency-map-failure");
@@ -7122,19 +7139,44 @@ public class DashboardPage {
             new StayItem("Tulsi Inn", "Homestay", "Trimbakeshwar", "Trimbakeshwar, Nashik", "", "/images/trimbakeshwar.jpg", "Tulsi Inn Trimbakeshwar Nashik", "Standard", java.util.List.of("Family Friendly", "Meals", "Hot Water"), "A homestay option near Trimbakeshwar Temple.", true));
 
     private VBox lostFoundPage() {
+        Button reportLost = new Button("Report Lost Person  >");
+        Button reportFound = new Button("Report Found Item  >");
+        reportLost.getStyleClass().add("primary-button");
+        reportFound.getStyleClass().add("primary-button");
+        reportLost.setOnAction(e -> showInfo("Report Lost Person", "Use the official Lost & Found help desk to submit a report with identity details, last-seen location and contact information."));
+        reportFound.setOnAction(e -> showInfo("Report Found Item", "Use the verified Found Item Counter and include the item type, location and handover contact."));
         HBox actions = new HBox(12,
-                richCard("lost", "Report Lost Person", "Name, age, clothing and last seen area.", "Report"),
-                richCard("lost", "Report Found Item", "Item type, location found and contact counter.", "Submit"));
+                actionCard("lost", "Report Lost Person", "Submit identity details and last-seen information.", reportLost),
+                actionCard("lost", "Report Found Item", "Submit item details to a verified counter.", reportFound));
         HBox.setHgrow(actions.getChildren().get(0), Priority.ALWAYS);
         HBox.setHgrow(actions.getChildren().get(1), Priority.ALWAYS);
 
-        return pageShell("Lost & Found", "Official support for lost persons and found items.",
+        VBox dynamic = new VBox(10, sectionTitle("My Reports & Official Updates"));
+        AppDataStore.lostFoundCases().stream().limit(20).forEach(item -> dynamic.getChildren().add(lostFoundCaseCard(item)));
+        if (dynamic.getChildren().size() == 1) dynamic.getChildren().add(infoPanel("No active reports", "Submitted Lost & Found reports will appear here after backend refresh."));
+        return pageShell("Lost & Found", "Report, track and resolve lost persons or found items.",
                 actions,
-                filterRow("Item/Person Type", "Last Seen Area", "Date", "Search"),
+                filterRow("Item/Person Type", "Last Seen Area", "Date", "Search"), dynamic,
                 twoColumnGrid(
                         richCard("lost", "Lost Person Help Desk", "Report with clear identity details and contact number.", "Help"),
                         richCard("lost", "Found Item Counter", "Submit items only at verified counters.", "Counter"),
                         richCard("announcement", "Public Announcement Support", "Official announcement support for urgent cases.", "Notice")));
+    }
+
+    private VBox actionCard(String module, String title, String detail, Button action) {
+        VBox card = new VBox(8, new HBox(10, moduleIcon(module, "pilgrim-card-icon"), badge("Official")),
+                strong(title), paragraph(detail), action);
+        card.getStyleClass().add("pilgrim-rich-card");
+        return card;
+    }
+
+    private VBox lostFoundCaseCard(AppDataStore.LostFoundCaseRecord item) {
+        VBox card = new VBox(5, new HBox(8, badge(item.type), badge(item.status)),
+                strong(item.name.isBlank() ? "Unnamed report" : item.name),
+                muted(item.caseId + " • " + item.lastSeenLocation),
+                muted("Priority: " + item.priority + " • Updated: " + item.updatedAt));
+        card.getStyleClass().add("pilgrim-data-row");
+        return card;
     }
 
     private VBox schedulePage() {

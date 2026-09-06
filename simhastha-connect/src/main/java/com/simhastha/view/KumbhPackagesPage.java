@@ -34,6 +34,7 @@ public final class KumbhPackagesPage {
     private VBox resultList;
     private Label resultTitle;
     private Label resultCount;
+    private boolean updatingFilters;
     private final AtomicLong searchGeneration = new AtomicLong();
     private static final List<LocationMapping> ITINERARY_LOCATIONS = List.of(
             new LocationMapping(new ItineraryLocation("Godavari Ghat (Ganga Ghat), Panchavati, Nashik, Maharashtra", 20.008064, 73.792294), "godavari ghat", "ghat darshan", "ramkund ghat"),
@@ -57,7 +58,7 @@ public final class KumbhPackagesPage {
     }
 
     public Node create() {
-        ImageView heroImage = new ImageView(); URL heroUrl = AppResources.url(getClass(), "/images/welcome-light.png"); if (heroUrl != null) heroImage.setImage(new Image(heroUrl.toExternalForm())); heroImage.setPreserveRatio(false); heroImage.setFitHeight(136);
+        ImageView heroImage = new ImageView(); URL heroUrl = AppResources.url(getClass(), "/images/welcome-light.png"); if (heroUrl != null) heroImage.setImage(new Image(heroUrl.toExternalForm(), 1400, 280, true, true, true)); heroImage.setPreserveRatio(false); heroImage.setFitHeight(136);
         Region heroOverlay = new Region(); heroOverlay.getStyleClass().add("package-hero-overlay");
         HBox benefits = new HBox(7, text("Trusted Packages", "package-hero-feature"), text("Best Prices", "package-hero-feature"), text("Verified Travel", "package-hero-feature"), text("24/7 Assistance", "package-hero-feature"));
         VBox heroCopy = new VBox(4, text("SIMHASTHA 2027 • NASHIK", "package-eyebrow"), text("Kumbh Packages", "package-title"), text("Complete Simhastha journeys from your city to Nashik", "package-subtitle"), benefits); heroCopy.getStyleClass().add("package-hero-copy"); heroCopy.setAlignment(Pos.CENTER_LEFT);
@@ -86,10 +87,21 @@ public final class KumbhPackagesPage {
         group(box, "Meals", "Breakfast", "Breakfast + Dinner", "Full Meals", "No Meals"); group(box, "Package Theme", "Simhastha Special", "Premium Experience", "Complete Kumbh", "Family Pilgrimage", "Senior Citizen Friendly", "Spiritual Journey", "Temple Darshan", "Ghat & Snan", "Nashik Sightseeing", "Budget Pilgrimage"); group(box, "Facilities", "Puja Included", "Snan Assistance", "Nashik Sightseeing Included", "Senior Citizen Friendly"); return box;
     }
     private void group(VBox box, String name, String... values) { VBox group = new VBox(5); group.getStyleClass().add("package-filter-group"); group.getChildren().add(text(name, "package-filter-heading")); for (String value : values) { CheckBox check = new CheckBox(value); check.getStyleClass().add("package-check"); check.selectedProperty().addListener((o, old, selected) -> refresh()); filters.put(name + ":" + value, check); group.getChildren().add(check); } box.getChildren().add(group); }
-    private void clearFilters() { filters.values().forEach(c -> c.setSelected(false)); city.setValue(null); duration.setValue("Any duration"); category.setValue("All Packages"); refresh(); }
+    private void clearFilters() {
+        updatingFilters = true;
+        try {
+            filters.values().forEach(c -> c.setSelected(false));
+            city.setValue(null);
+            duration.setValue("Any duration");
+            category.setValue("All Packages");
+        } finally {
+            updatingFilters = false;
+        }
+        refresh();
+    }
 
     private void refresh() {
-        if (resultList == null) return;
+        if (resultList == null || updatingFilters) return;
         PackageSearchCriteria criteria = new PackageSearchCriteria(city.getValue(), date.getValue(), duration.getValue(), parseCategory(category.getValue()), selected("Package Type"), selected("Duration"), selected("Budget"), selected("Travel Mode"), selected("Stay"), selected("Meals"), selected("Package Theme"), selected("Facilities"));
         String selectedSort = sort.getValue();
         String origin = city.getValue() == null || city.getValue().isBlank() ? null : city.getValue();
@@ -97,7 +109,8 @@ public final class KumbhPackagesPage {
         resultTitle.setText(origin == null ? "Packages to Nashik" : origin + " → Nashik");
         resultCount.setText("Loading packages…");
         resultList.getChildren().setAll(loadingState());
-        service.searchAsync(criteria, selectedSort).whenComplete((packages, error) -> Platform.runLater(() -> {
+        String token = com.simhastha.util.AppSession.currentUser() == null ? "" : com.simhastha.util.AppSession.currentUser().idToken();
+        service.searchAsync(criteria, selectedSort, token).whenComplete((packages, error) -> Platform.runLater(() -> {
             if (generation != searchGeneration.get() || resultList == null) return;
             if (error != null) {
                 Button retry = button("Try Again", "package-clear-button");
@@ -192,7 +205,7 @@ public final class KumbhPackagesPage {
     private void fitHeroCover(ImageView view,Image image,double width,double height){if(width<=0||image.getWidth()<=0||image.getHeight()<=0)return;double imageRatio=image.getWidth()/image.getHeight(),targetRatio=width/height;view.setFitWidth(imageRatio<targetRatio?width:0);view.setFitHeight(imageRatio<targetRatio?0:height);}
     private StackPane mediaImage(PackageMedia media, double width, double height, String css) { return imageFrame(PackageMediaService.temporary().resolveReference(media), width, height, css); }
     private StackPane localImage(String path, double width, double height, String css) { URL url = AppResources.url(getClass(), path); return imageFrame(url == null ? "" : url.toExternalForm(), width, height, css); }
-    private StackPane imageFrame(String reference, double width, double height, String css) { StackPane frame = new StackPane(); frame.setMinSize(width, height); frame.setPrefSize(width, height); frame.setMaxSize(width, height); frame.getStyleClass().add(css); frame.getChildren().add(text("NASHIK SIMHASTHA 2027", "package-image-fallback")); try { Image image = new Image(reference, true); ImageView view = new ImageView(image); view.setPreserveRatio(true); image.widthProperty().addListener((o, old, value) -> { if (image.isError() || image.getWidth() <= 0 || image.getHeight() <= 0) return; double sourceRatio = image.getWidth() / image.getHeight(), targetRatio = width / height, cropWidth = image.getWidth(), cropHeight = image.getHeight(); if (sourceRatio > targetRatio) cropWidth = cropHeight * targetRatio; else cropHeight = cropWidth / targetRatio; view.setViewport(new Rectangle2D((image.getWidth() - cropWidth) / 2, (image.getHeight() - cropHeight) / 2, cropWidth, cropHeight)); view.setFitWidth(width); view.setFitHeight(height); Rectangle clip = new Rectangle(width, height); clip.setArcWidth(18); clip.setArcHeight(18); view.setClip(clip); if (!frame.getChildren().contains(view)) frame.getChildren().add(view); }); } catch (Exception ignored) { } return frame; }
+    private StackPane imageFrame(String reference, double width, double height, String css) { StackPane frame = new StackPane(); frame.setMinSize(width, height); frame.setPrefSize(width, height); frame.setMaxSize(width, height); frame.getStyleClass().add(css); frame.getChildren().add(text("NASHIK SIMHASTHA 2027", "package-image-fallback")); try { Image image = new Image(reference, width * 2, height * 2, true, true, true); ImageView view = new ImageView(image); view.setPreserveRatio(true); Runnable renderImage = () -> { if (image.isError() || image.getWidth() <= 0 || image.getHeight() <= 0) return; double sourceRatio = image.getWidth() / image.getHeight(), targetRatio = width / height, cropWidth = image.getWidth(), cropHeight = image.getHeight(); if (sourceRatio > targetRatio) cropWidth = cropHeight * targetRatio; else cropHeight = cropWidth / targetRatio; view.setViewport(new Rectangle2D((image.getWidth() - cropWidth) / 2, (image.getHeight() - cropHeight) / 2, cropWidth, cropHeight)); view.setFitWidth(width); view.setFitHeight(height); Rectangle clip = new Rectangle(width, height); clip.setArcWidth(18); clip.setArcHeight(18); view.setClip(clip); if (!frame.getChildren().contains(view)) frame.getChildren().add(view); }; image.progressProperty().addListener((o, old, value) -> renderImage.run()); renderImage.run(); } catch (Exception ignored) { } return frame; }
     private String imagePath(KumbhPackage p) { String t = (p.title() + " " + String.join(" ", p.facilities())).toLowerCase(); if (t.contains("trimbakeshwar")) return "/images/trimbakeshwar.jpg"; if (t.contains("ramkund") || p.days() == 1) return "/images/ramkund_sunrise.jpg"; if (p.category() == PackageCategory.PREMIUM) return "/images/godavari_kumbh.jpg"; return "/images/welcome-light.png"; }
     private String routeSuffix(KumbhPackage p) { return p.sightseeing().isEmpty() ? "" : " → " + String.join(" → ", p.sightseeing().stream().limit(2).toList()); }
     private String secondaryBadge(KumbhPackage p) { return switch (p.category()) { case PREMIUM -> "PREMIUM EXPERIENCE"; case STANDARD -> "BEST VALUE"; case BUDGET -> "VALUE PICK"; }; }

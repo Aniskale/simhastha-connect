@@ -227,6 +227,13 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Published packages are public to signed-in pilgrims; drafts remain admin-only.
+    match /kumbh_packages/{packageId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.status == 'PUBLISHED');
+      allow create, update, delete: if isAdmin();
+    }
+
     // Kumbh-package confirmations are isolated from generic service bookings.
     // A pilgrim can create and read only their own immutable test-payment snapshot.
     match /package_bookings/{bookingId} {

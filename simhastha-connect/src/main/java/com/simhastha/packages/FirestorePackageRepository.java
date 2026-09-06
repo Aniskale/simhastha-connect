@@ -23,9 +23,12 @@ public final class FirestorePackageRepository {
     }
     /** Production published catalogue. Failures intentionally propagate to the explicit development fallback boundary. */
     public List<KumbhPackage> getPublishedPackagesForUsers() throws IOException, InterruptedException {
+        return getPublishedPackagesForUsers("");
+    }
+    public List<KumbhPackage> getPublishedPackagesForUsers(String token) throws IOException, InterruptedException {
         List<ManagedKumbhPackage> records;
         if (!config.isEnabled()) records = List.copyOf(local.values());
-        else records = gateway.loadKumbhPackages("");
+        else records = gateway.loadKumbhPackages(token == null ? "" : token);
         return records.stream().filter(p -> p.status() == PackageStatus.PUBLISHED).map(ManagedKumbhPackage::cataloguePackage).toList();
     }
     public void createPackage(ManagedKumbhPackage item, String token) throws IOException, InterruptedException { save(item, token); }

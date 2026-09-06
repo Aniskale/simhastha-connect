@@ -10,17 +10,19 @@ public final class PackageRepository {
     public static final List<String> CITIES = List.of("Mumbai", "Pune", "Delhi", "Nagpur", "Ahmedabad", "Surat", "Indore", "Bhopal", "Jaipur", "Hyderabad", "Bengaluru", "Chennai", "Kolkata", "Lucknow", "Varanasi", "Patna", "Raipur", "Goa", "Kochi", "Chandigarh", "Amritsar", "Chhatrapati Sambhajinagar", "Nanded");
     /**
      * Published admin records are the production source. The seeded list below is deliberately
-     * a development-only fallback for package-read outages (such as the current Firebase 403).
+     * available only when Firebase is explicitly disabled.
      * A successful but empty Firestore catalogue remains empty and does not mix with demo data.
      */
     public static List<KumbhPackage> packages() {
+        return packages("");
+    }
+    public static List<KumbhPackage> packages(String idToken) {
         try {
-            List<KumbhPackage> published = ADMIN_SOURCE.getPublishedPackagesForUsers();
+            List<KumbhPackage> published = ADMIN_SOURCE.getPublishedPackagesForUsers(idToken);
             return ADMIN_SOURCE.hasProductionSource() ? published : developmentPackages();
         } catch (java.io.IOException | InterruptedException packageReadFailure) {
-            // No fake Firestore documents: this list is local, immutable development data only.
             if (packageReadFailure instanceof InterruptedException) Thread.currentThread().interrupt();
-            return developmentPackages();
+            throw new IllegalStateException("Unable to load the published Kumbh catalogue.", packageReadFailure);
         }
     }
     public static FirestorePackageRepository adminSource() { return ADMIN_SOURCE; }

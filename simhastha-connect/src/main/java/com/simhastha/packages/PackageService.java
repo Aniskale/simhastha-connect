@@ -8,9 +8,13 @@ import java.util.stream.*;
 public final class PackageService {
  private static final Executor SEARCH_EXECUTOR=Executors.newFixedThreadPool(2,r->{Thread t=new Thread(r,"package-catalogue-loader");t.setDaemon(true);return t;});
  /** Runs filtering and sorting away from the JavaFX application thread. */
- public CompletableFuture<List<KumbhPackage>> searchAsync(PackageSearchCriteria c,String sort){return CompletableFuture.supplyAsync(()->search(c,sort),SEARCH_EXECUTOR);}
+ public CompletableFuture<List<KumbhPackage>> searchAsync(PackageSearchCriteria c,String sort){return searchAsync(c,sort,"");}
+ public CompletableFuture<List<KumbhPackage>> searchAsync(PackageSearchCriteria c,String sort,String idToken){return CompletableFuture.supplyAsync(()->search(c,sort,idToken),SEARCH_EXECUTOR);}
  public List<KumbhPackage> search(PackageSearchCriteria c, String sort) {
-  Stream<KumbhPackage> s=PackageRepository.packages().stream();
+  return search(c, sort, "");
+ }
+ public List<KumbhPackage> search(PackageSearchCriteria c, String sort, String idToken) {
+  Stream<KumbhPackage> s=PackageRepository.packages(idToken).stream();
   if(c.origin()!=null&&!c.origin().isBlank()) s=s.filter(p->p.origin().equalsIgnoreCase(c.origin()));
   if(c.category()!=null)s=s.filter(p->p.category()==c.category());
   if(c.duration()!=null&&!c.duration().equals("Any duration"))s=s.filter(p->p.duration().equals(c.duration()));

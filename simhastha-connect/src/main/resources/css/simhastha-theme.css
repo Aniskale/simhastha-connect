@@ -9919,3 +9919,17 @@
 .theme-dark .custom-header, .theme-dark .custom-summary, .theme-dark .custom-option-card, .theme-dark .custom-review-page, .theme-dark .custom-review-package-info, .theme-dark .custom-review-card { -fx-background-color: rgba(18,25,36,.96); -fx-border-color: rgba(229,180,76,.28); }
 .theme-dark .custom-title, .theme-dark .custom-section-title, .theme-dark .custom-option-title { -fx-text-fill: #f5c86b; }
 .theme-dark .custom-help, .theme-dark .custom-group-title, .theme-dark .custom-upgrade, .theme-dark .custom-review-detail { -fx-text-fill: #d8c8aa; }
+
+/* Keep all navigation accessible on shorter windows. */
+.pilgrim-sidebar-scroll, .pilgrim-sidebar-scroll > .viewport {
+    -fx-background-color: transparent;
+    -fx-background: transparent;
+}
+.pilgrim-sidebar .pilgrim-sidebar-scroll { -fx-min-width: 0; -fx-pref-width: 210px; -fx-max-width: infinity; -fx-padding: 0; -fx-border-width: 0; }
+
+.pilgrim-rich-card, .pilgrim-data-row, .puja-booking-card {
+    -fx-padding: 14px;
+    -fx-spacing: 10px;
+}
+.puja-booking-card { -fx-background-color: #fffaf0; -fx-background-radius: 14px; -fx-border-color: #e3bd79; -fx-border-radius: 14px; }
+.puja-booking-summary-metric { -fx-padding: 12px 18px; -fx-background-color: #fff8e8; -fx-background-radius: 12px; -fx-border-color: #ebc889; -fx-border-radius: 12px; }

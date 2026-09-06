@@ -20,63 +20,10 @@ public final class GhatCatalogueService {
     public Region regionOf(Ghat ghat) { return ghat.name().contains("Trimbakeshwar") || ghat.id().equals("kushavart") ? Region.TRIMBAKESHWAR : Region.NASHIK_GODAVARI; }
     private Ghat g(String id,String name,String area,Double lat,Double lon,Ghat.History history) { return g(id,name,area,lat,lon,"",history); }
     private Ghat g(String id,String name,String area,Double lat,Double lon,String imageUrl,Ghat.History history) {
-        Ghat.CrowdLevel crowd = defaultCrowd(id);
-        int wait = defaultWait(crowd);
-        return new Ghat(id,name,area,"Sacred riverfront Ghat information and live Snan guidance.",lat,lon,null,null,imageUrl,
-                Ghat.OperationalStatus.OPEN,crowd,wait,true,
-                new Ghat.Walking(defaultWalking(id), defaultSteps(id), defaultDistance(id), seniorFriendly(id), wheelchairFriendly(id)),
-                List.of("Police help", "Medical support", "Drinking water", "Crowd guidance"),
-                new Ghat.Weather(27, "Clear"),
-                history,String.valueOf(System.currentTimeMillis()),defaultState(id, name, crowd),true,true);
-    }
-    private Ghat.CrowdLevel defaultCrowd(String id) {
-        return switch (id) {
-            case "ramkund", "naroshankar", "ram-ghat", "ganga-godavari" -> Ghat.CrowdLevel.MODERATE;
-            case "kapila", "ahilyabai-holkar", "laxman-kund", "sita", "goda-park" -> Ghat.CrowdLevel.LOW;
-            case "kushavart" -> Ghat.CrowdLevel.HIGH;
-            default -> Ghat.CrowdLevel.MODERATE;
-        };
-    }
-    private int defaultWait(Ghat.CrowdLevel crowd) {
-        return switch (crowd) {
-            case LOW -> 10;
-            case MODERATE -> 22;
-            case HIGH -> 38;
-            case CRITICAL -> 55;
-            default -> 18;
-        };
-    }
-    private Ghat.WalkingDifficulty defaultWalking(String id) {
-        return switch (id) {
-            case "tapovan", "kushavart" -> Ghat.WalkingDifficulty.MODERATE;
-            case "dasak", "goda-park" -> Ghat.WalkingDifficulty.EASY;
-            default -> Ghat.WalkingDifficulty.MODERATE;
-        };
-    }
-    private Integer defaultSteps(String id) { return switch (id) { case "kushavart" -> 65; case "tapovan" -> 48; default -> 32; }; }
-    private Integer defaultDistance(String id) { return switch (id) { case "tapovan" -> 420; case "kushavart" -> 280; default -> 180; }; }
-    private boolean seniorFriendly(String id) { return !"kushavart".equals(id); }
-    private boolean wheelchairFriendly(String id) { return switch (id) { case "dasak", "goda-park", "ramkund" -> true; default -> false; }; }
-    private GhatOperationalState defaultState(String id, String name, Ghat.CrowdLevel crowd) {
-        String shortName = name.replace(" — Trimbakeshwar", "");
-        GhatOperationalState.ZoneStatus zoneStatus = crowd == Ghat.CrowdLevel.HIGH
-                ? GhatOperationalState.ZoneStatus.HIGH_CROWD : GhatOperationalState.ZoneStatus.OPEN;
-        return new GhatOperationalState(GhatOperationalState.BathingStatus.AVAILABLE,
-                crowd == Ghat.CrowdLevel.HIGH ? GhatOperationalState.WaterSafety.CAUTION : GhatOperationalState.WaterSafety.NORMAL,
-                List.of(),
-                List.of(
-                        new GhatOperationalState.Zone(id + "-snan-zone", shortName + " Snan Zone", zoneStatus, crowd, true, "", ""),
-                        new GhatOperationalState.Zone(id + "-movement-zone", shortName + " Movement Corridor", GhatOperationalState.ZoneStatus.OPEN, crowd, false, "", "")),
-                List.of(
-                        new GhatOperationalState.Gate(id + "-entry", shortName + " Main Entry", GhatOperationalState.GateStatus.OPEN, "Primary pilgrim entry"),
-                        new GhatOperationalState.Gate(id + "-exit", shortName + " Exit Route", GhatOperationalState.GateStatus.EXIT_ONLY, "Use after Snan and darshan")),
-                List.of(
-                        new GhatOperationalState.Facility("Police help point", GhatOperationalState.FacilityStatus.AVAILABLE),
-                        new GhatOperationalState.Facility("Medical aid desk", GhatOperationalState.FacilityStatus.AVAILABLE),
-                        new GhatOperationalState.Facility("Drinking water", GhatOperationalState.FacilityStatus.AVAILABLE),
-                        new GhatOperationalState.Facility("Toilets", GhatOperationalState.FacilityStatus.AVAILABLE)),
-                List.of(), GhatOperationalState.CleaningStatus.NORMAL,
-                "", GhatOperationalState.PriorityAlert.none(), String.valueOf(System.currentTimeMillis()));
+        return new Ghat(id,name,area,"Sacred riverfront information. Live operational updates unavailable.",lat,lon,null,null,imageUrl,
+                Ghat.OperationalStatus.INFORMATION_ONLY,Ghat.CrowdLevel.UNKNOWN,null,false,
+                Ghat.Walking.unknown(),List.of(),Ghat.Weather.unavailable(),history,"",
+                GhatOperationalState.unavailable(),true,true);
     }
     private Ghat.History ramkundHistory() { return new Ghat.History("Located on the Godavari River in Nashik; built in 1696 by Chitrarao Khatav and later repaired by Gopikabai during the Peshwa period.","Nashik district describes Ramkund as one of Nashik's holiest locations; tradition associates Lord Rama bathing here during exile.","A significant Nashik Godavari context during Simhastha.","Asthivilaya Tirtha; Ganga Godavari Temple is adjacent.","Ash immersion is associated with Asthivilaya Tirtha.","Source: Nashik District, Government of Maharashtra.",""); }
     private Ghat.History gangaGodavari() { return new Ghat.History("The Ganga Godavari Temple is adjacent to Ramkund and was built in 1775 by Gopikabai Peshwe.","Temple information is separate from operational Ghat status.","The district describes a special Simhastha-period opening tradition.","Ganga Godavari Temple, adjacent to Ramkund.","Information pending verification.","Source: Nashik District, Government of Maharashtra.",""); }
