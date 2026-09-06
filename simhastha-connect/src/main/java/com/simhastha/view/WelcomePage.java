@@ -418,9 +418,7 @@ public class WelcomePage {
     }
 
     private Label createSymbolIcon(String iconText, String styleClass) {
-        Label icon = new Label(iconText);
-        icon.getStyleClass().addAll("symbol-icon", styleClass);
-        return icon;
+        return AppUi.symbolIcon(iconText, styleClass);
     }
 
     private HBox createDecorativeDivider() {
@@ -570,7 +568,7 @@ public class WelcomePage {
     }
 
     private Image loadImage(String path) {
-        URL imageUrl = getClass().getResource(path);
+        URL imageUrl = AppResources.url(getClass(), path);
         if (imageUrl == null) {
             return null;
         }

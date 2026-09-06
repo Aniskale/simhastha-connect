@@ -1,1 +1,4 @@
 simhastha-connect/target/
+**/*service-account*.json
+**/*firebase-adminsdk*.json
+**/firebase-credentials.json

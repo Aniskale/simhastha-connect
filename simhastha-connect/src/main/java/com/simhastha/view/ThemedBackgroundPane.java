@@ -1,7 +1,5 @@
 package com.simhastha.view;
 
-import java.net.URL;
-
 import javafx.beans.value.ChangeListener;
 import javafx.geometry.Rectangle2D;
 import javafx.scene.Node;
@@ -71,7 +69,7 @@ public class ThemedBackgroundPane extends StackPane {
     }
 
     private Image loadImage(String path) {
-        URL imageUrl = getClass().getResource(path);
+        java.net.URL imageUrl = AppResources.url(getClass(), path);
         return imageUrl == null ? null : new Image(imageUrl.toExternalForm());
     }
 }

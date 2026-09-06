@@ -1,6 +1,5 @@
 package com.simhastha.view;
 
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.prefs.Preferences;
@@ -57,9 +56,9 @@ public final class ThemeManager {
     }
 
     public static void addTheme(Scene scene, Object owner) {
-        URL cssUrl = owner.getClass().getResource("/css/simhastha-theme.css");
-        if (cssUrl != null) {
-            scene.getStylesheets().add(cssUrl.toExternalForm());
+        String cssUrl = AppResources.externalForm(owner.getClass(), "/css/simhastha-theme.css");
+        if (cssUrl != null && !scene.getStylesheets().contains(cssUrl)) {
+            scene.getStylesheets().add(cssUrl);
         }
         applyTo(scene.getRoot());
     }

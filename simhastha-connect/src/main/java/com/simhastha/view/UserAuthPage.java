@@ -304,7 +304,7 @@ public class UserAuthPage {
     }
 
     private ImageView createImage(String path, double width, double height) {
-        URL imageUrl = getClass().getResource(path);
+        URL imageUrl = AppResources.url(getClass(), path);
         ImageView imageView = new ImageView();
         imageView.setPreserveRatio(false);
         imageView.setFitWidth(width);

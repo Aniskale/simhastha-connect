@@ -4,8 +4,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.Properties;
+import java.util.logging.Logger;
 
 public final class PaymentConfig {
+    private static final Logger LOGGER = Logger.getLogger(PaymentConfig.class.getName());
 
     private final boolean enabled;
     private final URI backendBaseUri;
@@ -40,11 +42,24 @@ public final class PaymentConfig {
         }
 
         boolean enabled = "true".equalsIgnoreCase(enabledValue) && backendBaseUri != null;
+        LOGGER.info("Payment client configuration: enabled=" + enabled + ", backend="
+                + (backendBaseUri == null ? "not configured" : backendBaseUri));
         return new PaymentConfig(enabled, backendBaseUri);
     }
 
     public boolean isEnabled() {
         return enabled;
+    }
+
+    /** Safe diagnostic only; never includes backend credentials or Razorpay secrets. */
+    public String configurationIssue() {
+        if (enabled) {
+            return "";
+        }
+        if (backendBaseUri == null) {
+            return "PAYMENTS_BACKEND_BASE_URL / payments.backendBaseUrl is missing.";
+        }
+        return "PAYMENTS_ENABLED / payments.enabled must be set to true.";
     }
 
     public URI backendBaseUri() {

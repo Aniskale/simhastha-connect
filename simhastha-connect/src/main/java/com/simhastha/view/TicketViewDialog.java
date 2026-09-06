@@ -31,7 +31,7 @@ public final class TicketViewDialog {
         VBox root = new VBox(12, ticketNode, print);
         root.getStyleClass().add("ticket-dialog");
         Scene scene = new Scene(root, 520, 650);
-        java.net.URL css = TicketViewDialog.class.getResource("/css/simhastha-theme.css");
+        java.net.URL css = AppResources.url(TicketViewDialog.class, "/css/simhastha-theme.css");
         if (css != null) {
             scene.getStylesheets().add(css.toExternalForm());
         }

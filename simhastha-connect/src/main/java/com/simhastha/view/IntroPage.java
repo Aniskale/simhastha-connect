@@ -295,7 +295,7 @@ public class IntroPage {
     }
 
     private Image loadImage(String path) {
-        URL imageUrl = getClass().getResource(path);
+        URL imageUrl = AppResources.url(getClass(), path);
         if (imageUrl == null) {
             return null;
         }

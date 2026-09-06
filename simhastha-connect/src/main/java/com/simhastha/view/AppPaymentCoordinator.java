@@ -9,6 +9,7 @@ import com.simhastha.util.AppSession;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 import com.simhastha.payment.MoneyUtil;
 import com.simhastha.payment.PaymentCatalog;
@@ -138,6 +139,44 @@ public final class AppPaymentCoordinator {
                     .whenComplete((result, throwable) -> Platform.runLater(() -> handlePaymentResult(booking, result)));
         } catch (PaymentException exception) {
             showInfo("Payment unavailable", exception.getMessage());
+        }
+    }
+
+    /** Starts the shared, server-verified Razorpay flow for a saved Puja booking. */
+    public void startPujaPayment(Window owner, AppDataStore.PujaBookingRecord booking, AppSession.User user,
+            Consumer<PaymentResult> resultHandler) {
+        CatalogItem item = PaymentCatalog.findPujaItem(booking.serviceName, booking.totalAmount).orElse(null);
+        if (item == null) {
+            resultHandler.accept(PaymentResult.failed(
+                    "Online payment is not configured for this Puja service and price. Ask the administrator to approve its payment catalogue entry.",
+                    "PUJA_PAYMENT_NOT_APPROVED"));
+            return;
+        }
+        try {
+            PaymentRequest request = PaymentRequest.builder()
+                    .userId(user.uid())
+                    .bookingId(booking.bookingId)
+                    .moduleType(PaymentModuleType.PUJA)
+                    .itemId(item.id())
+                    .businessId(item.businessId())
+                    .title(item.title())
+                    .description(item.description())
+                    .amount(BigDecimal.valueOf(booking.totalAmount))
+                    .currency("INR")
+                    .customerName(displayName(user))
+                    .customerEmail(user.email())
+                    .customerPhone(booking.userPhone)
+                    .metadata(PaymentCatalog.META_CATALOG_ITEM_ID, item.id())
+                    .metadata(PaymentCatalog.META_QUANTITY, "1")
+                    .metadata(PaymentCatalog.META_NIGHTS, "1")
+                    .metadata(PaymentCatalog.META_BOOKING_DATE, booking.date)
+                    .metadata(PaymentCatalog.META_LOCATION, booking.location)
+                    .build();
+            new PaymentDialog(PaymentServiceFactory.get()).show(owner, request)
+                    .whenComplete((result, throwable) -> Platform.runLater(() -> resultHandler.accept(result == null
+                            ? PaymentResult.failed("Payment could not be completed.", "PAYMENT_ERROR") : result)));
+        } catch (RuntimeException exception) {
+            resultHandler.accept(PaymentResult.failed("Payment could not be started. Please try again.", "PAYMENT_ERROR"));
         }
     }
 

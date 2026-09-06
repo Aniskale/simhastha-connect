@@ -28,8 +28,6 @@ import javafx.scene.shape.Line;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 
-import java.net.URL;
-
 public final class AppUi {
     private static final String NOTIFICATION_BELL_GLYPH = "\uEA8F";
 
@@ -47,9 +45,9 @@ public final class AppUi {
         if (owner != null && dialog.getOwner() == null) {
             dialog.initOwner(owner);
         }
-        URL css = AppUi.class.getResource("/css/simhastha-theme.css");
-        if (css != null && !dialog.getDialogPane().getStylesheets().contains(css.toExternalForm())) {
-            dialog.getDialogPane().getStylesheets().add(css.toExternalForm());
+        String css = AppResources.externalForm(AppUi.class, "/css/simhastha-theme.css");
+        if (css != null && !dialog.getDialogPane().getStylesheets().contains(css)) {
+            dialog.getDialogPane().getStylesheets().add(css);
         }
         ThemeManager.applyTo(dialog.getDialogPane());
         if (!dialog.getDialogPane().getStyleClass().contains("simhastha-dialog-pane")) {
@@ -111,7 +109,7 @@ public final class AppUi {
         toggle.setAlignment(Pos.CENTER_RIGHT);
 
         ImageView logo = new ImageView();
-        URL logoUrl = AppUi.class.getResource("/images/sclogo.png");
+        java.net.URL logoUrl = AppResources.url(AppUi.class, "/images/sclogo.png");
         if (logoUrl != null) {
             logo.setImage(new Image(logoUrl.toExternalForm()));
         }

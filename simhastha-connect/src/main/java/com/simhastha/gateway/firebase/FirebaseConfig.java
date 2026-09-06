@@ -2,6 +2,8 @@ package com.simhastha.gateway.firebase;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Properties;
 
 public final class FirebaseConfig {
@@ -24,6 +26,10 @@ public final class FirebaseConfig {
             }
         } catch (IOException ignored) {
             // The app can still run with the local seed store.
+        }
+        if (properties.isEmpty()) {
+            loadFromFile(properties, Path.of("src", "main", "resources", "firebase.properties"));
+            loadFromFile(properties, Path.of("simhastha-connect", "src", "main", "resources", "firebase.properties"));
         }
 
         String enabledValue = firstNonBlank(
@@ -64,5 +70,16 @@ public final class FirebaseConfig {
             }
         }
         return null;
+    }
+
+    private static void loadFromFile(Properties properties, Path path) {
+        if (!Files.isRegularFile(path)) {
+            return;
+        }
+        try (InputStream input = Files.newInputStream(path)) {
+            properties.load(input);
+        } catch (IOException ignored) {
+            // Environment variables and system properties may still provide configuration.
+        }
     }
 }

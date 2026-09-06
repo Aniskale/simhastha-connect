@@ -57,6 +57,15 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/businesses/$(businessId)).data.ownerId == request.auth.uid;
     }
 
+    function isPublicBusiness(businessId) {
+      return exists(/databases/$(database)/documents/businesses/$(businessId))
+        && (
+          get(/databases/$(database)/documents/businesses/$(businessId)).data.approved == true
+          || get(/databases/$(database)/documents/businesses/$(businessId)).data.status == "approved"
+          || get(/databases/$(database)/documents/businesses/$(businessId)).data.status == "active"
+        );
+    }
+
     // ================= USERS =================
 
     match /users/{uid} {
@@ -198,18 +207,8 @@ service cloud.firestore {
             && request.resource.data.bookingStatus == 'COMPLETED')
         );
 
-      allow update: if isSignedIn()
-        && resource.data.userId == request.auth.uid
-        && request.resource.data.userId == resource.data.userId
-        && request.resource.data.businessId == resource.data.businessId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'bookingStatus', 'paymentStatus', 'updatedAt', 'internalPaymentId', 'razorpayPaymentId'
-        ])
-        && request.resource.data.paymentStatus in ['PENDING', 'PAID', 'FAILED', 'CANCELLED', 'NOT_REQUIRED']
-        && request.resource.data.bookingStatus in [
-          'PENDING', 'PENDING_PAYMENT', 'PAYMENT_PROCESSING', 'CONFIRMED',
-          'PAYMENT_FAILED', 'CANCELLED', 'PAY_AT_LOCATION'
-        ];
+      // A signed-in customer can never set payment verification or confirmation
+      // state. Those transitions are performed by the trusted backend/admin path.
 
       allow create: if isSignedIn()
         && request.resource.data.userId == request.auth.uid
@@ -218,9 +217,7 @@ service cloud.firestore {
         && (
           request.resource.data.moduleType != 'BUSINESS'
           || (
-            exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
-            && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.approved == true
-            && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.status in ['approved', 'active']
+            isPublicBusiness(request.resource.data.businessId)
           )
         )
         && (!('razorpayPaymentId' in request.resource.data) || request.resource.data.razorpayPaymentId == '')
@@ -228,6 +225,21 @@ service cloud.firestore {
 
       // Payment mutation and deletion stay authoritative.
       allow delete: if isAdmin();
+    }
+
+    // Kumbh-package confirmations are isolated from generic service bookings.
+    // A pilgrim can create and read only their own immutable test-payment snapshot.
+    match /package_bookings/{bookingId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.paymentMode == 'TEST'
+        && request.resource.data.paymentStatus == 'PAYMENT_NOT_VERIFIED'
+        && request.resource.data.bookingStatus == 'CONFIRMED_TEST';
+
+      allow update, delete: if isAdmin();
     }
 
     match /tickets/{id} {
@@ -352,6 +364,58 @@ service cloud.firestore {
           ]));
 
       allow delete: if isAdmin();
+    }
+
+    // ================= PUJA MODULE =================
+
+    match /pujaBookings/{bookingId} {
+      allow read: if isAdmin()
+        || (isSignedIn() && resource.data.userId == request.auth.uid);
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.bookingStatus in ["PENDING", "PAYMENT_PENDING"]
+        && request.resource.data.paymentStatus == "PENDING"
+        && exists(/databases/$(database)/documents/pujaServices/$(request.resource.data.serviceId))
+        && get(/databases/$(database)/documents/pujaServices/$(request.resource.data.serviceId)).data.published == true
+        && get(/databases/$(database)/documents/pujaServices/$(request.resource.data.serviceId)).data.enabled == true
+        && get(/databases/$(database)/documents/pujaServices/$(request.resource.data.serviceId)).data.verificationStatus == "VERIFIED";
+
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.serviceId == resource.data.serviceId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'bookingStatus', 'paymentStatus', 'internalPaymentId', 'razorpayOrderId',
+          'razorpayPaymentId', 'paymentMethod', 'paymentCreatedAt',
+          'paymentCompletedAt', 'paymentFailureReason', 'qrTicketId',
+          'qrVerificationToken', 'updatedAt'
+        ])
+        && request.resource.data.paymentStatus in [
+          'PENDING', 'PAID', 'FAILED', 'CANCELLED', 'REFUND_PENDING', 'REFUNDED'
+        ]
+        && request.resource.data.bookingStatus in [
+          'PAYMENT_PENDING', 'CONFIRMED', 'CANCELLED', 'REFUNDED'
+        ];
+
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.serviceId == resource.data.serviceId
+        && request.resource.data.paymentStatus == resource.data.paymentStatus
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'bookingStatus', 'updatedAt'
+        ])
+        && resource.data.bookingStatus in ['PENDING', 'CONFIRMED']
+        && request.resource.data.bookingStatus in ['CANCELLED', 'DISPUTED'];
+
+      allow update, delete: if isAdmin();
+    }
+
+    match /fraudReports/{reportId} {
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isAdmin();
     }
 
     // ================= PUBLIC MODULES =================

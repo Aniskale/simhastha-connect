@@ -45,7 +45,7 @@ public final class AnnouncementLocationSelector {
         VBox root = new VBox(10, map, new VBox(3, new Label("Selected Location"), selected), new HBox(10, cancel, spacer(), save));
         root.getStyleClass().add("pilgrim-dashboard-main"); root.setPadding(new Insets(16));
         javafx.scene.Scene scene = new javafx.scene.Scene(root, 760, 620);
-        java.net.URL css = AnnouncementLocationSelector.class.getResource("/css/simhastha-theme.css");
+        java.net.URL css = AppResources.url(AnnouncementLocationSelector.class, "/css/simhastha-theme.css");
         if (css != null) scene.getStylesheets().add(css.toExternalForm());
         ThemeManager.applyTo(root);
         dialog.setScene(scene); dialog.showAndWait();

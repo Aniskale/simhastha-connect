@@ -28,6 +28,16 @@ public final class PaymentCatalog {
         return Map.copyOf(ITEMS);
     }
 
+    /** Finds the approved online-payment entry for a Puja service.  The backend validates this same
+     * catalogue entry, so the JavaFX client never supplies an arbitrary amount. */
+    public static Optional<CatalogItem> findPujaItem(String serviceName, long amountRupees) {
+        return ITEMS.values().stream()
+                .filter(item -> item.moduleType() == PaymentModuleType.PUJA)
+                .filter(item -> item.title().equalsIgnoreCase(serviceName))
+                .filter(item -> item.amount().compareTo(BigDecimal.valueOf(amountRupees)) == 0)
+                .findFirst();
+    }
+
     public static BigDecimal expectedAmount(PaymentRequest request) throws PaymentException {
         String catalogItemId = request.metadata().get(META_CATALOG_ITEM_ID);
         CatalogItem item = find(catalogItemId)
@@ -87,6 +97,9 @@ public final class PaymentCatalog {
         add(items, new CatalogItem("puja-trimbakeshwar-darshan", PaymentModuleType.PUJA,
                 "Trimbakeshwar Darshan Support", "Verified puja counter assistance", new BigDecimal("1100.00"), "INR",
                 "puja-provider-trimbakeshwar", "Trimbakeshwar", true, PaymentType.FULL, false));
+        add(items, new CatalogItem("puja-gha", PaymentModuleType.PUJA, "GHA",
+                "Verified Ghat / temple Puja service", new BigDecimal("200.00"), "INR", "",
+                "CSZ", true, PaymentType.FULL, false));
         add(items, new CatalogItem("business-paid-parking", PaymentModuleType.BUSINESS, "Paid Parking Reservation",
                 "Approved private parking near Ramkund approach", new BigDecimal("150.00"), "INR",
                 "business-parking-ramkund", "Ramkund approach road", true, PaymentType.FULL, false));
@@ -96,10 +109,28 @@ public final class PaymentCatalog {
         add(items, new CatalogItem("business-guide-pay-location", PaymentModuleType.BUSINESS, "Local Guide Inquiry",
                 "Pay at location after service confirmation", BigDecimal.ZERO, "INR",
                 "business-guide-panchavati", "Panchavati", false, PaymentType.PAY_AT_LOCATION, false));
+        addBusinessPresentationItems(items);
         add(items, new CatalogItem("transport-private-cab", PaymentModuleType.TRANSPORT, "Private Cab Reservation",
                 "Optional private paid cab booking", new BigDecimal("650.00"), "INR",
                 "transport-private-cab", "Nashik city", true, PaymentType.FULL, false));
         return items;
+    }
+
+    private static void addBusinessPresentationItems(Map<String, CatalogItem> items) {
+        // For lockers, the shared multiplier represents booked hours; for stays it represents nights.
+        // The trusted catalogue controls this flag, so JavaFX cannot choose an arbitrary payment total.
+        add(items, new CatalogItem("locker-small", PaymentModuleType.BUSINESS, "Small Locker", "Secure locker", new BigDecimal("80"), "INR", "presentation-locker", "Ramkund, Panchavati", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("locker-medium", PaymentModuleType.BUSINESS, "Medium Locker", "Secure locker", new BigDecimal("140"), "INR", "presentation-locker", "Ramkund, Panchavati", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("locker-large", PaymentModuleType.BUSINESS, "Large Locker", "Secure locker", new BigDecimal("220"), "INR", "presentation-locker", "Ramkund, Panchavati", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("tent-standard", PaymentModuleType.BUSINESS, "Standard Tent", "Tent stay", new BigDecimal("1200"), "INR", "presentation-tent", "Tapovan Riverside", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("tent-family", PaymentModuleType.BUSINESS, "Family Tent", "Tent stay", new BigDecimal("2200"), "INR", "presentation-tent", "Tapovan Riverside", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("tent-premium", PaymentModuleType.BUSINESS, "Premium Tent", "Tent stay", new BigDecimal("3200"), "INR", "presentation-tent", "Tapovan Riverside", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("dharamshala-shared", PaymentModuleType.BUSINESS, "Shared Bed", "Dharamshala stay", new BigDecimal("450"), "INR", "presentation-dharamshala", "Panchavati", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("dharamshala-standard", PaymentModuleType.BUSINESS, "Standard Room", "Dharamshala stay", new BigDecimal("1100"), "INR", "presentation-dharamshala", "Panchavati", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("dharamshala-family", PaymentModuleType.BUSINESS, "Family Room", "Dharamshala stay", new BigDecimal("1800"), "INR", "presentation-dharamshala", "Panchavati", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("hotel-standard", PaymentModuleType.BUSINESS, "Standard Room", "Hotel stay", new BigDecimal("2500"), "INR", "presentation-hotel", "Godavari Ghat, Nashik", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("hotel-deluxe", PaymentModuleType.BUSINESS, "Deluxe Room", "Hotel stay", new BigDecimal("3600"), "INR", "presentation-hotel", "Godavari Ghat, Nashik", true, PaymentType.FULL, true));
+        add(items, new CatalogItem("hotel-family", PaymentModuleType.BUSINESS, "Family Room", "Hotel stay", new BigDecimal("4800"), "INR", "presentation-hotel", "Godavari Ghat, Nashik", true, PaymentType.FULL, true));
     }
 
     private static void add(Map<String, CatalogItem> items, CatalogItem item) {

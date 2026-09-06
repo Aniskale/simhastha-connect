@@ -3,6 +3,7 @@ package com.simhastha.view;
 import com.simhastha.model.BusinessLocation;
 
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -24,6 +25,7 @@ public final class BusinessLocationSelectorDialog {
     }
 
     public static Optional<BusinessLocation> show(BusinessLocation initial) {
+        LOGGER.info("Business location selector opened.");
         Dialog<BusinessLocation> dialog = new Dialog<>();
         dialog.setTitle("Select Business Location on Map");
         dialog.getDialogPane().getButtonTypes().addAll(
@@ -42,6 +44,7 @@ public final class BusinessLocationSelectorDialog {
             latitude.setText(initial.latitude());
             longitude.setText(initial.longitude());
         }
+        AtomicLong selectionVersion = new AtomicLong();
 
         Label status = new Label("Loading map...");
         status.getStyleClass().add("business-row-detail");
@@ -50,9 +53,29 @@ public final class BusinessLocationSelectorDialog {
             String lonText = String.format(java.util.Locale.US, "%.6f", lon);
             latitude.setText(latText);
             longitude.setText(lonText);
-            status.setText("Selected coordinates: " + latText + ", " + lonText);
+            long version = selectionVersion.incrementAndGet();
+            status.setText("Resolving selected location...");
+            LOGGER.info("Marker moved: lat=" + latText + ", lon=" + lonText);
+            LOGGER.info("Reverse geocode started for lat=" + latText + ", lon=" + lonText);
+            BusinessLocationReverseGeocoder.reverse(lat, lon).whenComplete((resolved, failure) ->
+                    javafx.application.Platform.runLater(() -> {
+                        if (version != selectionVersion.get()) return;
+                        if (failure != null || resolved == null) {
+                            LOGGER.log(Level.WARNING, "Reverse geocode failed for " + latText + ", " + lonText,
+                                    failure);
+                            status.setText("Selected coordinates: " + latText + ", " + lonText
+                                    + " (address details unavailable)");
+                            return;
+                        }
+                        address.setText(resolved.address());
+                        area.setText(resolved.area());
+                        city.setText(resolved.city());
+                        status.setText("Selected: " + resolved.address());
+                        LOGGER.info("Reverse geocode resolved: address=" + resolved.address() + ", area="
+                                + resolved.area() + ", city=" + resolved.city());
+                    }));
         }, () -> status.setText("Click or drag the marker to select location."),
-                () -> status.setText("Map could not be opened. Please try again."));
+                () -> { LOGGER.warning("Business location selector map reported a load failure."); status.setText("Map could not be opened. Please try again."); });
 
         GridPane form = new GridPane();
         form.setHgap(10);
@@ -67,16 +90,22 @@ public final class BusinessLocationSelectorDialog {
         GridPane.setHgrow(city, Priority.ALWAYS);
 
         VBox content = new VBox(12, status, map, form);
+        VBox.setVgrow(map, Priority.ALWAYS);
         content.setPadding(new Insets(10));
         content.setPrefWidth(920);
         content.setPrefHeight(680);
         dialog.getDialogPane().setContent(content);
+        dialog.setOnShown(event -> javafx.application.Platform.runLater(
+                () -> MapWebViewFactory.invalidateBusinessSelectorMap(map)));
         dialog.setResultConverter(button -> {
             if (button.getButtonData() != ButtonBar.ButtonData.OK_DONE) return null;
             try {
                 BusinessLocation selected = new BusinessLocation(address.getText().trim(), area.getText().trim(),
                         city.getText().trim(), latitude.getText().trim(), longitude.getText().trim(),
                         String.valueOf(System.currentTimeMillis()));
+                LOGGER.info("Confirmed business location: address=" + selected.address() + ", area="
+                        + selected.area() + ", city=" + selected.city() + ", lat=" + selected.latitude()
+                        + ", lon=" + selected.longitude());
                 return selected.hasCoordinates() ? selected : null;
             } catch (Exception exception) {
                 LOGGER.log(Level.WARNING, "Business location selection failed.", exception);
