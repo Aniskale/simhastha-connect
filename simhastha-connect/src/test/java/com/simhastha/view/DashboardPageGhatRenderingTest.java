@@ -3,6 +3,8 @@ package com.simhastha.view;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.simhastha.model.Ghat;
+import com.simhastha.service.GhatCatalogueService;
 import java.lang.reflect.Method;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -116,6 +118,43 @@ class DashboardPageGhatRenderingTest {
             }
         });
         assertTrue(inspected.await(10, TimeUnit.SECONDS), "Hero was not inspected");
+        if (startupError.get() != null) throw new AssertionError(startupError.get());
+    }
+
+    @Test
+    void ghatCardKeepsItsBodyBelowTheFixedImageContainer() throws Exception {
+        startupError.set(null);
+        CountDownLatch inspected = new CountDownLatch(1);
+        Platform.runLater(() -> {
+            try {
+                DashboardPage page = new DashboardPage();
+                Method cardMethod = DashboardPage.class.getDeclaredMethod("ghatCard", Ghat.class);
+                cardMethod.setAccessible(true);
+                Ghat ramkund = new GhatCatalogueService().catalogue().get(0);
+                VBox card = (VBox) cardMethod.invoke(page, ramkund);
+                Scene scene = new Scene(card, 300, 360);
+                scene.getStylesheets().add(DashboardPage.class.getResource("/css/simhastha-theme.css").toExternalForm());
+                card.applyCss();
+                card.layout();
+
+                StackPane imageContainer = (StackPane) card.getChildren().get(0);
+                VBox body = (VBox) card.getChildren().get(1);
+                Node title = body.getChildren().get(0);
+                assertEquals(180.0, imageContainer.getHeight(), 0.01, "Image container must remain 180px high");
+                assertTrue(imageContainer.getWidth() < card.getWidth(), "Image container must retain its card inset");
+                assertEquals(12.0, VBox.getMargin(imageContainer).getLeft(), 0.01, "Image inset must remain consistent");
+                assertTrue(body.getLayoutY() >= imageContainer.getLayoutY() + imageContainer.getHeight(),
+                        "Body must begin after the image container");
+                assertTrue(body.getLayoutY() + title.getLayoutY() >= imageContainer.getLayoutY() + imageContainer.getHeight(),
+                        "Ghat name must remain below the image");
+                assertEquals(Region.USE_COMPUTED_SIZE, card.getPrefHeight(), "Card height must be content-computed");
+            } catch (Throwable error) {
+                startupError.set(error);
+            } finally {
+                inspected.countDown();
+            }
+        });
+        assertTrue(inspected.await(10, TimeUnit.SECONDS), "Ghat card was not inspected");
         if (startupError.get() != null) throw new AssertionError(startupError.get());
     }
 

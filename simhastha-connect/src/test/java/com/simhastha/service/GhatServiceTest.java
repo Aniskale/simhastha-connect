@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.simhastha.model.Ghat;
+import com.simhastha.model.GhatOperationalState;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -47,6 +48,22 @@ class GhatServiceTest {
 
         assertEquals(Ghat.CrowdLevel.HIGH, resolved.crowdLevel());
         assertEquals("https://media.example/ramkund.jpg", resolved.imageUrl());
+    }
+
+    @Test
+    void liveFacilityStatusesArePreservedForTheSelectedCatalogueGhat() {
+        GhatOperationalState operational = new GhatOperationalState(
+                GhatOperationalState.BathingStatus.UNAVAILABLE, GhatOperationalState.WaterSafety.CAUTION,
+                List.of(), List.of(), List.of(), List.of(new GhatOperationalState.Facility("Medical Aid", GhatOperationalState.FacilityStatus.AVAILABLE)),
+                List.of(), GhatOperationalState.CleaningStatus.NORMAL, "", GhatOperationalState.PriorityAlert.none(), "");
+        Ghat live = new Ghat("ramkund", "Ramkund", "", "", null, null, null, null, "",
+                Ghat.OperationalStatus.INFORMATION_ONLY, Ghat.CrowdLevel.UNKNOWN, null, false, Ghat.Walking.unknown(),
+                List.of("Toilets"), Ghat.Weather.unavailable(), Ghat.History.unavailable(), "", operational, true, true);
+
+        Ghat resolved = ramkund(new GhatService(null).resolvedGhats(List.of(live)));
+        assertEquals("Medical Aid", resolved.operationalState().facilities().get(0).name());
+        assertEquals(GhatOperationalState.FacilityStatus.AVAILABLE, resolved.operationalState().facilities().get(0).status());
+        assertEquals(List.of("Toilets"), resolved.facilities());
     }
 
     @Test
@@ -111,6 +128,18 @@ class GhatServiceTest {
         Ghat userRamkundC = ramkund(new GhatService(new InMemoryGhatRepository(store), storage).loadGhats("").get());
         assertEquals(referenceC, userRamkundC.imageUrl());
         assertEquals(referenceC, new GhatImageService().sourceFor(userRamkundC));
+    }
+
+    @Test
+    void ghatImageResolverRejectsTransportAndRedBusReferences() {
+        GhatImageService resolver = new GhatImageService();
+        Ghat ahilyabai = live("ahilyabai-holkar", "Ahilyabai Holkar Ghat", true, true,
+                Ghat.CrowdLevel.UNKNOWN, "/images/transport-bus-reference.png");
+        Ghat laxmanKund = live("laxman-kund", "Laxman Kund Ghat", true, true,
+                Ghat.CrowdLevel.UNKNOWN, "https://images.example/redbus-logo.png");
+
+        assertEquals(GhatImageService.FALLBACK, resolver.sourceFor(ahilyabai));
+        assertEquals(GhatImageService.FALLBACK, resolver.sourceFor(laxmanKund));
     }
 
     @Test

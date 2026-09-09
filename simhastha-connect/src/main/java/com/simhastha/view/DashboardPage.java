@@ -24,6 +24,7 @@ import com.simhastha.service.GhatDataFreshnessService;
 import com.simhastha.service.GhatNavigationService;
 import com.simhastha.service.GhatCatalogueService;
 import com.simhastha.service.GhatImageService;
+import com.simhastha.service.WeatherService;
 import com.simhastha.service.GoogleMapsConfig;
 import com.simhastha.service.GoogleMapsService;
 import com.simhastha.schedule.NashikLocationRegistry;
@@ -64,6 +65,7 @@ import javafx.geometry.Pos;
 import javafx.geometry.Rectangle2D;
 import javafx.scene.Node;
 import javafx.scene.Scene;
+import javafx.scene.Cursor;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -100,6 +102,7 @@ import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Rectangle;
 import javafx.scene.paint.Color;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.web.WebEngine;
 import javafx.scene.web.WebView;
 import javafx.stage.FileChooser;
@@ -110,8 +113,12 @@ import javafx.util.StringConverter;
 public class DashboardPage {
 
     private static final Logger LOGGER = Logger.getLogger(DashboardPage.class.getName());
-    private static final double GHAT_CARD_WIDTH = 200;
-    private static final double GHAT_CARD_IMAGE_HEIGHT = 122;
+    private static final double GHAT_CARD_WIDTH = 288;
+    private static final double GHAT_CARD_IMAGE_HEIGHT = 180;
+    private static final double GHAT_CARD_IMAGE_INSET = 12;
+    private static final double GHAT_GRID_GAP = 16;
+    private static final double GHAT_GRID_SIDE_PADDING = 16;
+    private static final String GHAT_IMAGE_FRAME_KEY = "ghat.image.frame";
     private BorderPane root;
     private final AppPaymentCoordinator paymentCoordinator = new AppPaymentCoordinator();
     private final BusinessMarketplaceController businessMarketplaceController = new BusinessMarketplaceController();
@@ -161,13 +168,16 @@ public class DashboardPage {
     private final GhatNavigationService ghatNavigationService = new GhatNavigationService();
     private final GhatCatalogueService ghatCatalogueService = new GhatCatalogueService();
     private final GhatImageService ghatImageService = new GhatImageService();
+    private final WeatherService ghatWeatherService = new WeatherService();
     private final java.util.Map<String, Image> localImageCache = new java.util.HashMap<>();
-    private final java.util.Map<String, GhatCardCacheEntry> ghatCardCache = new java.util.HashMap<>();
     private final GoogleMapsService googleMapsService = new GoogleMapsService(GoogleMapsConfig.load());
     private final ScheduleService scheduleService = new ScheduleService();
     private final Map<String, com.simhastha.schedule.ScheduleEvent> savedScheduleEvents = new LinkedHashMap<>();
     private List<Ghat> currentGhats = List.of();
     private long ghatRefreshGeneration;
+    private long ghatCardImageRenderGeneration;
+    private final java.util.Map<String, String> lastRenderedGhatImageSources = new java.util.HashMap<>();
+    private long ghatWeatherRequestGeneration;
     private java.time.LocalDate selectedScheduleDate = java.time.LocalDate.now();
     private ScheduleCategory selectedScheduleCategory;
     private List<com.simhastha.schedule.ScheduleEvent> loadedScheduleEvents = List.of();
@@ -5136,8 +5146,10 @@ public class DashboardPage {
     private VBox ghatsPage() {
         currentGhats = List.of();
         displayedGhats.clear();
-        FlowPane ghatFlowPane = new FlowPane(12, 18);
-        ghatFlowPane.setPrefWrapLength(1048);
+        FlowPane ghatFlowPane = new FlowPane(GHAT_GRID_GAP, 18);
+        ghatFlowPane.setPrefWrapLength(1200);
+        ghatFlowPane.setPadding(new Insets(0, GHAT_GRID_SIDE_PADDING, 24, GHAT_GRID_SIDE_PADDING));
+        ghatFlowPane.setMaxWidth(Double.MAX_VALUE);
         ghatFlowPane.getStyleClass().add("ghat-card-grid");
         List<Ghat> catalogue = ghatCatalogueService.catalogue();
         VBox operationalAlerts = new VBox(8);
@@ -5150,7 +5162,7 @@ public class DashboardPage {
                 ghatSummaryMapCard());
         summary.getStyleClass().add("ghat-summary-row");
 
-        TextField search = AppUi.textField("Search Ghat name...");
+        TextField search = AppUi.textField("Search ghats...");
         search.getStyleClass().add("ghat-search-field");
         search.setText(ghatSearch);
         search.textProperty().addListener((observable, previous, value) -> {
@@ -5158,8 +5170,13 @@ public class DashboardPage {
             renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats);
         });
         ComboBox<String> region = new ComboBox<>();
-        region.getItems().addAll("All Regions", "Nashik / Panchavati", "Trimbakeshwar"); region.setValue(ghatRegionFilter); region.getStyleClass().add("input-combo"); region.setPrefWidth(146);
-        region.setOnAction(event -> { ghatRegionFilter = region.getValue(); renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats); });
+        region.getItems().addAll("All Locations", "Nashik / Panchavati", "Trimbakeshwar");
+        region.setValue("All Regions".equals(ghatRegionFilter) ? "All Locations" : ghatRegionFilter);
+        region.getStyleClass().add("input-combo"); region.setPrefWidth(176);
+        region.setOnAction(event -> {
+            ghatRegionFilter = "All Locations".equals(region.getValue()) ? "All Regions" : region.getValue();
+            renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats);
+        });
         ComboBox<String> crowd = ghatFilterCombo("All", "Low", "Moderate", "High", "Critical", "Unknown");
         crowd.setValue(ghatCrowdFilter);
         crowd.setOnAction(event -> { ghatCrowdFilter = crowd.getValue(); renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats); });
@@ -5170,10 +5187,11 @@ public class DashboardPage {
         sort.setValue(ghatSort);
         sort.setPrefWidth(146);
         sort.setOnAction(event -> { ghatSort = sort.getValue(); renderGhats(ghatFlowPane, summary, operationalAlerts, currentGhats); });
-        Button mapView = new Button("Filters"); mapView.getStyleClass().add("ghat-user-filter-button");
-        mapView.setOnAction(event -> showInfo("Ghat Filters", "Use search, region, crowd, snan and sort controls to refine the Ghat list."));
-        HBox filter = new HBox(10, search, region, crowd, snan, sort, mapView);
-        filter.getStyleClass().add("ghat-filter-row");
+        Button mapView = new Button("Map View");
+        mapView.getStyleClass().addAll("ghat-user-filter-button", "ghat-map-view-button");
+        mapView.setOnAction(event -> openGhatMapView());
+        HBox filter = new HBox(10, search, region, mapView);
+        filter.getStyleClass().addAll("ghat-filter-row", "ghat-simple-filter-row");
 
         HBox featureCards = new HBox(14,
                 ghatFeatureCard("\uE787", "Important Snan Guide", "Official Simhastha Snan schedule will appear here when published.", "View Guide", () -> showInfo("Important Snan Guide", "Official Simhastha Snan schedule will appear here when published.")),
@@ -5181,22 +5199,32 @@ public class DashboardPage {
                 ghatFeatureCard("\uE8D4", "Nashik–Trimbakeshwar Simhastha", "Nashik and Trimbakeshwar have distinct Akhada bathing arrangements.", "Learn More", () -> showInfo("Nashik–Trimbakeshwar Simhastha", "The festival takes place on the Godavari in Nashik and Trimbakeshwar. The two locations historically have distinct Akhada bathing arrangements.")));
         featureCards.getStyleClass().add("ghat-feature-row");
         featureCards.getChildren().forEach(card -> HBox.setHgrow(card, Priority.ALWAYS));
-        VBox content = new VBox(12, ghatHero(search), summary, filter,
-                new VBox(2, label("Ghats by Live Crowd", "ghat-section-title"),
-                        label("Live conditions appear first when available. Catalogue entries remain available for planning.", "ghat-section-subtitle")),
-                operationalAlerts, ghatFlowPane, ghatGuideStrip(), featureCards);
+        VBox catalogueHeading = new VBox(3,
+                label("Explore Nashik's Sacred Ghats", "ghat-catalogue-heading"),
+                label("Find spiritual places for a peaceful and meaningful journey", "ghat-catalogue-subtitle"));
+        HBox catalogueToolbar = new HBox(24, catalogueHeading, filter);
+        catalogueToolbar.getStyleClass().add("ghat-catalogue-toolbar");
+        HBox.setHgrow(catalogueHeading, Priority.ALWAYS);
+        // Operational alerts remain available to the existing refresh logic, but
+        // they are not part of the pilgrim listing layout. Cards follow the
+        // search/location toolbar directly.
+        VBox content = new VBox(14, ghatHero(search), catalogueToolbar, ghatFlowPane);
         content.getStyleClass().addAll("pilgrim-dashboard-main", "ghat-page");
         content.setPadding(new Insets(12, 22, 28, 12));
+        content.setMaxWidth(Double.MAX_VALUE);
+        ghatFlowPane.prefWrapLengthProperty().bind(content.widthProperty());
+        ghatFlowPane.widthProperty().addListener((observable, previous, width) -> resizeGhatCards(ghatFlowPane, width.doubleValue()));
         ghatFlowPane.getChildren().add(ghatState("Loading Ghat information…", false, ghatFlowPane, summary));
+        renderGhats(ghatFlowPane, summary, operationalAlerts, catalogue);
         loadGhats(ghatFlowPane, summary, operationalAlerts);
         return content;
     }
 
     private StackPane ghatHero(TextField pageSearch) {
-        ImageView image = createImage("/images/welcome-light.png", 1080, 208, 0.54, 0.48);
+        ImageView image = createImage("/images/welcome-light.png", 1180, 235, 0.54, 0.48);
         VBox copy = new VBox(5, label("Ghats & Snan", "ghat-hero-title"),
-                label("Sacred Bathing • Live Crowd Guide • Safe Snan", "ghat-hero-subtitle"),
-                label("Godavari guidance for a calm, informed pilgrimage", "ghat-hero-detail"));
+                label("Sacred Bathing • Safe Snan • Spiritual Journey", "ghat-hero-subtitle"),
+                label("Explore the holy ghats of Nashik and Trimbakeshwar", "ghat-hero-detail"));
         copy.setPadding(new Insets(28, 28, 24, 28)); copy.setAlignment(Pos.CENTER_LEFT);
         StackPane.setAlignment(copy, Pos.CENTER_LEFT);
         HBox controls = ghatTopControls(pageSearch);
@@ -5207,7 +5235,7 @@ public class DashboardPage {
         StackPane.setAlignment(controls, Pos.TOP_RIGHT); StackPane.setMargin(controls, new Insets(14, 18, 0, 0));
         StackPane overlay = new StackPane(); overlay.getStyleClass().add("ghat-hero-overlay");
         StackPane hero = new StackPane(image, overlay, copy, controls);
-        hero.getStyleClass().add("ghat-hero"); hero.setMinHeight(208);
+        hero.getStyleClass().add("ghat-hero"); hero.setMinHeight(235);
         return hero;
     }
 
@@ -5300,6 +5328,7 @@ public class DashboardPage {
     private void loadGhats(Pane cards, HBox summary) { loadGhats(cards, summary, ghatOperationalAlerts == null ? new VBox() : ghatOperationalAlerts); }
 
     private void renderGhats(Pane cards, HBox summary, VBox operationalAlerts, List<Ghat> ghats) {
+            long renderGeneration = ++ghatCardImageRenderGeneration;
             currentGhats = ghats == null ? List.of() : List.copyOf(ghats);
             updateGhatSummary(summary, currentGhats);
             updateOperationalAlerts(operationalAlerts, currentGhats);
@@ -5308,8 +5337,121 @@ public class DashboardPage {
                 cards.getChildren().setAll(ghatState("No Ghat information is currently available.", false, cards, summary));
                 return;
             }
-            List<Node> ghatCards = visibleGhats.stream().filter(java.util.Objects::nonNull).map(ghat -> (Node) cachedGhatCard(ghat)).toList();
+            visibleGhats.forEach(ghat -> logGhatCardImageSource(renderGeneration, ghat));
+            // A refresh must receive fresh visual nodes. Reusing a card's
+            // ImageView lets an asynchronous image/fallback completion retain a
+            // previous viewport or fit size after the FlowPane is rebuilt.
+            List<Node> ghatCards = visibleGhats.stream().filter(java.util.Objects::nonNull).map(ghat -> (Node) ghatCard(ghat)).toList();
             cards.getChildren().setAll(ghatCards);
+            if (cards instanceof FlowPane flowPane) resizeGhatCards(flowPane, flowPane.getWidth());
+    }
+
+    /** Focused lifecycle diagnostic: compares each refresh's Ghat image source. */
+    private void logGhatCardImageSource(long renderGeneration, Ghat ghat) {
+        if (ghat == null) return;
+        String source = ghatImageService.sourceFor(ghat);
+        String previous = lastRenderedGhatImageSources.put(ghat.id(), source);
+        String state = previous == null ? "INITIAL" : previous.equals(source) ? "UNCHANGED" : "CHANGED";
+        LOGGER.info("GHAT_CARD_IMAGE_RENDER generation=" + renderGeneration
+                + ", state=" + state + ", ghatId=" + ghat.id()
+                + ", ghatName=" + ghat.name() + ", source=" + source
+                + (previous == null ? "" : ", previousSource=" + previous));
+    }
+
+    /** Sizes only the visual card shell when the page width changes; Ghat data is untouched. */
+    private void resizeGhatCards(FlowPane grid, double availableWidth) {
+        if (availableWidth <= 0) return;
+        double innerWidth = availableWidth - (GHAT_GRID_SIDE_PADDING * 2);
+        int columns = innerWidth >= 900 ? 4 : innerWidth >= 650 ? 3 : innerWidth >= 430 ? 2 : 1;
+        double cardWidth = Math.max(0, (innerWidth - (columns - 1) * GHAT_GRID_GAP) / columns);
+        if (cardWidth <= 0) return;
+        double imageHeight = GHAT_CARD_IMAGE_HEIGHT;
+        double imageWidth = Math.max(0, cardWidth - (GHAT_CARD_IMAGE_INSET * 2));
+        for (Node node : grid.getChildren()) {
+            if (!(node instanceof VBox card) || !card.getStyleClass().contains("ghat-card")) continue;
+            card.setMinWidth(cardWidth); card.setPrefWidth(cardWidth); card.setMaxWidth(cardWidth);
+            if (card.getChildren().isEmpty() || !(card.getChildren().get(0) instanceof StackPane imageShell)) continue;
+            imageShell.setMinWidth(imageWidth); imageShell.setPrefWidth(imageWidth); imageShell.setMaxWidth(imageWidth);
+            imageShell.setMinHeight(imageHeight); imageShell.setPrefHeight(imageHeight); imageShell.setMaxHeight(imageHeight);
+            for (Node imageNode : imageShell.getChildren()) {
+                if (imageNode instanceof ImageView imageView) {
+                    updateGhatImageFrame(imageView, imageWidth, imageHeight);
+                    applyGhatImageCover(imageView, imageWidth, imageHeight);
+                    break;
+                }
+            }
+            if (imageShell.getClip() instanceof Rectangle clip) {
+                clip.setWidth(imageWidth); clip.setHeight(imageHeight);
+            }
+        }
+    }
+
+    /** Applies a centered viewport crop so a card image fills its fixed frame without distortion. */
+    private void applyGhatImageCover(ImageView imageView, double width, double height) {
+        Image image = imageView.getImage();
+        imageView.setFitWidth(width);
+        imageView.setFitHeight(height);
+        // The viewport is center-cropped to the target aspect ratio, so keeping
+        // preserveRatio enabled fills the frame without stretching or bars.
+        imageView.setPreserveRatio(true);
+        if (image == null || image.getWidth() <= 0 || image.getHeight() <= 0 || width <= 0 || height <= 0) return;
+        double sourceRatio = image.getWidth() / image.getHeight();
+        double targetRatio = width / height;
+        double cropWidth = image.getWidth();
+        double cropHeight = image.getHeight();
+        if (sourceRatio > targetRatio) cropWidth = cropHeight * targetRatio;
+        else if (sourceRatio < targetRatio) cropHeight = cropWidth / targetRatio;
+        imageView.setViewport(new Rectangle2D(
+                (image.getWidth() - cropWidth) / 2,
+                (image.getHeight() - cropHeight) / 2,
+                cropWidth,
+                cropHeight));
+    }
+
+    private void configureGhatImageCover(ImageView imageView, double width, double height) {
+        updateGhatImageFrame(imageView, width, height);
+        imageView.imageProperty().addListener((observable, previous, current) -> {
+            if (current == null) return;
+            installGhatImageCoverListener(imageView, current);
+            applyGhatImageCover(imageView, imageFrame(imageView).width, imageFrame(imageView).height);
+        });
+        Image image = imageView.getImage();
+        if (image != null) installGhatImageCoverListener(imageView, image);
+        applyGhatImageCover(imageView, width, height);
+    }
+
+    /**
+     * The completion listener belongs to exactly one Image instance on exactly
+     * one card.  It keeps the original card frame dimensions rather than using
+     * mutable fit values that can be transiently recomputed during FlowPane
+     * layout or a subsequent render.
+     */
+    private void installGhatImageCoverListener(ImageView imageView, Image expectedImage) {
+        expectedImage.progressProperty().addListener((progress, oldValue, newValue) -> {
+            if (newValue.doubleValue() < 1 || imageView.getImage() != expectedImage) return;
+            GhatImageFrame frame = imageFrame(imageView);
+            applyGhatImageCover(imageView, frame.width, frame.height);
+        });
+    }
+
+    private void updateGhatImageFrame(ImageView imageView, double width, double height) {
+        GhatImageFrame frame = imageFrame(imageView);
+        frame.width = width;
+        frame.height = height;
+    }
+
+    private GhatImageFrame imageFrame(ImageView imageView) {
+        Object stored = imageView.getProperties().get(GHAT_IMAGE_FRAME_KEY);
+        if (stored instanceof GhatImageFrame frame) return frame;
+        GhatImageFrame frame = new GhatImageFrame();
+        imageView.getProperties().put(GHAT_IMAGE_FRAME_KEY, frame);
+        return frame;
+    }
+
+    /** Per-ImageView bounds; never shared across cards or refresh generations. */
+    private static final class GhatImageFrame {
+        private double width;
+        private double height;
     }
 
     private List<Ghat> filteredGhats() {
@@ -5396,72 +5538,91 @@ public class DashboardPage {
     }
 
     private VBox ghatCard(Ghat ghat) {
-        VBox card = new VBox(10); card.getStyleClass().add("ghat-card"); card.setPrefWidth(GHAT_CARD_WIDTH); card.setMinWidth(GHAT_CARD_WIDTH); card.setMaxWidth(GHAT_CARD_WIDTH); card.setMinHeight(358);
-        card.setOnMouseClicked(event -> openGhatDetailsFromCard(ghat, card));
-        ImageView cardImage = ghatImageService.createView(ghat, GHAT_CARD_WIDTH, GHAT_CARD_IMAGE_HEIGHT);
-        cardImage.setPreserveRatio(false);
+        VBox card = new VBox();
+        card.getStyleClass().add("ghat-card");
+        card.setPrefWidth(GHAT_CARD_WIDTH); card.setMinWidth(GHAT_CARD_WIDTH); card.setMaxWidth(GHAT_CARD_WIDTH);
+        card.setMinHeight(Region.USE_COMPUTED_SIZE); card.setPrefHeight(Region.USE_COMPUTED_SIZE); card.setMaxHeight(Region.USE_COMPUTED_SIZE);
+        card.setCursor(Cursor.HAND);
+        card.setPickOnBounds(true);
+        // Keep the clicked record local to this card.  Do not infer it from the
+        // selected card/list index, which could otherwise open stale details.
+        card.setOnMouseClicked(event -> {
+            if (event.isConsumed()) return;
+            openGhatDetailsFromCard(ghat, card);
+            event.consume();
+        });
+        double imageWidth = GHAT_CARD_WIDTH - (GHAT_CARD_IMAGE_INSET * 2);
+        String expectedImageSource = ghatImageService.sourceFor(ghat);
+        ImageView cardImage = ghatImageService.createView(ghat, imageWidth, GHAT_CARD_IMAGE_HEIGHT);
+        logGhatCardImageAssignment(ghat, expectedImageSource, cardImage.getImage(), "INITIAL_ASSIGNMENT");
+        cardImage.imageProperty().addListener((observable, previous, current) ->
+                logGhatCardImageAssignment(ghat, expectedImageSource, current, "ASYNC_ASSIGNMENT"));
+        configureGhatImageCover(cardImage, imageWidth, GHAT_CARD_IMAGE_HEIGHT);
         StackPane imageShell = new StackPane(cardImage);
         imageShell.getStyleClass().add("ghat-card-image-shell");
-        Rectangle imageClip = new Rectangle(GHAT_CARD_WIDTH, GHAT_CARD_IMAGE_HEIGHT);
-        imageClip.setArcWidth(22);
-        imageClip.setArcHeight(22);
+        imageShell.setMinHeight(GHAT_CARD_IMAGE_HEIGHT); imageShell.setPrefHeight(GHAT_CARD_IMAGE_HEIGHT); imageShell.setMaxHeight(GHAT_CARD_IMAGE_HEIGHT);
+        imageShell.setMinWidth(imageWidth); imageShell.setPrefWidth(imageWidth); imageShell.setMaxWidth(imageWidth);
+        Rectangle imageClip = new Rectangle(imageWidth, GHAT_CARD_IMAGE_HEIGHT);
+        imageClip.setArcWidth(24);
+        imageClip.setArcHeight(24);
         imageShell.setClip(imageClip);
-        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) {
-            Label crowdBadge = ghatBadge(ghat.crowdLevel().name(), "ghat-crowd-" + ghat.crowdLevel().name().toLowerCase());
-            StackPane.setAlignment(crowdBadge, Pos.TOP_LEFT); StackPane.setMargin(crowdBadge, new Insets(9)); imageShell.getChildren().add(crowdBadge);
-        }
+        VBox.setMargin(imageShell, new Insets(GHAT_CARD_IMAGE_INSET, GHAT_CARD_IMAGE_INSET, 0, GHAT_CARD_IMAGE_INSET));
         Label title = label(ghat.name(), "ghat-card-title");
         title.setWrapText(true);
-        Label area = label("\uE707  " + (ghat.area().isBlank() ? "Location details pending" : ghat.area()), "ghat-card-area");
+        title.setMaxHeight(42);
+        Label locationIcon = AppUi.symbolIcon("\uE707", "ghat-card-location-icon");
+        Label area = label(ghat.area().isBlank() ? "Location details pending" : ghat.area(), "ghat-card-area");
         area.setWrapText(true);
-        VBox heading = new VBox(2, title, area);
-        FlowPane statuses = new FlowPane(5, 5); statuses.setPadding(new Insets(0, 11, 0, 11));
-        statuses.getStyleClass().add("ghat-status-row");
-        if (ghat.operationalStatus() != Ghat.OperationalStatus.INFORMATION_ONLY) {
-            statuses.getChildren().add(ghatBadge(displayStatus(ghat.operationalStatus()), "ghat-status"));
-        }
-        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN
-                && ghat.operationalState().bathingStatus() != GhatOperationalState.BathingStatus.UNAVAILABLE) {
-            statuses.getChildren().add(ghatBadge("Snan " + titleCase(ghat.operationalState().bathingStatus().name()),
-                    ghat.operationalState().bathingRecommended() ? "ghat-bathing-available" : "ghat-bathing-unavailable"));
-        }
-        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) {
-            statuses.getChildren().add(ghatBadge("Water " + titleCase(ghat.operationalState().waterSafety().name()), "ghat-status"));
-        }
-        HBox metrics = new HBox(4);
-        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN && ghat.estimatedWaitMinutes() != null) {
-            metrics.getChildren().add(ghatMetric("WAIT", ghat.waitLabel()));
-        }
-        if (hasWalkingDetails(ghat)) {
-            metrics.getChildren().add(ghatMetric("WALK", titleCase(ghat.walking().difficulty().name())));
-        }
-        if (ghat.walking().approximateSteps() != null) {
-            metrics.getChildren().add(ghatMetric("STEPS", String.valueOf(ghat.walking().approximateSteps())));
-        }
-        if (ghat.weather().available()) {
-            metrics.getChildren().add(ghatMetric("WEATHER", compactWeather(ghat.weather())));
-        }
-        Node safety = ghatOperationalNote(ghat);
-        HBox actions = new HBox(5, ghatAction("History", event -> showGhatHistory(ghat), "ghat-card-action"),
-                ghatAction("Locate", event -> locateGhat(ghat), "ghat-card-action ghat-card-action-primary"),
-                ghatAction("Navigate", event -> navigateToGhat(ghat), "ghat-card-action"));
-        HBox help = new HBox(4, ghatAction("Medical", event -> requestGhatHelp(ghat, "Medical"), "ghat-help-action"),
-                ghatAction("Police", event -> requestGhatHelp(ghat, "Police"), "ghat-help-action"),
-                ghatAction("Lost & Found", event -> requestGhatHelp(ghat, "Lost & Found"), "ghat-help-action"));
-        card.getChildren().addAll(imageShell, heading);
-        if (!statuses.getChildren().isEmpty()) card.getChildren().add(statuses);
-        if (!metrics.getChildren().isEmpty()) card.getChildren().add(metrics);
-        if (!(safety instanceof Pane)) card.getChildren().add(safety);
-        card.getChildren().addAll(actions, help);
+        HBox locationRow = new HBox(6, locationIcon, area);
+        locationRow.setAlignment(Pos.CENTER_LEFT);
+        locationRow.getStyleClass().add("ghat-card-location-row");
+        Button viewMap = ghatAction("\uE707  View on Map", event -> {
+            selectGhatCard(ghat, card);
+            locateGhat(ghat);
+        }, "ghat-view-map-button");
+        // Button actions use ActionEvent; consume the distinct mouse click here
+        // so it never bubbles to the card's detail-page handler.
+        viewMap.addEventHandler(MouseEvent.MOUSE_CLICKED, event -> event.consume());
+        viewMap.setMaxWidth(Double.MAX_VALUE);
+        viewMap.setMinHeight(40); viewMap.setPrefHeight(40); viewMap.setMaxHeight(40);
+        VBox body = new VBox(11, title, locationRow, viewMap);
+        body.setPadding(new Insets(16, 15, 16, 15));
+        VBox.setMargin(viewMap, new Insets(4, 0, 0, 0));
+        body.getStyleClass().add("ghat-card-body");
+        card.getChildren().addAll(imageShell, body);
+        logGhatCardLayoutOnce(ghat, card, imageShell, body, title, viewMap);
         return card;
     }
 
-    private VBox cachedGhatCard(Ghat ghat) {
-        GhatCardCacheEntry cached = ghatCardCache.get(ghat.id());
-        if (cached != null && cached.ghat().equals(ghat)) return cached.card();
-        VBox card = ghatCard(ghat);
-        ghatCardCache.put(ghat.id(), new GhatCardCacheEntry(ghat, card));
-        return card;
+    /** Reports fallback replacement only for this card's own ImageView. */
+    private void logGhatCardImageAssignment(Ghat ghat, String expectedSource, Image assigned, String stage) {
+        String actualSource = assigned == null || assigned.getUrl() == null ? "<none>" : assigned.getUrl();
+        boolean unexpectedFallback = !GhatImageService.FALLBACK.equals(expectedSource)
+                && actualSource.contains("godavari_kumbh.jpg");
+        LOGGER.info("GHAT_CARD_IMAGE_ASSIGNMENT stage=" + stage + ", ghatId=" + ghat.id()
+                + ", ghatName=" + ghat.name() + ", expectedSource=" + expectedSource
+                + ", assignedSource=" + actualSource + ", unexpectedFallback=" + unexpectedFallback);
+    }
+
+    /** One-time geometry diagnostic for the reported card-overlap regression. */
+    private void logGhatCardLayoutOnce(Ghat ghat, VBox card, StackPane imageShell, VBox body, Label title, Button viewMap) {
+        if (!"ramkund".equals(ghat.id())) return;
+        java.util.concurrent.atomic.AtomicBoolean logged = new java.util.concurrent.atomic.AtomicBoolean();
+        card.heightProperty().addListener((observable, previous, current) -> {
+            if (logged.get() || imageShell.getHeight() <= 0 || body.getHeight() <= 0 || title.getHeight() <= 0) return;
+            if (!logged.compareAndSet(false, true)) return;
+            double imageBottom = imageShell.getLayoutY() + imageShell.getHeight();
+            double titleY = body.getLayoutY() + title.getLayoutY();
+            double buttonY = body.getLayoutY() + viewMap.getLayoutY();
+            LOGGER.info("Ramkund Ghat card layout: CARD HEIGHT=" + card.getHeight()
+                    + ", IMAGE CONTAINER Y=" + imageShell.getLayoutY()
+                    + ", IMAGE CONTAINER HEIGHT=" + imageShell.getHeight()
+                    + ", BODY Y=" + body.getLayoutY()
+                    + ", BODY HEIGHT=" + body.getHeight()
+                    + ", GHAT NAME Y=" + titleY
+                    + ", BUTTON Y=" + buttonY
+                    + ", nameBelowImage=" + (titleY >= imageBottom));
+        });
     }
 
     private void selectGhatCard(Ghat ghat, VBox card) {
@@ -5513,42 +5674,270 @@ public class DashboardPage {
     }
     private String historyText(Ghat.History history) { return String.join("\n\n", java.util.stream.Stream.of(history.historicalBackground(), history.religiousSignificance(), history.simhasthaConnection(), history.associatedSacredPlaces(), history.rituals(), history.didYouKnow()).filter(value -> !value.isBlank()).toList()); }
     private VBox ghatDetailsPage(Ghat ghat, String notice) {
+        selectedGhat = ghat;
         Button back = new Button("Back to Ghats");
         back.getStyleClass().add("pilgrim-small-action");
+        back.setGraphic(AppUi.symbolIcon("\uE5C4", "ghat-detail-action-icon"));
         back.setOnAction(event -> showModulePage("ghat"));
         ImageView image = ghatImageService.createView(ghat, 520, 292);
-        VBox heroText = new VBox(8, badge("GHATS & SNAN"), label(ghat.name(), "ghat-detail-title"),
-                paragraph(ghat.area().isBlank() ? "Nashik Godavari riverfront" : ghat.area()),
-                paragraph(ghat.description().isBlank() ? "Sacred bathing and movement guidance for Simhastha pilgrims." : ghat.description()));
+        configureGhatImageCover(image, 520, 292);
+        HBox location = new HBox(5, AppUi.symbolIcon("\uE707", "ghat-detail-location-icon"),
+                label(ghat.area().isBlank() ? "Location details pending" : ghat.area(), "ghat-detail-location"));
+        location.setAlignment(Pos.CENTER_LEFT);
+        HBox heroActions = new HBox(8,
+                ghatIconAction("\uE55B", "View on Map", event -> locateGhat(ghat), "ghat-detail-primary-action"),
+                ghatIconAction("\uE55D", "Navigate", event -> navigateToGhat(ghat), "ghat-detail-secondary-action"));
+        HBox detailBadge = new HBox(5, AppUi.symbolIcon("\uE8F2", "ghat-detail-badge-icon"), badge("GHATS & SNAN"));
+        detailBadge.setAlignment(Pos.CENTER_LEFT);
+        VBox heroText = new VBox(9, detailBadge, label(ghat.name(), "ghat-detail-title"), location,
+                paragraph(ghat.description().isBlank() ? "Sacred bathing and movement guidance for Simhastha pilgrims." : ghat.description()), heroActions);
         HBox hero = new HBox(18, image, heroText);
         hero.getStyleClass().add("ghat-detail-hero");
         HBox.setHgrow(heroText, Priority.ALWAYS);
-        VBox status = new VBox(10, sectionTitle("Current Ghat Status"));
-        java.util.List<Node> statusRows = new java.util.ArrayList<>();
-        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) statusRows.add(ghatLine("Crowd", titleCase(ghat.crowdLevel().name())));
-        if (ghat.estimatedWaitMinutes() != null) statusRows.add(ghatLine("Wait", ghat.waitLabel()));
-        if (ghat.operationalStatus() != Ghat.OperationalStatus.INFORMATION_ONLY) statusRows.add(ghatLine("Status", displayStatus(ghat.operationalStatus())));
-        if (ghat.operationalState().bathingStatus() != GhatOperationalState.BathingStatus.UNAVAILABLE) statusRows.add(ghatLine("Snan", titleCase(ghat.operationalState().bathingStatus().name())));
-        if (ghat.crowdLevel() != Ghat.CrowdLevel.UNKNOWN) statusRows.add(ghatLine("Water", titleCase(ghat.operationalState().waterSafety().name())));
-        if (hasWalkingDetails(ghat)) statusRows.add(ghatLine("Walking", walkingDescription(ghat)));
-        if (!ghat.lastUpdated().isBlank()) statusRows.add(ghatLine("Updated", lastUpdatedLabel(ghat.lastUpdated())));
-        if (statusRows.isEmpty()) statusRows.add(paragraph("Live operational details will appear here after the administration publishes current field data."));
-        status.getChildren().addAll(statusRows);
-        status.getStyleClass().add("pilgrim-panel");
-        VBox essentials = new VBox(10, sectionTitle("Pilgrim Essentials"), ghatEssentialsGrid(ghat));
-        essentials.getStyleClass().add("pilgrim-panel");
-        VBox support = new VBox(10, sectionTitle("Nearby Support"), ghatSupportGrid(ghat));
-        support.getStyleClass().add("pilgrim-panel");
-        VBox history = new VBox(10, sectionTitle("History & Significance"), paragraph(cleanHistoryText(ghat)));
-        history.getStyleClass().add("pilgrim-panel");
-        VBox location = new VBox(10, sectionTitle("Location & Access"), ghatLine("Area", ghat.area().isBlank() ? "Nashik, Maharashtra" : ghat.area()),
-                ghatLine("Coordinates", coordinateText(ghat)), ghatLine("Gates", gateSummary(ghat)), ghatLine("Zones", zoneSummary(ghat)),
-                ghatLine("Access note", accessNote(ghat)));
-        location.getStyleClass().add("pilgrim-panel");
-        VBox content = pageShell(ghat.name(), "Ghats & Snan details", back, hero);
+        VBox status = new VBox(10, ghatDetailHeading("\uE9D9", "Current Ghat Status"), ghatStatusGrid(ghat));
+        status.getStyleClass().add("ghat-detail-section");
+        VBox essentials = new VBox(10, ghatDetailHeading("\uE77B", "Pilgrim Essentials"), ghatEssentialsGrid(ghat));
+        essentials.getStyleClass().add("ghat-detail-section");
+        VBox facilities = new VBox(10, ghatDetailHeading("\uE8F2", "Facilities & Nearby Support"), ghatFacilityGrid(ghat));
+        facilities.getStyleClass().add("ghat-detail-section");
+        VBox weather = ghatWeatherCard(ghat);
+        VBox safety = ghatSafetyAdvisory(ghat);
+        VBox history = ghatDetailTextSection("Ghat History", "\uE865", ghat.history().historicalBackground(), "Verified information is currently unavailable.");
+        VBox significance = ghatDetailTextSection("Religious Significance", "\uE8F2", ghat.history().religiousSignificance(), "Verified information is currently unavailable.");
+        VBox simhastha = ghatDetailTextSection("Simhastha Connection", "\uE8D4", ghat.history().simhasthaConnection(), "Verified information is currently unavailable.");
+        VBox story = ghatDetailTextSection("Historical / Mythological Story", "\uE865", ghat.history().historicalBackground(), "Verified information is currently unavailable.");
+        VBox locationAccess = ghatLocationAccess(ghat);
+        locationAccess.setMaxWidth(Double.MAX_VALUE);
+        // The remaining information cards flow naturally in pairs; Location &
+        // Access is intentionally kept as a full-width final section.
+        FlowPane information = new FlowPane(14, 14, history, significance, simhastha, story, weather);
+        information.getStyleClass().add("ghat-detail-information-grid");
+        HBox quickActions = new HBox(8,
+                ghatIconAction("\uE55B", "View on Map", event -> locateGhat(ghat), "ghat-detail-primary-action"),
+                ghatIconAction("\uE55D", "Navigate", event -> navigateToGhat(ghat), "ghat-detail-secondary-action"),
+                ghatIconAction("\uE95C", "Medical Help", event -> requestGhatHelp(ghat, "Medical"), "ghat-detail-help-action"),
+                ghatIconAction("\uE7FC", "Police Help", event -> requestGhatHelp(ghat, "Police"), "ghat-detail-help-action"),
+                ghatIconAction("\uE721", "Lost & Found", event -> requestGhatHelp(ghat, "Lost & Found"), "ghat-detail-help-action"));
+        quickActions.getStyleClass().add("ghat-detail-quick-actions");
+        VBox content = new VBox(14, back, hero);
+        content.getStyleClass().addAll("pilgrim-dashboard-main", "ghat-detail-page");
+        content.setPadding(new Insets(16, 20, 28, 16));
         if (notice != null && !notice.isBlank()) content.getChildren().add(infoPanel("Important Update", notice));
-        content.getChildren().addAll(status, essentials, support, history, location);
+        content.getChildren().addAll(status, essentials, facilities, safety, information, locationAccess, quickActions);
         return content;
+    }
+
+    private FlowPane ghatStatusGrid(Ghat ghat) {
+        FlowPane grid = new FlowPane(10, 10);
+        grid.getStyleClass().add("ghat-detail-status-grid");
+        grid.getChildren().addAll(
+                ghatDetailMetric("\uE716", "Live Crowd", titleCase(ghat.crowdLevel().name()), ghat.crowdLevel() == Ghat.CrowdLevel.UNKNOWN ? "Live update unavailable" : lastUpdatedLabel(ghat.lastUpdated())),
+                ghatDetailMetric("\uE798", "Snan Status", titleCase(ghat.operationalState().bathingStatus().name()), snanAdvice(ghat)),
+                ghatDetailMetric("\uE707", "Distance", ghat.walking().distanceMeters() == null ? "Unavailable" : ghat.walking().distanceMeters() + " m", ghat.walking().distanceMeters() == null ? "Distance not published" : "From active entry"),
+                ghatDetailMetric("\uE8E8", "Snan Safety", titleCase(ghat.operationalState().waterSafety().name()), waterAdvice(ghat)));
+        return grid;
+    }
+
+    private VBox ghatDetailMetric(String icon, String title, String value, String detail) {
+        VBox copy = new VBox(3, label(title, "ghat-detail-metric-title"), label(value, "ghat-detail-metric-value"), label(detail, "ghat-detail-metric-detail"));
+        HBox row = new HBox(9, AppUi.symbolIcon(icon, "ghat-detail-metric-icon"), copy);
+        VBox card = new VBox(row);
+        card.getStyleClass().add("ghat-detail-metric");
+        return card;
+    }
+
+    private FlowPane ghatFacilityGrid(Ghat ghat) {
+        FlowPane grid = new FlowPane(10, 10);
+        grid.getStyleClass().add("ghat-facility-grid");
+        // Operational facility statuses are admin-controlled live data. Base
+        // catalogue facilities supplement them only when no live status exists.
+        java.util.LinkedHashMap<String, GhatFacilityDisplay> facilities = new java.util.LinkedHashMap<>();
+        ghat.operationalState().facilities().stream().filter(facility -> !facility.name().isBlank()).forEach(facility ->
+                facilities.put(facilityKey(facility.name()), new GhatFacilityDisplay(facility.name(), titleCase(facility.status().name()), true)));
+        ghat.facilities().stream().filter(name -> !name.isBlank()).forEach(name ->
+                facilities.putIfAbsent(facilityKey(name), new GhatFacilityDisplay(name, "Listed facility", false)));
+        if (facilities.isEmpty()) {
+            Label unavailable = label("Facility information is currently unavailable for this Ghat.", "ghat-facility-unavailable");
+            unavailable.setWrapText(true);
+            grid.getChildren().add(unavailable);
+        } else {
+            facilities.values().stream().limit(12).forEach(facility -> grid.getChildren().add(
+                    ghatFacilityTile(ghat, ghatFacilityIcon(facility.name()), facility.name(), facility.status(), facility.liveStatus())));
+        }
+        return grid;
+    }
+
+    private VBox ghatFacilityTile(Ghat ghat, String icon, String name, String status, boolean liveStatus) {
+        VBox tile = new VBox(4, AppUi.symbolIcon(icon, "ghat-facility-icon"), label(name, "ghat-facility-name"), label(status, "ghat-facility-status"));
+        tile.getStyleClass().add("ghat-facility-tile");
+        if (liveStatus) tile.getStyleClass().add("ghat-facility-live");
+        Runnable action = facilityAction(ghat, name);
+        if (action != null) {
+            tile.setCursor(Cursor.HAND);
+            Tooltip.install(tile, new Tooltip("Open related support"));
+            tile.setOnMouseClicked(event -> action.run());
+        }
+        return tile;
+    }
+
+    private String facilityKey(String name) { return name.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", ""); }
+
+    private Runnable facilityAction(Ghat ghat, String facilityName) {
+        String name = facilityName == null ? "" : facilityName.toLowerCase(Locale.ROOT);
+        if (name.contains("police")) return () -> requestGhatHelp(ghat, "Police");
+        if (name.contains("medical") || name.contains("first aid")) return () -> requestGhatHelp(ghat, "Medical");
+        if (name.contains("lost") && name.contains("found")) return () -> requestGhatHelp(ghat, "Lost & Found");
+        if (name.contains("parking")) return () -> locateGhat(ghat);
+        return null;
+    }
+
+    private record GhatFacilityDisplay(String name, String status, boolean liveStatus) { }
+
+    private VBox ghatDetailTextSection(String title, String icon, String text, String fallback) {
+        VBox section = new VBox(8, ghatDetailHeading(icon, title),
+                paragraph(text == null || text.isBlank() ? fallback : text));
+        section.getStyleClass().add("ghat-detail-text-section");
+        return section;
+    }
+
+    private VBox ghatDetailChipSection(String title, String icon, String text) {
+        FlowPane chips = new FlowPane(6, 6);
+        if (text != null && !text.isBlank()) {
+            java.util.Arrays.stream(text.split("[;,\\n]"))
+                    .map(String::trim).filter(value -> !value.isBlank()).limit(6)
+                    .forEach(value -> chips.getChildren().add(label(value, "ghat-detail-chip")));
+        }
+        if (chips.getChildren().isEmpty()) chips.getChildren().add(label("Verified information is currently unavailable.", "ghat-detail-muted"));
+        VBox section = new VBox(8, ghatDetailHeading(icon, title), chips);
+        section.getStyleClass().add("ghat-detail-text-section");
+        return section;
+    }
+
+    private VBox ghatDidYouKnow(Ghat ghat) {
+        String facts = ghat.history().didYouKnow();
+        VBox content = new VBox(5);
+        if (facts.isBlank()) content.getChildren().add(label("Verified information is currently unavailable.", "ghat-detail-muted"));
+        else java.util.Arrays.stream(facts.split("[\\n;]"))
+                .map(String::trim).filter(value -> !value.isBlank()).limit(3)
+                .forEach(value -> content.getChildren().add(label("• " + value, "ghat-did-you-know-fact")));
+        VBox section = new VBox(8, ghatDetailHeading("\uE8F4", "Did You Know?"), content);
+        section.getStyleClass().addAll("ghat-detail-text-section", "ghat-did-you-know");
+        return section;
+    }
+
+    private VBox ghatWeatherCard(Ghat ghat) {
+        Label temperature = label("Loading…", "ghat-weather-temperature");
+        Label condition = label("Loading live weather…", "ghat-weather-condition");
+        FlowPane metrics = new FlowPane(7, 7);
+        FlowPane forecast = new FlowPane(7, 7);
+        updateGhatWeatherCard(null, temperature, condition, metrics, forecast);
+        VBox section = new VBox(8, ghatDetailHeading("\uE430", "Weather at " + (ghat.area().isBlank() ? "this Ghat" : ghat.area())),
+                temperature, condition, metrics, forecast);
+        section.getStyleClass().addAll("ghat-detail-text-section", "ghat-weather-section");
+        long requestGeneration = ++ghatWeatherRequestGeneration;
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> ghatWeatherService.weatherFor(ghat))
+                .whenComplete((snapshot, error) -> Platform.runLater(() -> {
+                    // A detail page may have been replaced while its request was in flight.
+                    if (requestGeneration != ghatWeatherRequestGeneration || selectedGhat == null || !selectedGhat.id().equals(ghat.id())) return;
+                    if (error != null) {
+                        LOGGER.log(java.util.logging.Level.WARNING, "Live weather unavailable for Ghat " + ghat.id(), error);
+                        updateGhatWeatherCard(null, temperature, condition, metrics, forecast);
+                    } else updateGhatWeatherCard(snapshot, temperature, condition, metrics, forecast);
+                }));
+        return section;
+    }
+
+    private void updateGhatWeatherCard(WeatherService.WeatherSnapshot snapshot, Label temperature, Label condition,
+                                       FlowPane metrics, FlowPane forecast) {
+        metrics.getChildren().clear(); forecast.getChildren().clear();
+        if (snapshot == null || !snapshot.live() || !snapshot.current().available()) {
+            temperature.setText("Unavailable");
+            condition.setText("Live weather is temporarily unavailable.");
+            metrics.getChildren().addAll(ghatWeatherMetric("\uE9A6", "Rain: N/A"), ghatWeatherMetric("\uE798", "Humidity: N/A"),
+                    ghatWeatherMetric("\uE753", "Wind: N/A"), ghatWeatherMetric("\uE706", "Forecast: unavailable"));
+            return;
+        }
+        Ghat.Weather current = snapshot.current();
+        temperature.setText(current.temperatureCelsius() + "°C");
+        condition.setText(current.condition());
+        metrics.getChildren().addAll(
+                ghatWeatherMetric("\uE9A6", "Rain: " + valueOr("N/A", percentage(current.rainProbability()))),
+                ghatWeatherMetric("\uE798", "Humidity: " + valueOr("N/A", percentage(current.humidity()))),
+                ghatWeatherMetric("\uE753", "Wind: " + valueOr("N/A", snapshot.windSpeedKmh() == null ? "" : snapshot.windSpeedKmh() + " km/h")));
+        snapshot.forecast().forEach(hour -> forecast.getChildren().add(label(formatForecastHour(hour.time()) + "  "
+                + valueOr("N/A", hour.temperatureCelsius() == null ? "" : hour.temperatureCelsius() + "°C") + " " + hour.condition(), "ghat-weather-metric")));
+        if (forecast.getChildren().isEmpty()) forecast.getChildren().add(label("Forecast: unavailable", "ghat-weather-metric"));
+    }
+
+    private String percentage(Integer value) { return value == null ? "" : value + "%"; }
+    private String formatForecastHour(String time) {
+        if (time == null || time.isBlank()) return "";
+        int separator = time.indexOf('T');
+        return separator >= 0 && separator + 1 < time.length() ? time.substring(separator + 1) : time;
+    }
+
+    private VBox ghatSafetyAdvisory(Ghat ghat) {
+        String safety = titleCase(ghat.operationalState().waterSafety().name());
+        String message = ghatOperationalNote(ghat) instanceof Label label ? label.getText() : waterAdvice(ghat);
+        VBox section = new VBox(6, ghatDetailHeading("\uE8E8", "Snan Safety Advisory"),
+                label(safety, "ghat-safety-advisory-status"), label(message.isBlank() ? "Live safety advice is currently unavailable." : message, "ghat-safety-advisory-message"));
+        section.getStyleClass().addAll("ghat-safety-advisory", "ghat-safety-" + ghat.operationalState().waterSafety().name().toLowerCase());
+        return section;
+    }
+
+    private VBox ghatLocationAccess(Ghat ghat) {
+        FlowPane rows = new FlowPane(8, 8,
+                ghatDetailLine("\uE707", "Area", ghat.area().isBlank() ? "Location details pending" : ghat.area()),
+                ghatDetailLine("\uE81D", "Coordinates", coordinateText(ghat)), ghatDetailLine("\uE8B7", "Gates", gateSummary(ghat)),
+                ghatDetailLine("\uE55B", "Zones", zoneSummary(ghat)), ghatDetailLine("\uE55D", "Access", accessNote(ghat)));
+        rows.getStyleClass().add("ghat-location-access-rows");
+        VBox section = new VBox(8, ghatDetailHeading("\uE707", "Location & Access"), rows);
+        section.getStyleClass().add("ghat-detail-text-section");
+        return section;
+    }
+
+    private HBox ghatDetailHeading(String icon, String title) {
+        HBox heading = new HBox(7, AppUi.symbolIcon(icon, "ghat-detail-section-icon"), label(title, "ghat-detail-section-title"));
+        heading.setAlignment(Pos.CENTER_LEFT);
+        return heading;
+    }
+
+    private Button ghatIconAction(String icon, String text, javafx.event.EventHandler<javafx.event.ActionEvent> action, String style) {
+        Button button = ghatAction(text, action, style);
+        button.setGraphic(AppUi.symbolIcon(icon, "ghat-detail-action-icon"));
+        return button;
+    }
+
+    private HBox ghatWeatherMetric(String icon, String text) {
+        HBox metric = new HBox(4, AppUi.symbolIcon(icon, "ghat-weather-metric-icon"), label(text, "ghat-weather-metric"));
+        metric.setAlignment(Pos.CENTER_LEFT);
+        return metric;
+    }
+
+    private HBox ghatDetailLine(String icon, String key, String value) {
+        Label detail = label(value, "ghat-line-value");
+        detail.setWrapText(true);
+        HBox row = new HBox(6, AppUi.symbolIcon(icon, "ghat-location-line-icon"), label(key, "ghat-line-key"), detail);
+        row.setAlignment(Pos.TOP_LEFT);
+        HBox.setHgrow(detail, Priority.ALWAYS);
+        return row;
+    }
+
+    private String ghatFacilityIcon(String name) {
+        String value = name == null ? "" : name.toLowerCase(java.util.Locale.ROOT);
+        if (value.contains("police")) return "\uE7FC";
+        if (value.contains("medical") || value.contains("first aid")) return "\uE95C";
+        if (value.contains("water")) return "\uE798";
+        if (value.contains("toilet") || value.contains("changing")) return "\uE8D4";
+        if (value.contains("wheelchair") || value.contains("accessib")) return "\uE77B";
+        if (value.contains("parking")) return "\uE811";
+        if (value.contains("light")) return "\uE706";
+        if (value.contains("rest") || value.contains("shelter")) return "\uE7F4";
+        if (value.contains("information") || value.contains("help desk")) return "\uE897";
+        if (value.contains("lost") && value.contains("found")) return "\uE721";
+        if (value.contains("transport") || value.contains("shuttle")) return "\uE806";
+        if (value.contains("food") || value.contains("prasad")) return "\uE8D4";
+        return "\uE8B5";
     }
 
     private String cleanHistoryText(Ghat ghat) {
@@ -5621,10 +6010,10 @@ public class DashboardPage {
         FlowPane grid = new FlowPane(10, 10);
         grid.getStyleClass().add("ghat-detail-grid");
         grid.getChildren().addAll(
-                ghatInfoTile("Snan readiness", titleCase(ghat.operationalState().bathingStatus().name()), snanAdvice(ghat)),
-                ghatInfoTile("Water safety", titleCase(ghat.operationalState().waterSafety().name()), waterAdvice(ghat)),
-                ghatInfoTile("Expected wait", ghat.estimatedWaitMinutes() == null ? "Admin update expected" : ghat.waitLabel(), waitAdvice(ghat)),
-                ghatInfoTile("Walking access", walkingShort(ghat), walkingDescription(ghat)));
+                ghatInfoTile("\uE798", "Snan readiness", titleCase(ghat.operationalState().bathingStatus().name()), snanAdvice(ghat)),
+                ghatInfoTile("\uE8E8", "Water safety", titleCase(ghat.operationalState().waterSafety().name()), waterAdvice(ghat)),
+                ghatInfoTile("\uE823", "Expected wait", ghat.estimatedWaitMinutes() == null ? "Admin update expected" : ghat.waitLabel(), waitAdvice(ghat)),
+                ghatInfoTile("\uE55D", "Walking access", walkingShort(ghat), walkingDescription(ghat)));
         return grid;
     }
 
@@ -5651,11 +6040,17 @@ public class DashboardPage {
     }
 
     private VBox ghatInfoTile(String title, String value, String detail) {
+        return ghatInfoTile("", title, value, detail);
+    }
+
+    private VBox ghatInfoTile(String icon, String title, String value, String detail) {
         Label titleLabel = label(title, "ghat-detail-tile-title");
         Label valueLabel = label(value, "ghat-detail-tile-value");
         Label detailLabel = label(detail, "ghat-detail-tile-detail");
         detailLabel.setWrapText(true);
-        VBox tile = new VBox(5, titleLabel, valueLabel, detailLabel);
+        VBox tile = icon == null || icon.isBlank()
+                ? new VBox(5, titleLabel, valueLabel, detailLabel)
+                : new VBox(5, new HBox(6, AppUi.symbolIcon(icon, "ghat-detail-tile-icon"), titleLabel), valueLabel, detailLabel);
         tile.getStyleClass().add("ghat-detail-tile");
         return tile;
     }
@@ -9927,8 +10322,6 @@ public class DashboardPage {
         }
         return imageView;
     }
-
-    private record GhatCardCacheEntry(Ghat ghat, VBox card) { }
 
     private void showInfo(String title, String message) {
         AppUi.showInfo(title, message, root == null || root.getScene() == null ? null : root.getScene().getWindow());

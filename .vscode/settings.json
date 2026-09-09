@@ -11,5 +11,6 @@
         "\\.git"
     ],
     "css.lint.vendorPrefix": "ignore",
-    "css.lint.compatibleVendorPrefixes": "ignore"
+    "css.lint.compatibleVendorPrefixes": "ignore",
+    "java.compile.nullAnalysis.mode": "automatic"
 }

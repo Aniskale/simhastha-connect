@@ -218,7 +218,9 @@ public final class GhatService {
                 || ghat.walking().seniorFriendly() || ghat.walking().wheelchairAccessible();
     }
     private static com.simhastha.model.GhatOperationalState operationalState(Ghat live, Ghat fallback) {
-        return hasLiveBathing(live) || !live.operationalState().lastUpdated().isBlank()
+        // Facility statuses are independently live/admin-managed; do not discard
+        // them simply because bathing status has not changed.
+        return hasLiveBathing(live) || !live.operationalState().facilities().isEmpty() || !live.operationalState().lastUpdated().isBlank()
                 ? live.operationalState() : fallback.operationalState();
     }
     private static boolean sameGhat(Ghat first, Ghat second) {
