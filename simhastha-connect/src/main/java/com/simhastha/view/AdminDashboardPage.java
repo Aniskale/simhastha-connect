@@ -135,14 +135,26 @@ public class AdminDashboardPage {
     private String emergencyServicesPreviewMessage = "";
     private EmergencyService editingEmergencyService;
     private String focusedEmergencyReportId = "";
+    private String expandedEmergencyReportId = "";
+    private String emergencyReportSearch = "";
+    private String emergencyReportPriorityFilter = "All";
+    private String emergencyReportStatusFilter = "All";
+    private String emergencyReportTypeFilter = "All";
+    private int emergencyReportPage;
+    private String emergencyServiceSearch = "";
+    private String emergencyServiceCategoryFilter = "All";
+    private String emergencyServiceStatusFilter = "All Status";
     private ScheduledExecutorService sosMonitorExecutor;
     private ScheduledFuture<?> sosMonitorTask;
-    private boolean sosMonitorPollInProgress;
+    private volatile boolean sosMonitorPollInProgress;
     private boolean sosMonitorBaselined;
     private boolean sosPopupVisible;
     private boolean sosMonitorFailureLogged;
     private final Deque<EmergencyReport> pendingSosReports = new ArrayDeque<>();
     private final Set<String> notifiedEmergencyIds = new HashSet<>();
+    private StackPane adminOverlay;
+    private StackPane sosToastLayer;
+    private VBox activeSosToast;
 
     public Scene createScene(Stage stage) {
         this.stage = stage;
@@ -155,11 +167,15 @@ public class AdminDashboardPage {
         root.setLeft(createSidebar());
         root.setCenter(scroll(loadingPanel()));
 
-        Scene scene = new Scene(root, 1200, 680);
+        sosToastLayer = new StackPane();
+        sosToastLayer.setPickOnBounds(false);
+        adminOverlay = new StackPane(root, sosToastLayer);
+        Scene scene = new Scene(adminOverlay, 1200, 680);
         ThemeManager.addTheme(scene, this);
         ThemeManager.addListener(() -> ThemeManager.applyTo(root));
         refreshAdminData();
         startAdminPujaLiveRefreshIfNeeded();
+        startAdminSosMonitor();
         return scene;
     }
 
@@ -234,6 +250,7 @@ public class AdminDashboardPage {
 
         Button logout = sidebarAction("Logout");
         logout.setOnAction(actionEvent -> {
+            dispose();
             AppSession.clear();
             NavigationUtil.navigate(stage, new AdminAuthPage().createScene(stage));
         });
@@ -3313,88 +3330,128 @@ public class AdminDashboardPage {
 
     private VBox emergencyPage() {
         long active = emergencyReports.stream().filter(EmergencyReport::unresolved).count();
-        long critical = emergencyReports.stream().filter(report -> report.unresolved() && report.priority() == EmergencyReport.Priority.CRITICAL).count();
-        long medical = emergencyReports.stream().filter(report -> report.unresolved() && report.emergencyType() == EmergencyReport.EmergencyType.MEDICAL).count();
-        long police = emergencyReports.stream().filter(report -> report.unresolved() && report.emergencyType() == EmergencyReport.EmergencyType.POLICE_SECURITY).count();
-        long fireCrowd = emergencyReports.stream().filter(report -> report.unresolved() && (report.emergencyType() == EmergencyReport.EmergencyType.FIRE || report.emergencyType() == EmergencyReport.EmergencyType.CROWD_RISK)).count();
-        long resolved = emergencyReports.stream().filter(report -> report.status() == EmergencyReport.Status.RESOLVED).count();
-        HBox summary = new HBox(10, metric(String.valueOf(active), "Active"), metric(String.valueOf(critical), "Critical"),
-                metric(String.valueOf(medical), "Medical"), metric(String.valueOf(police), "Police/Security"),
-                metric(String.valueOf(fireCrowd), "Fire/Crowd"), metric(String.valueOf(resolved), "Resolved"));
-        VBox queue = new VBox(8);
-        if (emergencyReportsLoading) queue.getChildren().add(label("Loading emergency reports...", "description-text"));
-        List<EmergencyReport> ordered = emergencyReports.stream().sorted(java.util.Comparator
-                .comparingInt((EmergencyReport report) -> report.priority().ordinal())
-                .thenComparing(EmergencyReport::createdAt).reversed()).toList();
-        if (!emergencyReportsLoading && !emergencyReportsError.isBlank()) queue.getChildren().add(label(emergencyReportsError, "description-text"));
-        else if (!emergencyReportsLoading && ordered.isEmpty()) queue.getChildren().add(label("No emergency reports available.", "description-text"));
-        ordered.forEach(report -> queue.getChildren().add(emergencyQueueRow(report)));
-        VBox serviceRows = new VBox(7);
-        if (emergencyServicesLoading) serviceRows.getChildren().add(label("Loading emergency services...", "description-text"));
-        else if (!emergencyServicesError.isBlank() && !emergencyServicesPreviewActive) serviceRows.getChildren().add(label("Emergency service management is currently unavailable due to Firestore permissions.", "description-text"));
-        else if (emergencyServices.isEmpty()) serviceRows.getChildren().add(label("No emergency services available.", "description-text"));
-        TextField search = new TextField(); search.setPromptText("Search service name");
-        ComboBox<String> filter = combo(java.util.stream.Stream.concat(java.util.stream.Stream.of("All"), java.util.Arrays.stream(EmergencyService.Category.values()).map(Enum::name)).toArray(String[]::new));
-        Runnable renderServices = () -> {
-            serviceRows.getChildren().clear();
-            if (emergencyServicesPreviewActive) {
-                serviceRows.getChildren().add(label(emergencyServicesPreviewStatus(), "description-text"));
-            }
-            emergencyServices.stream()
-                    .filter(service -> service.name().toLowerCase().contains(search.getText().toLowerCase())
-                            && ("All".equals(filter.getValue()) || service.category().name().equals(filter.getValue())))
-                    .forEach(service -> serviceRows.getChildren().add(emergencyServiceRow(service)));
-            if (!emergencyServicesPreviewMessage.isBlank()) {
-                serviceRows.getChildren().add(label(emergencyServicesPreviewMessage, "description-text"));
-            }
-        };
-        search.textProperty().addListener((o, a, b) -> renderServices.run()); filter.setOnAction(event -> renderServices.run());
-        if (!emergencyServicesLoading && (emergencyServicesError.isBlank() || emergencyServicesPreviewActive)) renderServices.run();
-        Button refreshServices = new Button("REFRESH SERVICES"); refreshServices.getStyleClass().add("secondary-button"); refreshServices.setOnAction(event -> loadEmergencyServicesAsync());
-        Button addService = new Button("ADD SERVICE"); addService.getStyleClass().add("primary-button"); addService.setOnAction(event -> { editingEmergencyService = null; root.setCenter(scroll(emergencyServiceForm())); });
-        return pageShell("Emergency Management", "Live Firestore queue. Critical cases are prioritised first.", summary,
-                infoPanel("Emergency Response Queue", queue), infoPanel("Emergency Services", new VBox(8, new HBox(8, search, filter, addService, refreshServices), serviceRows)));
-    }
+        long critical = emergencyReports.stream().filter(r -> r.unresolved() && r.priority() == EmergencyReport.Priority.CRITICAL).count();
+        long medical = emergencyReports.stream().filter(r -> r.unresolved() && r.emergencyType() == EmergencyReport.EmergencyType.MEDICAL).count();
+        long police = emergencyReports.stream().filter(r -> r.unresolved() && r.emergencyType() == EmergencyReport.EmergencyType.POLICE_SECURITY).count();
+        long fireCrowd = emergencyReports.stream().filter(r -> r.unresolved() && (r.emergencyType() == EmergencyReport.EmergencyType.FIRE || r.emergencyType() == EmergencyReport.EmergencyType.CROWD_RISK)).count();
+        long resolved = emergencyReports.stream().filter(r -> r.status() == EmergencyReport.Status.RESOLVED).count();
 
-    private HBox emergencyServiceRow(EmergencyService service) {
-        Label copy = label(adminEmergencyServiceValue(service.name(), "Unnamed emergency service") + " | "
-                + service.category() + " | " + adminEmergencyServiceValue(service.sector(), "Not available")
-                + " / " + adminEmergencyServiceValue(service.area(), "Not available") + " | "
-                + service.operationalStatus() + " | " + adminEmergencyServiceValue(service.contactNumber(), "Not available")
-                + " | " + (service.active() ? "Active" : "Inactive"), "admin-row-detail");
-        Button edit = new Button("EDIT"); edit.setOnAction(e -> { editingEmergencyService = service; root.setCenter(scroll(emergencyServiceForm())); });
-        Button active = new Button(service.active() ? "DEACTIVATE" : "ACTIVATE"); active.setOnAction(e -> saveEmergencyService(copyActive(service, !service.active()), active));
-        Button delete = new Button("DELETE"); delete.setOnAction(e -> deleteEmergencyService(service, delete));
-        return new HBox(8, copy, createSpacer(), edit, active, delete);
-    }
+        HBox header = new HBox(12, new VBox(3, sectionTitle("Emergency Management"), muted("Monitor • Respond • Coordinate • Keep Devotees Safe")), createSpacer(), label("●  LIVE OPERATIONS", "admin-emergency-live-label"));
+        header.setAlignment(Pos.CENTER_LEFT); header.getStyleClass().add("admin-emergency-header");
+        HBox summary = new HBox(10, emergencySummaryCard("ACTIVE EMERGENCIES", active, "Currently active"), emergencySummaryCard("CRITICAL", critical, "Immediate attention"), emergencySummaryCard("MEDICAL", medical, "Medical response"), emergencySummaryCard("POLICE / SECURITY", police, "Security response"), emergencySummaryCard("FIRE / CROWD", fireCrowd, "Safety response"), emergencySummaryCard("RESOLVED TODAY", resolved, "Closed cases"));
+        summary.getStyleClass().add("admin-emergency-summary-row");
+        EmergencyReport latest = emergencyReports.stream().max(java.util.Comparator.comparing(EmergencyReport::createdAt)).orElse(null);
+        Label latestCopy = label(latest == null ? "No emergency alerts received." : latest.emergencyType().name().replace('_', ' ') + " — " + valueOr("Not available", latest.locationLabel()), "admin-emergency-alert-copy");
+        Button allAlerts = new Button("VIEW ALL ALERTS"); allAlerts.getStyleClass().add("secondary-button"); allAlerts.setOnAction(e -> { emergencyReportStatusFilter = "All"; emergencyReportPage = 0; rebuildEmergencyPage(); });
+        HBox alert = new HBox(10, label("LATEST ALERT:", "admin-emergency-alert-title"), latestCopy, createSpacer(), allAlerts); alert.setAlignment(Pos.CENTER_LEFT); alert.getStyleClass().add("admin-emergency-alert-strip");
 
-    private String adminEmergencyServiceValue(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value;
-    }
-
-    private VBox emergencyQueueRow(EmergencyReport report) {
-        Label title = label(report.trackingId() + "  |  " + report.emergencyType().name().replace('_', ' '), "admin-row-title");
-        Label detail = label("Status: " + report.status().name().replace('_', ' ') + " | Priority: " + report.priority()
-                + " | Reporter: " + valueOr("Not available", report.reporterName()) + " | Contact: " + valueOr("Not available", report.reporterPhone())
-                + " | People: " + report.peopleAffected() + " | " + valueOr("Demo Nashik Location", report.locationLabel())
-                + " | Landmark: " + valueOr("Not available", report.landmark()) + " | Coordinates: " + report.latitude() + ", " + report.longitude()
-                + " | Description: " + valueOr("Not available", report.description()), "admin-row-detail");
-        ComboBox<String> team = combo("Unassigned", "Medical Team", "Police Team", "Fire/Safety Team", "Crowd Control Team", "Volunteer Help Team");
-        if (!report.assignedTeamName().isBlank()) team.setValue(report.assignedTeamName());
-        ComboBox<String> priority = combo(report.priority().name(), "CRITICAL", "HIGH", "MEDIUM");
-        ComboBox<String> status = combo(report.status().name(), "REPORTED", "ACKNOWLEDGED", "TEAM_DISPATCHED", "HELP_ARRIVING", "RESOLVED");
-        TextField notes = new TextField(report.adminNotes()); notes.setPromptText("Internal admin notes");
-        Button save = new Button("UPDATE"); save.getStyleClass().add("primary-button");
-        save.setOnAction(event -> updateEmergencyFromAdmin(report, priority.getValue(), status.getValue(), team.getValue(), notes.getText(), save));
-        HBox controls = new HBox(8, priority, status, team, notes, save);
-        controls.setAlignment(Pos.CENTER_LEFT); HBox.setHgrow(notes, Priority.ALWAYS);
-        VBox row = new VBox(6, title, detail, controls); row.getStyleClass().add("admin-data-row");
-        if (report.emergencyId().equals(focusedEmergencyReportId)) {
-            row.getStyleClass().add("admin-emergency-sos-selected");
-            focusedEmergencyReportId = "";
+        TextField search = new TextField(emergencyReportSearch); search.setPromptText("Search by ID, reporter, location...");
+        ComboBox<String> status = combo("All", "Reported", "Acknowledged", "Team Dispatched", "Help Arriving", "Resolved"); status.setValue(emergencyReportStatusFilter);
+        ComboBox<String> priority = combo("All", "Critical", "High", "Medium"); priority.setValue(emergencyReportPriorityFilter);
+        Button refresh = new Button("REFRESH"); refresh.getStyleClass().add("secondary-button"); refresh.setOnAction(e -> loadEmergencyReportsAsync());
+        search.textProperty().addListener((o,a,v) -> emergencyReportSearch = v); search.setOnAction(e -> { emergencyReportPage = 0; rebuildEmergencyPage(); });
+        status.setOnAction(e -> { emergencyReportStatusFilter = status.getValue(); emergencyReportPage = 0; rebuildEmergencyPage(); });
+        priority.setOnAction(e -> { emergencyReportPriorityFilter = priority.getValue(); emergencyReportPage = 0; rebuildEmergencyPage(); });
+        HBox controls = new HBox(8, search, status, priority, refresh); HBox.setHgrow(search, Priority.ALWAYS);
+        List<EmergencyReport> reports = emergencyReports.stream().filter(this::matchesEmergencyReportFilters)
+                .sorted(java.util.Comparator.comparing((EmergencyReport r) -> r.status() == EmergencyReport.Status.RESOLVED).thenComparingInt(r -> r.priority().ordinal()).thenComparing(EmergencyReport::createdAt, java.util.Comparator.reverseOrder())).toList();
+        VBox reportRows = new VBox(0);
+        if (emergencyReportsLoading) reportRows.getChildren().add(label("Loading emergency reports...", "description-text"));
+        else if (!emergencyReportsError.isBlank()) reportRows.getChildren().add(label("Could not load emergency reports.", "admin-emergency-empty"));
+        else if (reports.isEmpty()) reportRows.getChildren().add(label("No active emergency cases.", "admin-emergency-empty"));
+        else {
+            int from = Math.min(emergencyReportPage * 8, reports.size()); int to = Math.min(from + 8, reports.size());
+            reportRows.getChildren().add(emergencyTableHeader()); reports.subList(from, to).forEach(r -> reportRows.getChildren().add(emergencyTableRow(r))); reportRows.getChildren().add(emergencyPagination(reports.size(), from, to));
         }
-        return row;
+        VBox queue = new VBox(7, sectionTitle("Emergency Response Queue"), muted("Live Firestore queue. Critical cases are prioritised first."), controls, reportRows); queue.getStyleClass().addAll("pilgrim-panel", "admin-emergency-queue-panel");
+        VBox side = new VBox(10, emergencyStatisticsCard(), emergencyTeamStatusCard(), emergencyActivityCard()); side.setPrefWidth(300);
+        GridPane main = new GridPane(); main.setHgap(12); main.add(queue, 0, 0); main.add(side, 1, 0); GridPane.setHgrow(queue, Priority.ALWAYS); queue.setMaxWidth(Double.MAX_VALUE); main.getColumnConstraints().addAll(new javafx.scene.layout.ColumnConstraints(0, 0, Double.MAX_VALUE, Priority.ALWAYS, javafx.geometry.HPos.LEFT, true), new javafx.scene.layout.ColumnConstraints(280, 300, 330, Priority.NEVER, javafx.geometry.HPos.LEFT, true));
+
+        TextField serviceSearch = new TextField(emergencyServiceSearch); serviceSearch.setPromptText("Search service name or location...");
+        ComboBox<String> category = combo("All", "Hospital", "Medical Camp", "First Aid", "Ambulance", "Police", "Fire / Safety", "Emergency Help Desk", "Emergency Exit"); category.setValue(emergencyServiceCategoryFilter);
+        ComboBox<String> serviceStatus = combo("All Status", "Active", "Inactive"); serviceStatus.setValue(emergencyServiceStatusFilter);
+        Button add = new Button("+ ADD SERVICE"); add.getStyleClass().add("primary-button"); add.setOnAction(e -> { editingEmergencyService = null; root.setCenter(scroll(emergencyServiceForm())); });
+        Button refreshServices = new Button("REFRESH"); refreshServices.getStyleClass().add("secondary-button"); refreshServices.setOnAction(e -> loadEmergencyServicesAsync());
+        serviceSearch.textProperty().addListener((o,a,v) -> emergencyServiceSearch = v); serviceSearch.setOnAction(e -> rebuildEmergencyPage()); category.setOnAction(e -> { emergencyServiceCategoryFilter = category.getValue(); rebuildEmergencyPage(); }); serviceStatus.setOnAction(e -> { emergencyServiceStatusFilter = serviceStatus.getValue(); rebuildEmergencyPage(); });
+        HBox serviceControls = new HBox(8, serviceSearch, category, serviceStatus, add, refreshServices); HBox.setHgrow(serviceSearch, Priority.ALWAYS);
+        VBox services = new VBox(0);
+        if (emergencyServicesLoading) services.getChildren().add(label("Loading emergency services...", "description-text"));
+        else if (!emergencyServicesError.isBlank() && !emergencyServicesPreviewActive) services.getChildren().add(label("Emergency service management is currently unavailable due to Firestore permissions.", "admin-emergency-empty"));
+        else { if (emergencyServicesPreviewActive) services.getChildren().add(label(emergencyServicesPreviewStatus(), "admin-emergency-preview-banner")); List<EmergencyService> visible = emergencyServices.stream().filter(this::matchesEmergencyServiceFilters).toList(); if (visible.isEmpty()) services.getChildren().add(label("No emergency services found.", "admin-emergency-empty")); else { services.getChildren().add(emergencyServiceTableHeader()); visible.forEach(s -> services.getChildren().add(emergencyServiceTableRow(s))); } }
+        VBox servicePanel = new VBox(7, sectionTitle("Registered Emergency Services"), muted("Manage hospitals, police stations, fire stations, and emergency services."), serviceControls, services); servicePanel.getStyleClass().addAll("pilgrim-panel", "admin-emergency-services-panel");
+        VBox content = new VBox(12, topControls(), header, summary, alert, main, servicePanel); content.getStyleClass().addAll("pilgrim-dashboard-main", "admin-emergency-page"); content.setPadding(new Insets(12, 22, 28, 22)); return content;
     }
+
+    private GridPane emergencyTableHeader() { return emergencyGridRow("admin-emergency-table-header", "ID", "Type", "Status", "Priority", "Reporter", "People", "Location", "Received", "Actions"); }
+    private VBox emergencyTableRow(EmergencyReport r) {
+        Label type = label(r.source().name(), "admin-emergency-source-badge");
+        Label state = label(r.status().name().replace('_', ' '), "admin-emergency-status-badge"); state.getStyleClass().add("admin-emergency-status-" + r.status().name().toLowerCase());
+        Label priority = label(r.priority().name(), "admin-emergency-priority-badge"); priority.getStyleClass().add("admin-emergency-priority-" + r.priority().name().toLowerCase());
+        Button view = new Button("VIEW"); view.getStyleClass().add("secondary-button"); view.setOnAction(e -> { expandedEmergencyReportId = r.emergencyId(); rebuildEmergencyPage(); });
+        GridPane row = emergencyGridRow("admin-emergency-table-row", valueOr("Not available", r.trackingId()), type, state, priority, valueOr("Not available", r.reporterName()), String.valueOf(r.peopleAffected()), valueOr("Not available", r.locationLabel()), valueOr("Not available", r.createdAt()), view);
+        if (r.priority() == EmergencyReport.Priority.CRITICAL && r.unresolved()) row.getStyleClass().add("admin-emergency-table-critical");
+        VBox box = new VBox(row); if (r.emergencyId().equals(expandedEmergencyReportId)) box.getChildren().add(emergencyCaseDetails(r)); return box;
+    }
+    private HBox emergencyPagination(int total, int from, int to) { int pages = (int) Math.ceil(total / 8.0); Label copy = label("Showing " + (from + 1) + "–" + to + " of " + total + " emergencies", "admin-emergency-pagination-copy"); HBox bar = new HBox(6, copy, createSpacer()); for (int p = 0; p < pages && p < 5; p++) { final int page = p; Button button = new Button(String.valueOf(p + 1)); button.getStyleClass().add("secondary-button"); if (p == emergencyReportPage) button.getStyleClass().add("admin-emergency-page-current"); button.setOnAction(e -> { emergencyReportPage = page; rebuildEmergencyPage(); }); bar.getChildren().add(button); } if (emergencyReportPage < pages - 1) { Button next = new Button(">"); next.getStyleClass().add("secondary-button"); next.setOnAction(e -> { emergencyReportPage++; rebuildEmergencyPage(); }); bar.getChildren().add(next); } bar.setAlignment(Pos.CENTER_LEFT); bar.getStyleClass().add("admin-emergency-pagination"); return bar; }
+    private GridPane emergencyGridRow(String style, Object... values) { GridPane grid = new GridPane(); grid.setHgap(8); grid.setVgap(3); String[] widths = {"12%","9%","13%","10%","14%","7%","14%","12%","9%"}; for (int i = 0; i < values.length; i++) { Node node = values[i] instanceof Node ? (Node) values[i] : label(String.valueOf(values[i]), "admin-emergency-table-cell"); grid.add(node, i, 0); GridPane.setHgrow(node, Priority.ALWAYS); } grid.getStyleClass().add(style); return grid; }
+    private VBox emergencyStatisticsCard() { long newSos = emergencyReports.stream().filter(r -> r.source() == EmergencyReport.Source.SOS && r.status() == EmergencyReport.Status.REPORTED).count(); long inProgress = emergencyReports.stream().filter(r -> r.unresolved() && r.status() != EmergencyReport.Status.REPORTED).count(); long high = emergencyReports.stream().filter(r -> r.unresolved() && (r.priority() == EmergencyReport.Priority.CRITICAL || r.priority() == EmergencyReport.Priority.HIGH)).count(); long resolved = emergencyReports.stream().filter(r -> r.status() == EmergencyReport.Status.RESOLVED).count(); GridPane stats = new GridPane(); stats.setHgap(8); stats.setVgap(8); String[][] values = {{"NEW SOS",String.valueOf(newSos)},{"IN PROGRESS",String.valueOf(inProgress)},{"HIGH PRIORITY",String.valueOf(high)},{"RESOLVED",String.valueOf(resolved)}}; for(int i=0;i<values.length;i++){VBox cell=new VBox(2,label(values[i][1],"admin-emergency-stat-value"),label(values[i][0],"admin-emergency-stat-label"));cell.getStyleClass().add("admin-emergency-stat-box");stats.add(cell,i%2,i/2);} VBox card=new VBox(9,sectionTitle("Emergency Statistics"),label("Last 24 Hours", "admin-emergency-side-note"),stats);card.getStyleClass().addAll("pilgrim-panel","admin-emergency-side-card");return card; }
+    private VBox emergencyTeamStatusCard() { VBox rows = new VBox(6); for(String team:List.of("Medical Team","Police Team","Fire Team","Control Room")){HBox row=new HBox(6,label(team,"admin-emergency-team-name"),createSpacer(),label("Active","admin-emergency-team-active"));row.getStyleClass().add("admin-emergency-team-row");rows.getChildren().add(row);} VBox card=new VBox(8,sectionTitle("Team Status"),rows);card.getStyleClass().addAll("pilgrim-panel","admin-emergency-side-card");return card; }
+    private VBox emergencyActivityCard() { VBox rows=new VBox(6); emergencyReports.stream().sorted(java.util.Comparator.comparing(EmergencyReport::createdAt,java.util.Comparator.reverseOrder())).limit(5).forEach(r->{String text=r.status()==EmergencyReport.Status.RESOLVED?"Emergency resolved":r.status()==EmergencyReport.Status.TEAM_DISPATCHED?"Response team dispatched":"New " + r.source().name() + " received"; HBox row=new HBox(6,label("●","admin-emergency-activity-dot"),new VBox(1,label(text,"admin-emergency-activity-text"),label(valueOr("Not available",r.createdAt()),"admin-emergency-side-note")));row.getStyleClass().add("admin-emergency-activity-row");rows.getChildren().add(row);}); if(rows.getChildren().isEmpty())rows.getChildren().add(label("No recent activity.","admin-emergency-empty")); VBox card=new VBox(8,sectionTitle("Recent Activity"),rows);card.getStyleClass().addAll("pilgrim-panel","admin-emergency-side-card");return card; }
+    private GridPane emergencyServiceTableHeader() { return emergencyServiceGrid("admin-emergency-table-header", "NAME", "CATEGORY", "LOCATION", "CONTACT", "STATUS", "ACTIONS"); }
+    private GridPane emergencyServiceTableRow(EmergencyService s) { Button edit=new Button("EDIT");edit.getStyleClass().add("secondary-button");edit.setOnAction(e->{editingEmergencyService=s;root.setCenter(scroll(emergencyServiceForm()));});Button active=new Button(s.active()?"DEACTIVATE":"ACTIVATE");active.getStyleClass().add("secondary-button");active.setOnAction(e->saveEmergencyService(copyActive(s,!s.active()),active));Button delete=new Button("DELETE");delete.getStyleClass().add("secondary-button");delete.setOnAction(e->deleteEmergencyService(s,delete));HBox actions=new HBox(5,edit,active,delete);Label status=label(s.active()?"ACTIVE":"INACTIVE","admin-emergency-service-visibility");status.getStyleClass().add(s.active()?"admin-emergency-visible":"admin-emergency-inactive");return emergencyServiceGrid("admin-emergency-table-row",adminEmergencyServiceValue(s.name(),"Unnamed service"),emergencyServiceCategoryLabel(s.category()),adminEmergencyServiceValue(s.sector(),"Not available")+" / "+adminEmergencyServiceValue(s.area(),"Not available"),adminEmergencyServiceValue(s.contactNumber(),"Not available"),status,actions); }
+    private GridPane emergencyServiceGrid(String style,Object...values){GridPane grid=new GridPane();grid.setHgap(8);for(int i=0;i<values.length;i++){Node node=values[i] instanceof Node?(Node)values[i]:label(String.valueOf(values[i]),"admin-emergency-table-cell");grid.add(node,i,0);GridPane.setHgrow(node,Priority.ALWAYS);}grid.getStyleClass().add(style);return grid;}
+
+    private VBox legacyEmergencyPage() {
+        long active = emergencyReports.stream().filter(EmergencyReport::unresolved).count();
+        long critical = emergencyReports.stream().filter(r -> r.unresolved() && r.priority() == EmergencyReport.Priority.CRITICAL).count();
+        long medical = emergencyReports.stream().filter(r -> r.unresolved() && r.emergencyType() == EmergencyReport.EmergencyType.MEDICAL).count();
+        long police = emergencyReports.stream().filter(r -> r.unresolved() && r.emergencyType() == EmergencyReport.EmergencyType.POLICE_SECURITY).count();
+        long fireCrowd = emergencyReports.stream().filter(r -> r.unresolved() && (r.emergencyType() == EmergencyReport.EmergencyType.FIRE || r.emergencyType() == EmergencyReport.EmergencyType.CROWD_RISK)).count();
+        long resolved = emergencyReports.stream().filter(r -> r.status() == EmergencyReport.Status.RESOLVED).count();
+        HBox live = new HBox(6, label("●", "admin-emergency-live-dot"), label("LIVE OPERATIONS", "admin-emergency-live-label")); live.setAlignment(Pos.CENTER_RIGHT);
+        HBox header = new HBox(12, new VBox(3, sectionTitle("Emergency Management"), muted("Monitor SOS requests, coordinate response teams and manage emergency services.")), createSpacer(), live);
+        header.getStyleClass().add("admin-emergency-header");
+        HBox summary = new HBox(10, emergencySummaryCard("ACTIVE CASES", active, "Currently being handled"), emergencySummaryCard("CRITICAL", critical, "Immediate attention"), emergencySummaryCard("MEDICAL", medical, "Medical response needed"), emergencySummaryCard("POLICE / SECURITY", police, "Security coordination"), emergencySummaryCard("FIRE / CROWD", fireCrowd, "Safety response"), emergencySummaryCard("RESOLVED", resolved, "Closed cases"));
+
+        TextField reportSearch = new TextField(emergencyReportSearch); reportSearch.setPromptText("Search Emergency...");
+        ComboBox<String> priority = combo("All", "Critical", "High", "Medium"); priority.setValue(emergencyReportPriorityFilter);
+        ComboBox<String> status = combo("All", "Reported", "Acknowledged", "Team Dispatched", "Help Arriving", "Resolved"); status.setValue(emergencyReportStatusFilter);
+        ComboBox<String> type = combo("All", "Medical", "Police", "Fire", "Crowd", "Other"); type.setValue(emergencyReportTypeFilter);
+        Button refreshReports = new Button("REFRESH"); refreshReports.getStyleClass().add("secondary-button"); refreshReports.setOnAction(e -> loadEmergencyReportsAsync());
+        reportSearch.textProperty().addListener((o, a, v) -> emergencyReportSearch = v); reportSearch.setOnAction(e -> rebuildEmergencyPage()); priority.setOnAction(e -> { emergencyReportPriorityFilter = priority.getValue(); rebuildEmergencyPage(); }); status.setOnAction(e -> { emergencyReportStatusFilter = status.getValue(); rebuildEmergencyPage(); }); type.setOnAction(e -> { emergencyReportTypeFilter = type.getValue(); rebuildEmergencyPage(); });
+        HBox reportControls = new HBox(8, reportSearch, priority, status, type, refreshReports); HBox.setHgrow(reportSearch, Priority.ALWAYS);
+        VBox queue = new VBox(9);
+        if (emergencyReportsLoading) queue.getChildren().add(label("Loading emergency reports...", "description-text"));
+        else if (!emergencyReportsError.isBlank()) queue.getChildren().add(new VBox(7, label("Could not load emergency reports.", "admin-emergency-empty"), refreshReports));
+        else {
+            List<EmergencyReport> ordered = emergencyReports.stream().filter(this::matchesEmergencyReportFilters).sorted(java.util.Comparator.comparing((EmergencyReport r) -> r.status() == EmergencyReport.Status.RESOLVED).thenComparingInt(r -> r.priority().ordinal()).thenComparing(EmergencyReport::createdAt, java.util.Comparator.reverseOrder())).toList();
+            if (ordered.isEmpty()) queue.getChildren().add(label("No active emergency cases.", "admin-emergency-empty")); else ordered.forEach(r -> queue.getChildren().add(emergencyQueueCard(r)));
+        }
+        VBox queuePanel = new VBox(6, sectionTitle("Emergency Response Queue"), muted("Live SOS and emergency reports"), reportControls, queue); queuePanel.getStyleClass().addAll("pilgrim-panel", "admin-emergency-queue-panel");
+
+        TextField serviceSearch = new TextField(emergencyServiceSearch); serviceSearch.setPromptText("Search services...");
+        ComboBox<String> serviceFilter = combo("All", "Hospital", "Medical Camp", "First Aid", "Ambulance", "Police", "Fire / Safety", "Emergency Help Desk", "Emergency Exit"); serviceFilter.setValue(emergencyServiceCategoryFilter);
+        Button addService = new Button("+ ADD SERVICE"); addService.getStyleClass().add("primary-button"); addService.setOnAction(e -> { editingEmergencyService = null; root.setCenter(scroll(emergencyServiceForm())); });
+        Button refreshServices = new Button("REFRESH"); refreshServices.getStyleClass().add("secondary-button"); refreshServices.setOnAction(e -> loadEmergencyServicesAsync());
+        serviceSearch.textProperty().addListener((o, a, v) -> emergencyServiceSearch = v); serviceSearch.setOnAction(e -> rebuildEmergencyPage()); serviceFilter.setOnAction(e -> { emergencyServiceCategoryFilter = serviceFilter.getValue(); rebuildEmergencyPage(); });
+        HBox serviceControls = new HBox(8, serviceSearch, serviceFilter, addService, refreshServices); HBox.setHgrow(serviceSearch, Priority.ALWAYS);
+        VBox serviceRows = new VBox(8);
+        if (emergencyServicesLoading) serviceRows.getChildren().add(label("Loading emergency services...", "description-text"));
+        else if (!emergencyServicesError.isBlank() && !emergencyServicesPreviewActive) serviceRows.getChildren().add(label("Emergency service management is currently unavailable due to Firestore permissions.", "admin-emergency-empty"));
+        else { if (emergencyServicesPreviewActive) serviceRows.getChildren().add(label(emergencyServicesPreviewStatus(), "admin-emergency-preview-banner")); List<EmergencyService> services = emergencyServices.stream().filter(this::matchesEmergencyServiceFilters).toList(); if (services.isEmpty()) serviceRows.getChildren().add(label("No emergency services found.", "admin-emergency-empty")); else services.forEach(s -> serviceRows.getChildren().add(emergencyServiceRow(s))); if (!emergencyServicesPreviewMessage.isBlank()) serviceRows.getChildren().add(label(emergencyServicesPreviewMessage, "description-text")); }
+        VBox servicesPanel = new VBox(6, sectionTitle("Emergency Services"), muted("Manage services visible to pilgrims"), serviceControls, serviceRows); servicesPanel.getStyleClass().addAll("pilgrim-panel", "admin-emergency-services-panel");
+        VBox content = new VBox(12, topControls(), header, summary, queuePanel, servicesPanel); content.getStyleClass().addAll("pilgrim-dashboard-main", "admin-emergency-page"); content.setPadding(new Insets(12, 22, 28, 22)); return content;
+    }
+
+    private void rebuildEmergencyPage() { if ("Emergency".equals(selectedSection)) root.setCenter(scroll(emergencyPage())); }
+    private VBox emergencySummaryCard(String title, long value, String detail) { VBox card = new VBox(2, label(String.valueOf(value), "admin-emergency-summary-value"), label(title, "admin-emergency-summary-label"), muted(detail)); card.getStyleClass().add("admin-emergency-summary-card"); HBox.setHgrow(card, Priority.ALWAYS); return card; }
+    private boolean matchesEmergencyReportFilters(EmergencyReport r) { String q = emergencyReportSearch == null ? "" : emergencyReportSearch.trim().toLowerCase(); boolean search = q.isBlank() || String.join(" ", r.trackingId(), r.reporterName(), r.locationLabel(), r.emergencyType().name()).toLowerCase().contains(q); boolean priority = "All".equals(emergencyReportPriorityFilter) || r.priority().name().equalsIgnoreCase(emergencyReportPriorityFilter); boolean status = "All".equals(emergencyReportStatusFilter) || r.status().name().replace('_', ' ').equalsIgnoreCase(emergencyReportStatusFilter); boolean type = "All".equals(emergencyReportTypeFilter) || r.emergencyType().name().startsWith(emergencyReportTypeFilter.toUpperCase().replace(' ', '_')) || ("Other".equals(emergencyReportTypeFilter) && !java.util.Set.of(EmergencyReport.EmergencyType.MEDICAL, EmergencyReport.EmergencyType.POLICE_SECURITY, EmergencyReport.EmergencyType.FIRE, EmergencyReport.EmergencyType.CROWD_RISK).contains(r.emergencyType())); return search && priority && status && type; }
+    private VBox emergencyQueueCard(EmergencyReport r) { Label priority = label(r.priority().name(), "admin-emergency-priority-badge"); priority.getStyleClass().add("admin-emergency-priority-" + r.priority().name().toLowerCase()); Label source = label(r.source().name(), "admin-emergency-source-badge"); HBox badges = new HBox(6, priority, source, createSpacer(), label(valueOr("Not available", r.trackingId()), "admin-emergency-tracking")); Label state = label(r.status().name().replace('_', ' '), "admin-emergency-status-badge"); state.getStyleClass().add("admin-emergency-status-" + r.status().name().toLowerCase()); Button details = new Button(r.emergencyId().equals(expandedEmergencyReportId) ? "HIDE DETAILS" : "VIEW DETAILS"); details.getStyleClass().add("secondary-button"); details.setOnAction(e -> { expandedEmergencyReportId = r.emergencyId().equals(expandedEmergencyReportId) ? "" : r.emergencyId(); rebuildEmergencyPage(); }); Button acknowledge = new Button("ACKNOWLEDGE"); acknowledge.getStyleClass().add("primary-button"); acknowledge.setVisible(r.status() == EmergencyReport.Status.REPORTED); acknowledge.setManaged(r.status() == EmergencyReport.Status.REPORTED); acknowledge.setOnAction(e -> updateEmergencyFromAdmin(r, r.priority().name(), EmergencyReport.Status.ACKNOWLEDGED.name(), r.assignedTeamName().isBlank() ? "Unassigned" : r.assignedTeamName(), r.adminNotes(), acknowledge)); HBox actions = new HBox(8, state, createSpacer(), details, acknowledge); VBox card = new VBox(8, badges, label(r.emergencyType().name().replace('_', ' '), "admin-emergency-case-title"), label(valueOr("Not available", r.locationLabel()), "admin-emergency-case-location"), label("Reporter: " + valueOr("Not available", r.reporterName()) + "    Contact: " + valueOr("Not available", r.reporterPhone()), "admin-emergency-case-meta"), label(valueOr("No description available", r.description()), "admin-emergency-case-meta"), label("Assigned team: " + valueOr("Unassigned", r.assignedTeamName()), "admin-emergency-case-meta"), actions); card.getStyleClass().add("admin-emergency-case-card"); if (r.priority() == EmergencyReport.Priority.CRITICAL && r.unresolved()) card.getStyleClass().add("admin-emergency-case-critical"); if (r.emergencyId().equals(focusedEmergencyReportId)) { card.getStyleClass().add("admin-emergency-sos-selected"); focusedEmergencyReportId = ""; expandedEmergencyReportId = r.emergencyId(); } if (r.emergencyId().equals(expandedEmergencyReportId)) card.getChildren().add(emergencyCaseDetails(r)); return card; }
+    private VBox emergencyCaseDetails(EmergencyReport r) { ComboBox<String> priority = combo(r.priority().name(), "CRITICAL", "HIGH", "MEDIUM"); ComboBox<String> status = combo(r.status().name(), "REPORTED", "ACKNOWLEDGED", "TEAM_DISPATCHED", "HELP_ARRIVING", "RESOLVED"); ComboBox<String> team = combo("Unassigned", "Medical Team", "Police Team", "Fire & Safety Team", "Crowd Control Team", "Ambulance Team", "Ghat Rescue Team", "Emergency Support Team"); team.setValue(r.assignedTeamName().isBlank() ? "Unassigned" : r.assignedTeamName()); TextArea notes = new TextArea(r.adminNotes()); notes.setPromptText("Admin notes"); notes.setPrefRowCount(2); GridPane info = new GridPane(); info.setHgap(14); info.setVgap(6); String[][] fields = {{"Tracking ID",r.trackingId()},{"Source",r.source().name()},{"Landmark",r.landmark()},{"Latitude",String.valueOf(r.latitude())},{"Longitude",String.valueOf(r.longitude())},{"Created",r.createdAt()},{"Acknowledged",r.acknowledgedAt()},{"Dispatched",r.dispatchedAt()},{"Help arriving",r.helpArrivingAt()},{"Resolved",r.resolvedAt()}}; for (int i=0;i<fields.length;i++) { VBox field = new VBox(1,label(fields[i][0],"admin-emergency-detail-label"),label(valueOr("Not available",fields[i][1]),"admin-emergency-detail-value")); info.add(field,i%2,i/2); GridPane.setHgrow(field,Priority.ALWAYS); } Button update = new Button("UPDATE CASE"); update.getStyleClass().add("primary-button"); update.setOnAction(e -> updateEmergencyFromAdmin(r,priority.getValue(),status.getValue(),team.getValue(),notes.getText(),update)); Button resolve = new Button("MARK RESOLVED"); resolve.getStyleClass().add("secondary-button"); resolve.setVisible(r.status()!=EmergencyReport.Status.RESOLVED); resolve.setManaged(r.status()!=EmergencyReport.Status.RESOLVED); resolve.setOnAction(e -> updateEmergencyFromAdmin(r,priority.getValue(),EmergencyReport.Status.RESOLVED.name(),team.getValue(),notes.getText(),resolve)); HBox controls=new HBox(8,priority,status,team,createSpacer(),resolve,update); VBox detail=new VBox(9,label("CASE DETAILS & RESPONSE","admin-emergency-details-heading"),info,label("Admin Notes","admin-emergency-detail-label"),notes,controls); detail.getStyleClass().add("admin-emergency-details"); return detail; }
+    private boolean matchesEmergencyServiceFilters(EmergencyService s) { String q=emergencyServiceSearch==null?"":emergencyServiceSearch.trim().toLowerCase(); return (q.isBlank() || (s.name()+" "+s.sector()+" "+s.area()).toLowerCase().contains(q)) && ("All".equals(emergencyServiceCategoryFilter)||emergencyServiceCategoryLabel(s.category()).equals(emergencyServiceCategoryFilter)) && ("All Status".equals(emergencyServiceStatusFilter) || ("Active".equals(emergencyServiceStatusFilter) == s.active())); }
+    private String emergencyServiceCategoryLabel(EmergencyService.Category c) { return switch(c) { case HOSPITAL -> "Hospital"; case MEDICAL_CAMP -> "Medical Camp"; case FIRST_AID -> "First Aid"; case AMBULANCE -> "Ambulance"; case POLICE -> "Police"; case FIRE_SAFETY -> "Fire / Safety"; case HELP_DESK -> "Emergency Help Desk"; case EMERGENCY_EXIT -> "Emergency Exit"; }; }
+    private VBox emergencyServiceRow(EmergencyService s) { Label name=label(adminEmergencyServiceValue(s.name(),"Unnamed emergency service"),"admin-emergency-service-name"); Label category=label(emergencyServiceCategoryLabel(s.category()),"admin-emergency-service-category"); Label visibility=label(s.active()?"VISIBLE":"INACTIVE","admin-emergency-service-visibility"); visibility.getStyleClass().add(s.active()?"admin-emergency-visible":"admin-emergency-inactive"); Button edit=new Button("EDIT"); edit.getStyleClass().add("secondary-button"); edit.setOnAction(e->{editingEmergencyService=s;root.setCenter(scroll(emergencyServiceForm()));}); Button active=new Button(s.active()?"DEACTIVATE":"ACTIVATE"); active.getStyleClass().add("secondary-button"); active.setOnAction(e->saveEmergencyService(copyActive(s,!s.active()),active)); Button delete=new Button("DELETE"); delete.getStyleClass().add("secondary-button"); delete.setOnAction(e->deleteEmergencyService(s,delete)); VBox copy=new VBox(3,new HBox(7,name,category),label(adminEmergencyServiceValue(s.sector(),"Not available")+" / "+adminEmergencyServiceValue(s.area(),"Not available"),"admin-emergency-service-meta"),new HBox(14,label(s.operationalStatus().name().replace('_',' '),"admin-emergency-service-status"),label("Contact: "+adminEmergencyServiceValue(s.contactNumber(),"Not available"),"admin-emergency-service-meta"))); HBox.setHgrow(copy,Priority.ALWAYS); HBox row=new HBox(10,copy,visibility,edit,active,delete); row.setAlignment(Pos.CENTER_LEFT); row.getStyleClass().add("admin-emergency-service-card"); return new VBox(row); }
+    private String adminEmergencyServiceValue(String value, String fallback) { return value == null || value.isBlank() ? fallback : value; }
 
     /** Starts after a valid admin session exists. The first successful read establishes a no-popup baseline. */
     private void startAdminSosMonitor() {
@@ -3410,7 +3467,7 @@ public class AdminDashboardPage {
             return thread;
         });
         System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=START adminUid=" + user.uid());
-        sosMonitorTask = sosMonitorExecutor.scheduleWithFixedDelay(this::pollAdminSosReports, 0, 5, TimeUnit.SECONDS);
+        sosMonitorTask = sosMonitorExecutor.scheduleWithFixedDelay(this::pollAdminSosReports, 0, 3, TimeUnit.SECONDS);
     }
 
     /** Stops the admin-session monitor; called on logout and available for any future page disposal path. */
@@ -3429,6 +3486,8 @@ public class AdminDashboardPage {
         sosMonitorFailureLogged = false;
         pendingSosReports.clear();
         notifiedEmergencyIds.clear();
+        if (sosToastLayer != null) sosToastLayer.getChildren().clear();
+        activeSosToast = null;
     }
 
     private void pollAdminSosReports() {
@@ -3545,79 +3604,82 @@ public class AdminDashboardPage {
     private void showNextSosPopup() {
         if (sosPopupVisible || pendingSosReports.isEmpty()) return;
         Stage owner = activeAdminStage();
-        if (owner == null || !isAdminSession()) {
-            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId="
+        if (owner == null || sosToastLayer == null || !isAdminSession()) {
+            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=TOAST emergencyId="
                     + pendingSosReports.peekFirst().emergencyId() + " result=failed reason=STALE_OWNER");
             return;
         }
         EmergencyReport report = pendingSosReports.removeFirst();
         sosPopupVisible = true;
         try {
-            Dialog<ButtonType> dialog = new Dialog<>();
-            dialog.initOwner(owner);
-            dialog.setTitle("Emergency SOS Received");
-            dialog.getDialogPane().getStyleClass().add("admin-sos-popup");
-            dialog.getDialogPane().getStylesheets().addAll(owner.getScene().getStylesheets());
-
-            Label heading = label("EMERGENCY SOS RECEIVED", "admin-sos-popup-title");
+            Label heading = label("EMERGENCY SOS RECEIVED", "admin-sos-toast-title");
+            Label severity = label("CRITICAL", "admin-sos-toast-severity");
             Label tracking = label("Tracking ID: " + valueOr("Not available", report.trackingId()), "admin-sos-popup-tracking");
-            Label details = label("Type: " + report.emergencyType().name().replace('_', ' ')
-                    + "\nPriority: " + report.priority()
+            Label details = label("Reporter: " + valueOr("Not available", report.reporterName())
+                    + "\nEmergency Type: " + report.emergencyType().name().replace('_', ' ')
                     + "\nLocation: " + valueOr("Not available", report.locationLabel())
-                    + "\nReporter: " + valueOr("Not available", report.reporterName())
-                    + "\nContact: " + valueOr("Not available", report.reporterPhone())
-                    + "\nTime: " + valueOr("Not available", report.createdAt()), "admin-sos-popup-detail");
+                    + "\nPeople Affected: " + report.peopleAffected()
+                    + "\nReceived: " + valueOr("Not available", report.createdAt()), "admin-sos-popup-detail");
+            Label description = label(valueOr("", report.description()), "admin-sos-toast-description");
+            description.setWrapText(true);
             Label error = label("", "admin-sos-popup-error");
             error.setWrapText(true);
-            VBox content = new VBox(8, heading, tracking, details, error);
-            content.getStyleClass().add("admin-sos-popup-content");
-            dialog.getDialogPane().setContent(content);
-
-            ButtonType acknowledge = new ButtonType("ACKNOWLEDGE", ButtonBar.ButtonData.OK_DONE);
-            ButtonType view = new ButtonType("VIEW EMERGENCY", ButtonBar.ButtonData.OTHER);
-            ButtonType dismiss = new ButtonType("DISMISS", ButtonBar.ButtonData.CANCEL_CLOSE);
-            dialog.getDialogPane().getButtonTypes().addAll(acknowledge, view, dismiss);
-            Button acknowledgeButton = (Button) dialog.getDialogPane().lookupButton(acknowledge);
-            Button viewButton = (Button) dialog.getDialogPane().lookupButton(view);
+            Button close = new Button("x");
+            close.getStyleClass().add("admin-sos-toast-close");
+            Button acknowledgeButton = new Button("ACKNOWLEDGE");
             acknowledgeButton.getStyleClass().add("admin-sos-popup-acknowledge");
+            Button viewButton = new Button("VIEW");
             viewButton.getStyleClass().add("admin-sos-popup-view");
-            acknowledgeButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
-                event.consume();
-                acknowledgeSosFromPopup(report, dialog, acknowledgeButton, error);
-            });
-            viewButton.addEventFilter(javafx.event.ActionEvent.ACTION, event -> {
-                event.consume();
+            HBox header = new HBox(8, heading, createSpacer(), severity, close);
+            header.setAlignment(Pos.CENTER_LEFT);
+            HBox actions = new HBox(8, viewButton, acknowledgeButton);
+            actions.setAlignment(Pos.CENTER_RIGHT);
+            VBox toast = new VBox(8, header, tracking, details, description, error, actions);
+            toast.getStyleClass().add("admin-sos-toast");
+            toast.setMaxWidth(360);
+            toast.setMinWidth(340);
+
+            close.setOnAction(event -> dismissSosToast());
+            acknowledgeButton.setOnAction(event -> acknowledgeSosFromToast(report, acknowledgeButton, error));
+            viewButton.setOnAction(event -> {
                 focusedEmergencyReportId = report.emergencyId();
-                dialog.close();
+                dismissSosToast();
                 showSection("Emergency");
             });
-            dialog.setOnHidden(event -> {
-                sosPopupVisible = false;
-                Platform.runLater(this::showNextSosPopup);
-            });
-            dialog.show();
-            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId=" + report.emergencyId() + " result=success");
+            activeSosToast = toast;
+            sosToastLayer.getChildren().add(toast);
+            StackPane.setAlignment(toast, Pos.TOP_RIGHT);
+            StackPane.setMargin(toast, new Insets(24, 26, 0, 0));
+            System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=TOAST emergencyId=" + report.emergencyId() + " result=success");
         } catch (RuntimeException exception) {
             sosPopupVisible = false;
             notifiedEmergencyIds.remove(report.emergencyId());
-            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=POPUP emergencyId=" + report.emergencyId()
+            System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=TOAST emergencyId=" + report.emergencyId()
                     + " result=failed error=" + exception.getMessage());
         }
+    }
+
+    private void dismissSosToast() {
+        if (activeSosToast != null && sosToastLayer != null) sosToastLayer.getChildren().remove(activeSosToast);
+        activeSosToast = null;
+        sosPopupVisible = false;
+        Platform.runLater(this::showNextSosPopup);
     }
 
     /** Returns the currently visible window hosting this dashboard, not a stale navigation stage. */
     private Stage activeAdminStage() {
         for (Window window : Window.getWindows()) {
             if (window instanceof Stage candidate && candidate.isShowing() && candidate.getScene() != null
-                    && candidate.getScene().getRoot() == root) {
+                    && (candidate.getScene().getRoot() == adminOverlay || candidate.getScene().getRoot() == root)) {
                 return candidate;
             }
         }
-        return stage != null && stage.isShowing() && stage.getScene() != null && stage.getScene().getRoot() == root
+        return stage != null && stage.isShowing() && stage.getScene() != null
+                && (stage.getScene().getRoot() == adminOverlay || stage.getScene().getRoot() == root)
                 ? stage : null;
     }
 
-    private void acknowledgeSosFromPopup(EmergencyReport report, Dialog<ButtonType> dialog, Button acknowledgeButton, Label error) {
+    private void acknowledgeSosFromToast(EmergencyReport report, Button acknowledgeButton, Label error) {
         AppSession.User user = AppSession.currentUser();
         if (user == null) {
             error.setText("Admin session is no longer available. Please sign in again.");
@@ -3637,11 +3699,13 @@ public class AdminDashboardPage {
                 Platform.runLater(() -> {
                     emergencyReports = emergencyReports.stream()
                             .map(item -> item.emergencyId().equals(updated.emergencyId()) ? updated : item).toList();
-                    dialog.close();
+                    System.out.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=ACKNOWLEDGE emergencyId="
+                            + updated.emergencyId() + " result=success");
+                    dismissSosToast();
                     if ("Emergency".equals(selectedSection)) root.setCenter(scroll(emergencyPage()));
                 });
             } catch (Exception exception) {
-                System.err.println("EMERGENCY_SOS_MONITOR_DIAGNOSTIC action=ACKNOWLEDGE emergencyId="
+                System.err.println("ADMIN_SOS_MONITOR_DIAGNOSTIC action=ACKNOWLEDGE emergencyId="
                         + report.emergencyId() + " result=failed error=" + exception.getMessage());
                 Platform.runLater(() -> {
                     acknowledgeButton.setDisable(false);

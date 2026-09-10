@@ -34,6 +34,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -51,6 +53,8 @@ public final class FirestoreGateway implements GhatRepository {
     private static final String ROOT = "https://firestore.googleapis.com/v1/projects/%s/databases/(default)/documents";
     private static final Pattern DOCUMENT_PATTERN = Pattern.compile("\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\".*?\"fields\"\\s*:\\s*\\{(.*?)\\}\\s*(?:,\\s*\"createTime\"|,\\s*\"updateTime\"|\\})", Pattern.DOTALL);
     private static final Pattern STRING_FIELD_PATTERN = Pattern.compile("\"%s\"\\s*:\\s*\\{\\s*\"stringValue\"\\s*:\\s*\"(.*?)\"\\s*\\}", Pattern.DOTALL);
+    private static final AtomicInteger PROFILE_REQUEST_COUNT = new AtomicInteger();
+    private static final AtomicLong PROFILE_REQUEST_WINDOW_START = new AtomicLong(System.currentTimeMillis());
 
     private final FirebaseConfig config;
     private final HttpClient client = HttpClient.newBuilder()
@@ -994,6 +998,7 @@ public final class FirestoreGateway implements GhatRepository {
         if (!notBlank(uid)) {
             throw new MalformedProfileException("Firebase authentication succeeded but did not return a UID.");
         }
+        logProfileRequest();
         HttpRequest request = authorizedBuilder(documentUri(USERS, uid), idToken)
                 .timeout(Duration.ofSeconds(8))
                 .GET()
@@ -1002,10 +1007,22 @@ public final class FirestoreGateway implements GhatRepository {
         if (response.statusCode() == 404) {
             return null;
         }
+        if (response.statusCode() == 429) {
+            String firebaseStatus = firestoreErrorField(response.body(), "status");
+            String message = firestoreErrorField(response.body(), "message");
+            String retryAfter = response.headers().firstValue("Retry-After").orElse("");
+            System.err.println("FIRESTORE_HTTP_ERROR operation=GET_USER_PROFILE status=429 firebaseStatus="
+                    + safeErrorValue(firebaseStatus) + " message=" + safeErrorValue(message)
+                    + " retryAfter=" + safeErrorValue(retryAfter));
+            throw new TooManyRequestsException("Firestore profile read failed: 429", retryAfterMillis(retryAfter));
+        }
         if (response.statusCode() == 401 || response.statusCode() == 403) {
             throw new PermissionDeniedException("Firestore permission denied while reading " + USERS + "/" + uid + ".");
         }
         if (response.statusCode() >= 400) {
+            System.err.println("FIRESTORE_HTTP_ERROR operation=GET_USER_PROFILE status=" + response.statusCode()
+                    + " firebaseStatus=" + safeErrorValue(firestoreErrorField(response.body(), "status"))
+                    + " message=" + safeErrorValue(firestoreErrorField(response.body(), "message")));
             throw new IOException("Firestore profile read failed: " + response.statusCode());
         }
         String body = response.body();
@@ -2654,6 +2671,44 @@ public final class FirestoreGateway implements GhatRepository {
         public PermissionDeniedException(String message) {
             super(message);
         }
+    }
+
+    private static void logProfileRequest() {
+        long now = System.currentTimeMillis();
+        long windowStart = PROFILE_REQUEST_WINDOW_START.get();
+        if (now - windowStart >= 10_000L && PROFILE_REQUEST_WINDOW_START.compareAndSet(windowStart, now)) {
+            PROFILE_REQUEST_COUNT.set(0);
+        }
+        int count = PROFILE_REQUEST_COUNT.incrementAndGet();
+        System.out.println("FIRESTORE_REQUEST_DIAGNOSTIC operation=GET_USER_PROFILE collection=users origin=FirestoreGateway.loadUserProfile");
+        System.out.println("FIRESTORE_REQUEST_COUNT total=" + count + " windowSeconds=10");
+    }
+
+    private static String firestoreErrorField(String body, String key) {
+        Matcher matcher = Pattern.compile("\\\"" + Pattern.quote(key) + "\\\"\\s*:\\s*\\\"(.*?)\\\"", Pattern.DOTALL)
+                .matcher(body == null ? "" : body);
+        return matcher.find() ? matcher.group(1).replaceAll("[\\r\\n]+", " ").trim() : "";
+    }
+
+    private static String safeErrorValue(String value) {
+        if (value == null || value.isBlank()) return "not-provided";
+        return value.length() > 240 ? value.substring(0, 240) : value;
+    }
+
+    private static long retryAfterMillis(String retryAfter) {
+        try {
+            return Math.max(0L, Long.parseLong(retryAfter.trim()) * 1000L);
+        } catch (RuntimeException ignored) {
+            return 0L;
+        }
+    }
+
+    /** A retryable profile-read throttle response; callers must keep retries bounded. */
+    public static class TooManyRequestsException extends IOException {
+        private final long retryAfterMillis;
+        public TooManyRequestsException(String message) { this(message, 0L); }
+        public TooManyRequestsException(String message, long retryAfterMillis) { super(message); this.retryAfterMillis = retryAfterMillis; }
+        public long retryAfterMillis() { return retryAfterMillis; }
     }
 
     public static class MalformedProfileException extends IOException {

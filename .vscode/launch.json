@@ -12,7 +12,10 @@
             "env": {
                 "PAYMENTS_BACKEND_ENABLED": "true",
                 "RAZORPAY_KEY_ID": "rzp_test_TW0TR01xawosH3",
-                "RAZORPAY_KEY_SECRET": "4RoA3n1hqhFITRHxjotfa2LT"
+                "RAZORPAY_KEY_SECRET": "4RoA3n1hqhFITRHxjotfa2LT",
+
+                "GOOGLE_APPLICATION_CREDENTIALS": "C:\\secret\\khumbh2-firebase-adminsdk-fbsvc-419d9de5d7.json",
+"PAYMENTS_FIREBASE_SERVICE_ACCOUNT_PATH": "C:\\secret\\khumbh2-firebase-adminsdk-fbsvc-419d9de5d7.json"
             }
         },
         {
@@ -27,7 +30,7 @@
             "request": "launch",
             "mainClass": "com.simhastha.Main",
             "projectName": "simhastha-connect",
-             "vmArgs": "-Xms512m -Xmx4g --module-path \"D://SuperX//javafx-sdk-21.0.12//lib\" --add-modules javafx.controls,javafx.fxml,javafx.web",            "env": {
+             "vmArgs": "-Xms512m -Xmx4g --module-path \"C://Java Project 26//openjfx-21.0.12_windows-x64_bin-sdk//javafx-sdk-21.0.12//lib\" --add-modules javafx.controls,javafx.fxml,javafx.web",            "env": {
                 "PAYMENTS_ENABLED": "true",
                 "PAYMENTS_BACKEND_BASE_URL": "http://localhost:8080",
                 "AVIATIONSTACK_API_KEY": "7b78b42aea29681f6d328a9f926ea102"

@@ -7,6 +7,8 @@ import com.simhastha.util.NavigationUtil;
 
 import java.io.File;
 import java.net.URL;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -30,6 +32,7 @@ import javafx.stage.Stage;
 public class UserAuthPage {
 
     private final UserAuthController controller = new UserAuthController();
+    private final AtomicBoolean loginInProgress = new AtomicBoolean();
     private VBox formSlot;
     private Stage currentStage;
 
@@ -94,7 +97,7 @@ public class UserAuthPage {
                 showInfo("Validation", "Please enter email and password.");
                 return;
             }
-            runAuth(loginButton, controller.login(userId, userPassword));
+            runAuth(loginButton, () -> controller.login(userId, userPassword));
         });
         emailMobile.setOnAction(event -> password.requestFocus());
         password.setOnAction(event -> loginButton.fire());
@@ -259,17 +262,42 @@ public class UserAuthPage {
         return button;
     }
 
-    private void runAuth(Button button, java.util.concurrent.CompletableFuture<AuthService.AuthOutcome> action) {
+    private void runAuth(Button button, Supplier<java.util.concurrent.CompletableFuture<AuthService.AuthOutcome>> actionSupplier) {
+        if (!loginInProgress.compareAndSet(false, true)) {
+            System.out.println("USER_LOGIN_TRACE step=SKIP reason=LOGIN_ALREADY_IN_PROGRESS");
+            return;
+        }
         button.setDisable(true);
         button.setText("PLEASE WAIT...");
+        java.util.concurrent.CompletableFuture<AuthService.AuthOutcome> action = actionSupplier.get();
         action.whenComplete((result, error) -> Platform.runLater(() -> {
+            loginInProgress.set(false);
             button.setDisable(false);
             button.setText("LOGIN");
             if (error != null || result == null || !result.success()) {
+                System.err.println("USER_LOGIN_ERROR step=AUTH_RESULT CAUSE=" + (error == null
+                        ? (result == null ? "No authentication result" : result.message())
+                        : error.getClass().getSimpleName()));
                 showInfo("Login Failed", result == null ? "Unable to login." : result.message());
                 return;
             }
-            AppNavigator.openDashboardFor(currentStage, result.user(), this::showInfo);
+            try {
+                System.out.println("USER_LOGIN_TRACE step=DASHBOARD_OPEN role=" + result.user().role());
+                AppNavigator.openDashboardFor(currentStage, result.user(), this::showInfo);
+                // Dashboard data is deliberately deferred until after profile validation and navigation.
+                java.util.concurrent.CompletableFuture.runAsync(() -> {
+                    try {
+                        AppDataStore.refreshFirebaseData(result.user().idToken());
+                    } catch (Exception preloadException) {
+                        System.err.println("USER_LOGIN_ERROR step=DASHBOARD_PRELOAD CAUSE="
+                                + preloadException.getClass().getSimpleName());
+                    }
+                });
+            } catch (RuntimeException navigationException) {
+                System.err.println("USER_LOGIN_ERROR step=DASHBOARD_OPEN CAUSE="
+                        + navigationException.getClass().getSimpleName());
+                showInfo("Login Failed", "Unable to open your dashboard. Please try again.");
+            }
         }));
     }
 

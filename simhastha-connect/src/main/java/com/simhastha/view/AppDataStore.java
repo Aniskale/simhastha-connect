@@ -141,7 +141,8 @@ public final class AppDataStore {
         about.add(new ServiceItem("Approval-first Marketplace",
                 "Business and transport entries become public only after admin approval.", "About"));
         seedFaqs();
-        loadFirebaseDataIfAvailable();
+        // Firebase data must not be fetched while the unauthenticated login UI is starting.
+        // Role-scoped refreshes begin only after a profile-backed session has been established.
     }
 
     private AppDataStore() {

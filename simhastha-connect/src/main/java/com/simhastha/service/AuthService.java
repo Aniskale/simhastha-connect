@@ -22,6 +22,9 @@ import com.simhastha.config.CloudinaryFolders;
 import com.simhastha.model.CloudinaryUploadResult;
 import java.io.File;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public final class AuthService {
 
@@ -34,6 +37,11 @@ public final class AuthService {
     private static final ApprovalDao APPROVAL_DAO = new FirestoreApprovalDao(FIRESTORE);
     private static final java.util.Set<String> VALID_ROLES = java.util.Set.of(
             "user", "business", "transport_operator", "admin");
+    private static final ScheduledExecutorService PROFILE_RETRY_EXECUTOR = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "user-profile-retry");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private AuthService() {
     }
@@ -44,69 +52,127 @@ public final class AuthService {
 
     public static CompletableFuture<AuthOutcome> login(String email, String password, String expectedRole) {
         return CompletableFuture.supplyAsync(() -> {
+            String step = "START";
+            System.out.println("USER_LOGIN_TRACE step=START firebaseEnabled=" + CONFIG.isEnabled());
             if (!CONFIG.isEnabled()) {
+                System.err.println("USER_LOGIN_ERROR step=CONFIG CAUSE=Firebase configuration is disabled or incomplete");
                 return AuthOutcome.failure("Firebase is not enabled. Check firebase.properties.");
             }
             try {
+                step = "FIREBASE_AUTH";
+                System.out.println("USER_LOGIN_TRACE step=FIREBASE_AUTH");
                 FirebaseAuthGateway.AuthResult auth = AUTH.login(email, password);
                 if (!auth.success) {
+                    System.err.println("USER_LOGIN_ERROR step=FIREBASE_AUTH FIREBASE_ERROR=" + safeDiagnostic(auth.errorMessage));
                     return AuthOutcome.failure(auth.errorMessage);
                 }
                 if (auth.uid == null || auth.uid.isBlank()) {
+                    System.err.println("USER_LOGIN_ERROR step=FIREBASE_AUTH CAUSE=No UID returned");
                     return AuthOutcome.failure("Firebase authentication succeeded, but no authenticated UID was returned.");
                 }
+                System.out.println("USER_LOGIN_TRACE step=AUTH_SUCCESS uid=" + auth.uid);
 
-                UserProfile profile = USER_DAO.findProfile(auth.uid, auth.idToken).orElse(null);
+                step = "PROFILE_LOAD";
+                UserProfile profile = loadProfileWithRetry(auth.uid, auth.idToken);
                 if (profile == null) {
-                    return AuthOutcome.failure("No Firestore profile was found at " + FirestoreCollections.USERS + "/"
-                            + auth.uid + ". Please contact admin.");
+                    System.err.println("USER_LOGIN_ERROR step=PROFILE_LOAD HTTP_STATUS=404 path=" + FirestoreCollections.USERS + "/" + auth.uid);
+                    return AuthOutcome.failure("Your account profile could not be found.");
                 }
-                if (!VALID_ROLES.contains(profile.role())) {
-                    return AuthOutcome.failure("Your account role is not valid. Expected one of: user, business, transport_operator, admin.");
+                step = "ROLE_CHECK";
+                String role = profile.role() == null ? "" : profile.role().trim().toLowerCase(java.util.Locale.ROOT);
+                String accountStatus = profile.status() == null ? "" : profile.status().trim().toLowerCase(java.util.Locale.ROOT);
+                System.out.println("USER_LOGIN_TRACE step=ROLE_CHECK role=" + role + " status=" + accountStatus);
+                if (!VALID_ROLES.contains(role)) {
+                    System.err.println("USER_LOGIN_ERROR step=ROLE_CHECK CAUSE=Missing or unsupported role");
+                    return AuthOutcome.failure("Your account role is not configured. Please contact the administrator.");
                 }
 
-                boolean adminOverride = "admin".equals(profile.role());
-                if (!adminOverride && !profile.role().equals(expectedRole) && !"any".equals(expectedRole)) {
+                boolean adminOverride = "admin".equals(role);
+                if (!adminOverride && !role.equals(expectedRole) && !"any".equals(expectedRole)) {
+                    System.err.println("USER_LOGIN_ERROR step=ROLE_CHECK CAUSE=Portal role mismatch");
                     return AuthOutcome.failure("Authentication succeeded, but this account is not authorized for this portal.");
                 }
-                if (adminOverride && !"active".equals(profile.status())) {
+                if (adminOverride && !"active".equals(accountStatus)) {
                     return AuthOutcome.failure("Admin access requires an active Firestore admin profile.");
                 }
 
-                if ("pending".equals(profile.status())) {
-                    if ("business".equals(profile.role())) {
+                if ("pending".equals(accountStatus)) {
+                    if ("business".equals(role)) {
                         return AuthOutcome.failure("Your business registration is awaiting admin approval.");
                     }
                     return AuthOutcome.failure("Your account is pending admin approval.");
                 }
-                if ("disabled".equals(profile.status()) || "rejected".equals(profile.status())
-                        || "suspended".equals(profile.status())) {
+                if ("disabled".equals(accountStatus) || "rejected".equals(accountStatus)
+                        || "suspended".equals(accountStatus)) {
                     return AuthOutcome.failure("This account is not active. Please contact admin.");
                 }
-                if ("business".equals(profile.role()) && !"approved".equals(profile.status())) {
+                if ("business".equals(role) && !"approved".equals(accountStatus)) {
                     return AuthOutcome.failure("Your business registration is awaiting admin approval.");
                 }
 
+                step = "SESSION";
+                System.out.println("USER_LOGIN_TRACE step=SESSION uid=" + auth.uid);
                 AppSession.User user = new AppSession.User(
                         auth.uid,
                         auth.email,
-                        profile.role(),
+                        role,
                         auth.idToken,
                         profile.name(),
-                        profile.status(),
+                        accountStatus,
                         profile.profilePhotoUrl(),
                         profile.profilePhotoPublicId());
                 AppSession.set(user);
-                AppDataStore.refreshFirebaseData(auth.idToken);
+                step = "DASHBOARD_OPEN";
+                System.out.println("USER_LOGIN_TRACE step=DASHBOARD_OPEN role=" + role);
                 return AuthOutcome.success(user);
             } catch (FirestoreGateway.PermissionDeniedException exception) {
-                return AuthOutcome.failure("Firestore permission denied while reading your account profile.");
+                System.err.println("USER_LOGIN_ERROR step=" + step + " HTTP_STATUS=403 CAUSE=" + safeDiagnostic(exception.getMessage()));
+                return AuthOutcome.failure("Your account does not have permission to access the user portal.");
+            } catch (FirestoreGateway.TooManyRequestsException exception) {
+                System.err.println("USER_LOGIN_ERROR step=" + step + " HTTP_STATUS=429 CAUSE=" + safeDiagnostic(exception.getMessage()));
+                return AuthOutcome.failure("Signed in successfully, but your profile could not be loaded right now. Please retry.");
             } catch (FirestoreGateway.MalformedProfileException exception) {
+                System.err.println("USER_LOGIN_ERROR step=" + step + " CAUSE=" + safeDiagnostic(exception.getMessage()));
                 return AuthOutcome.failure(exception.getMessage());
             } catch (Exception exception) {
-                return AuthOutcome.failure("Unable to complete authentication. Check internet, Firebase, and account permissions.");
+                System.err.println("USER_LOGIN_ERROR step=" + step + " CAUSE=" + safeDiagnostic(exception.getMessage())
+                        + " exception=" + exception.getClass().getSimpleName());
+                String cause = exception.getMessage() == null ? "" : exception.getMessage().toLowerCase(java.util.Locale.ROOT);
+                if (cause.contains("connect") || cause.contains("timeout") || cause.contains("reset") || cause.contains("network")) {
+                    return AuthOutcome.failure("Unable to connect to Firebase. Check your internet connection.");
+                }
+                return AuthOutcome.failure("Unable to complete authentication. Please try again.");
             }
         });
+    }
+
+    private static UserProfile loadProfileWithRetry(String uid, String idToken) throws Exception {
+        long[] delays = {2_000L, 5_000L};
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            System.out.println("USER_LOGIN_TRACE step=PROFILE_LOAD_ATTEMPT attempt=" + attempt + " uid=" + uid
+                    + " path=" + FirestoreCollections.USERS + "/" + uid);
+            try {
+                UserProfile profile = USER_DAO.findProfile(uid, idToken).orElse(null);
+                System.out.println("USER_LOGIN_TRACE step=PROFILE_LOAD_HTTP status=" + (profile == null ? 404 : 200));
+                if (profile != null) System.out.println("USER_LOGIN_TRACE step=PROFILE_LOAD_SUCCESS uid=" + uid);
+                return profile;
+            } catch (FirestoreGateway.TooManyRequestsException exception) {
+                System.out.println("USER_LOGIN_TRACE step=PROFILE_LOAD_HTTP status=429");
+                if (attempt == 3) throw exception;
+                long delayMillis = exception.retryAfterMillis() > 0 ? exception.retryAfterMillis() : delays[attempt - 1];
+                System.err.println("USER_LOGIN_WARN step=PROFILE_LOAD status=429 action=RETRY attempt=" + attempt
+                        + " delayMillis=" + delayMillis);
+                CompletableFuture<Void> delay = new CompletableFuture<>();
+                PROFILE_RETRY_EXECUTOR.schedule(() -> delay.complete(null), delayMillis, TimeUnit.MILLISECONDS);
+                delay.join();
+            }
+        }
+        throw new FirestoreGateway.TooManyRequestsException("Firestore profile read failed: 429");
+    }
+
+    private static String safeDiagnostic(String value) {
+        if (value == null || value.isBlank()) return "No diagnostic message";
+        return value.replaceAll("(?i)(idToken|refreshToken|password|apiKey)=[^\\s,]+", "$1=[redacted]");
     }
 
     public static CompletableFuture<AuthOutcome> registerUser(String name, String mobile, String email, String password) {

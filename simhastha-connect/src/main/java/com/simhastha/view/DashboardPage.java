@@ -228,6 +228,11 @@ public class DashboardPage {
     private boolean emergencyReportFormVisible;
     private boolean emergencyDetailsExpanded;
     private boolean sosConfirmationVisible;
+    private String emergencyReportCategory = "";
+    private String emergencyReportDescription = "";
+    private String emergencyReportPeopleAffected = "";
+    private String emergencyReportLandmark = "";
+    private String emergencyReportValidationMessage = "";
     private String emergencyFeedback = "";
     private String emergencyMapMessage = "";
     private static final double EMERGENCY_DEMO_USER_LATITUDE = 20.0105;
@@ -401,7 +406,7 @@ public class DashboardPage {
                 loadCurrentEmergencyAsync();
                 loadEmergencyServicesAsync();
                 loadEmergencyAlertsAsync();
-                yield emergencyPage();
+                yield emergencyPageFrame();
             }
             case "lost" -> lostFoundPage();
             case "schedule" -> schedulePage();
@@ -412,7 +417,7 @@ public class DashboardPage {
             case "about" -> aboutPage();
             default -> genericModulePage(module);
         };
-        root.setCenter(scroll(page));
+        root.setCenter("emergency".equals(module) ? page : scroll(page));
         if ("puja".equals(module) || "bookings".equals(module)) {
             refreshPujaDataAsync(module);
         }
@@ -6247,10 +6252,75 @@ public class DashboardPage {
         return value == null || value.isBlank() ? "Not available" : value;
     }
 
+    private VBox emergencyPageFrame;
+    private ScrollPane emergencyBodyScrollPane;
+
+    private Node emergencyPageFrame() {
+        if (emergencyBodyScrollPane == null) {
+            VBox bodyContent = emergencyPage();
+            Node topControls = bodyContent.getChildren().remove(0);
+            Node header = bodyContent.getChildren().remove(0);
+            prepareEmergencyBodyContent(bodyContent);
+            // Keep one stable header in the persistent frame. Refreshed body content excludes it.
+            VBox pinned = new VBox(10, topControls, header);
+            pinned.getStyleClass().addAll("pilgrim-dashboard-main", "pilgrim-sticky-header");
+            pinned.setPadding(new Insets(12, 22, 8, 12));
+            emergencyBodyScrollPane = plainDashboardScroll(bodyContent);
+            emergencyPageFrame = new VBox(pinned, emergencyBodyScrollPane);
+            emergencyPageFrame.getStyleClass().add("pilgrim-dashboard-frame");
+            VBox.setVgrow(emergencyBodyScrollPane, Priority.ALWAYS);
+        } else {
+            emergencyBodyScrollPane.setContent(emergencyBodyContent());
+        }
+        return emergencyPageFrame;
+    }
+
+    private VBox emergencyBodyContent() {
+        VBox content = emergencyPage();
+        // Top controls and header are kept in the persistent frame, never in refreshed body content.
+        if (!content.getChildren().isEmpty()) content.getChildren().remove(0);
+        if (!content.getChildren().isEmpty()) content.getChildren().remove(0);
+        prepareEmergencyBodyContent(content);
+        return content;
+    }
+
+    private void prepareEmergencyBodyContent(VBox content) {
+        content.setPadding(new Insets(8, 22, 28, 12));
+    }
+
     private void refreshEmergencyPage() {
-        root.setCenter(scroll(emergencyPage()));
+        // Normal actions replace only body content; the ScrollPane itself remains attached to the frame.
+        double previousScrollPosition = emergencyScrollPosition();
+        System.out.println("EMERGENCY_SCROLL_DIAGNOSTIC action=PRESERVE before=" + previousScrollPosition);
+        System.out.println("EMERGENCY_SCROLL_DIAGNOSTIC action=REFRESH reason=state-update");
+        Node frame = emergencyPageFrame();
+        if (root.getCenter() != frame) root.setCenter(frame);
+        restoreEmergencyScrollPosition(previousScrollPosition);
         if (emergencyMapView != null) {
             Platform.runLater(emergencyMapView::requestSizeInvalidationAfterLayout);
+        }
+    }
+
+    private double emergencyScrollPosition() {
+        ScrollPane scrollPane = emergencyBodyScrollPane;
+        return scrollPane == null ? 0D : scrollPane.getVvalue();
+    }
+
+    private void restoreEmergencyScrollPosition(double position) {
+        if (Double.isNaN(position) || Double.isInfinite(position)) return;
+        double savedPosition = Math.max(0D, Math.min(1D, position));
+        // The first deferred pass waits for the new page layout; the second covers WebView/map
+        // layout work that can otherwise adjust the viewport after the first restoration.
+        Platform.runLater(() -> {
+            setEmergencyScrollPosition(savedPosition);
+            Platform.runLater(() -> setEmergencyScrollPosition(savedPosition));
+        });
+    }
+
+    private void setEmergencyScrollPosition(double position) {
+        if (emergencyBodyScrollPane != null) {
+            emergencyBodyScrollPane.setVvalue(position);
+            System.out.println("EMERGENCY_SCROLL_DIAGNOSTIC action=RESTORE value=" + position);
         }
     }
 
@@ -6324,20 +6394,29 @@ public class DashboardPage {
         category.getItems().addAll("Medical Emergency", "Police / Security", "Fire Emergency", "Crowd / Stampede Risk", "Accident", "Child / Elderly Assistance", "River / Ghat Emergency", "Other");
         category.setPromptText("Emergency Type *");
         category.getStyleClass().add("input-combo");
+        if (!emergencyReportCategory.isBlank()) category.setValue(emergencyReportCategory);
         TextField description = AppUi.textField("Short Description *");
+        description.setText(emergencyReportDescription);
         TextField peopleAffected = AppUi.textField("People Affected *");
+        peopleAffected.setText(emergencyReportPeopleAffected);
         TextField landmark = AppUi.textField("Optional Landmark");
-        Label error = label("", "emergency-validation-error");
+        landmark.setText(emergencyReportLandmark);
+        Label error = label(emergencyReportValidationMessage, "emergency-validation-error");
         Label location = label("Location: Demo Nashik Location (GPS integration is not enabled).", "emergency-form-note");
+        category.valueProperty().addListener((observable, oldValue, newValue) -> emergencyReportCategory = newValue == null ? "" : newValue);
+        description.textProperty().addListener((observable, oldValue, newValue) -> emergencyReportDescription = newValue);
+        peopleAffected.textProperty().addListener((observable, oldValue, newValue) -> emergencyReportPeopleAffected = newValue);
+        landmark.textProperty().addListener((observable, oldValue, newValue) -> emergencyReportLandmark = newValue);
         Button submit = new Button(emergencySubmissionInProgress ? "SUBMITTING..." : "SUBMIT REPORT");
         submit.getStyleClass().add("emergency-primary-button");
         submit.setDisable(emergencySubmissionInProgress);
         submit.setOnAction(event -> {
             int people;
             try { people = Integer.parseInt(peopleAffected.getText().trim()); } catch (Exception ignored) { people = 0; }
-            if (category.getValue() == null || category.getValue().isBlank()) { error.setText("Select an emergency type."); return; }
-            if (description.getText().trim().isBlank()) { error.setText("Enter a short description."); return; }
-            if (people < 1) { error.setText("People affected must be at least 1."); return; }
+            if (category.getValue() == null || category.getValue().isBlank()) { setEmergencyReportValidation(error, "Select an emergency type."); return; }
+            if (description.getText().trim().isBlank()) { setEmergencyReportValidation(error, "Enter a short description."); return; }
+            if (people < 1) { setEmergencyReportValidation(error, "People affected must be at least 1."); return; }
+            emergencyReportValidationMessage = "";
             EmergencyReport.EmergencyType type = EmergencyReport.typeForLabel(category.getValue());
             submitEmergency(createEmergencyReport(EmergencyReport.Source.REPORT, type, description.getText().trim(), people,
                     landmark.getText().trim(), EmergencyReport.defaultPriority(type)), false);
@@ -6345,10 +6424,23 @@ public class DashboardPage {
         Button cancel = new Button("CANCEL");
         cancel.getStyleClass().add("emergency-secondary-button");
         cancel.setDisable(emergencySubmissionInProgress);
-        cancel.setOnAction(event -> { emergencyReportFormVisible = false; refreshEmergencyPage(); });
+        cancel.setOnAction(event -> { emergencyReportFormVisible = false; clearEmergencyReportFormState(); refreshEmergencyPage(); });
         VBox form = new VBox(8, emergencySectionTitle("REPORT EMERGENCY"), category, description, peopleAffected, location, landmark, error, new HBox(8, submit, cancel));
         form.getStyleClass().add("emergency-report-form");
         return form;
+    }
+
+    private void setEmergencyReportValidation(Label error, String message) {
+        emergencyReportValidationMessage = message;
+        error.setText(message);
+    }
+
+    private void clearEmergencyReportFormState() {
+        emergencyReportCategory = "";
+        emergencyReportDescription = "";
+        emergencyReportPeopleAffected = "";
+        emergencyReportLandmark = "";
+        emergencyReportValidationMessage = "";
     }
 
     private EmergencyReport createEmergencyReport(EmergencyReport.Source source, EmergencyReport.EmergencyType type,
@@ -6379,6 +6471,7 @@ public class DashboardPage {
                     currentEmergency = report;
                     sosConfirmationVisible = false;
                     emergencyReportFormVisible = false;
+                    clearEmergencyReportFormState();
                     emergencySubmissionInProgress = false;
                     emergencyFeedback = (sos ? "Emergency SOS submitted successfully. " : "Emergency report submitted successfully. ")
                             + "Tracking ID: " + report.trackingId() + ". Your emergency request has been submitted to Simhastha Emergency Management.";
